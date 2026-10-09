@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List
 
 import customtkinter as ctk
 
-from .. import APP_NAME, __version__, backup, winutil
+from .. import APP_NAME, __version__, backup, hotkeys, winutil
 from . import glass
 from . import theme as T
 from . import widgets as W
@@ -91,6 +91,34 @@ class SettingsPage(ctk.CTkScrollableFrame):
                      anchor="w", text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack(fill="x")
         self._switch(body, "Запускать свёрнутым в трей", "start_minimized")
         self._switch(body, "При запуске включать то, что было включено (zapret, прокси)", "restore_state")
+
+        # ------------------------------------------------------------ горячие клавиши
+        body = W.section(self, "Горячие клавиши",
+                         "Работают в любой программе, даже когда BypassHub свёрнут в трей. Нажмите на "
+                         "сочетание, чтобы изменить его, затем нажмите новые клавиши (Esc — отмена). "
+                         "Нужен хотя бы один из модификаторов Ctrl или Alt.")
+        self.hk_switch = ctk.CTkSwitch(body, text="Включить горячие клавиши", command=self._hk_toggle)
+        self.hk_switch.pack(anchor="w", pady=(0, 6))
+        W.set_switch(self.hk_switch, s.data["hotkeys"].get("enabled"))
+        self.hk_buttons = {}
+        for action, label in hotkeys.ACTIONS.items():
+            fr = ctk.CTkFrame(body, fg_color="transparent")
+            fr.pack(fill="x", pady=3)
+            ctk.CTkLabel(fr, text=label, anchor="w").pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(fr, text="✕", width=32, height=32, fg_color="transparent", hover_color=W.P.surface2,
+                          text_color=W.P.muted, command=lambda a=action: self._hk_set(a, "")).pack(side="right")
+            btn = ctk.CTkButton(fr, text="", width=190, height=32, corner_radius=8, fg_color=W.P.surface2,
+                                hover_color=W.P.border, text_color=W.P.text, border_width=1,
+                                border_color=W.P.border, command=lambda a=action: self._hk_capture(a))
+            btn.pack(side="right", padx=(0, 4))
+            self.hk_buttons[action] = btn
+        self.hk_info = ctk.CTkLabel(body, text="", anchor="w", justify="left", wraplength=640,
+                                    font=ctk.CTkFont(size=11))
+        self.hk_info.pack(fill="x", pady=(4, 0))
+        bar = W.button_bar(body)
+        W.add_button(bar, "По умолчанию", self._hk_defaults, secondary=True)
+        self._hk_capturing = None
+        self._hk_render(app.hotkeys.failed if hasattr(app, "hotkeys") else [])
 
         body = W.section(self, "Окно и выход")
         self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
@@ -229,6 +257,81 @@ class SettingsPage(ctk.CTkScrollableFrame):
             info += f" Сейчас: {desc}."
         self.glass_info.configure(text=info)
 
+    # ------------------------------------------------------------ горячие клавиши
+    @property
+    def _hk(self) -> dict:
+        return self.app.core.settings.data["hotkeys"]
+
+    def _hk_render(self, failed=()) -> None:
+        bindings = self._hk.get("bindings") or {}
+        enabled = bool(self._hk.get("enabled"))
+        for action, btn in self.hk_buttons.items():
+            combo = bindings.get(action, "")
+            if action == self._hk_capturing:
+                btn.configure(text="Нажмите сочетание…", border_color=W.P.accent)
+            else:
+                btn.configure(text=combo or "не задано", border_color=W.P.border,
+                              text_color=W.P.text if combo and enabled else W.P.muted)
+        if failed:
+            self.hk_info.configure(text="Заняты другой программой: " + ", ".join(failed) +
+                                        ". Выберите другие сочетания.", text_color=W.RED)
+        else:
+            self.hk_info.configure(text="", text_color=W.P.muted)
+
+    def _hk_apply(self) -> None:
+        self.app.core.settings.save()
+        failed = self.app.apply_hotkeys()
+        self._hk_render(failed)
+
+    def _hk_toggle(self) -> None:
+        self._hk["enabled"] = bool(self.hk_switch.get())
+        self._hk_apply()
+
+    def _hk_set(self, action: str, combo: str) -> None:
+        bindings = self._hk.setdefault("bindings", {})
+        if combo:
+            other = next((a for a, c in bindings.items() if c == combo and a != action), None)
+            if other:
+                self.app.error(f"{combo} уже назначено на «{hotkeys.ACTIONS[other]}».")
+                return
+        bindings[action] = combo
+        self._hk_apply()
+
+    def _hk_capture(self, action: str) -> None:
+        if self._hk_capturing:
+            return
+        self._hk_capturing = action
+        self.app.hotkeys.stop()  # иначе нажатие уже занятого сочетания перехватит Windows
+        self._hk_render()
+        self.app.bind("<KeyPress>", self._hk_key, add="+")
+        self.app.focus_force()
+
+    def _hk_key(self, event) -> str:
+        action = self._hk_capturing
+        if not action:
+            return ""
+        if event.keysym == "Escape":
+            self._hk_finish()
+            return "break"
+        combo = hotkeys.combo_from_tk(event.state, event.keysym, event.keycode)
+        if combo is None:
+            if event.keysym not in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R"):
+                self.hk_info.configure(text="Нужно сочетание с Ctrl или Alt, например Ctrl+Alt+Z",
+                                       text_color=W.YELLOW)
+            return "break"
+        self._hk_finish()
+        self._hk_set(action, combo)
+        return "break"
+
+    def _hk_finish(self) -> None:
+        self._hk_capturing = None
+        self.app.unbind("<KeyPress>")
+        self._hk_apply()
+
+    def _hk_defaults(self) -> None:
+        self._hk["bindings"] = dict(hotkeys.DEFAULT_BINDINGS)
+        self._hk_apply()
+
     # ------------------------------------------------------------ резервная копия
     def _export(self) -> None:
         import time
@@ -269,6 +372,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 self.app.error(f"Не удалось загрузить настройки: {err}")
                 return
             self.app.rebuild()
+            self.app.apply_hotkeys()
             text = "Настройки загружены."
             if warnings:
                 text += "\n\n" + "\n".join(warnings)

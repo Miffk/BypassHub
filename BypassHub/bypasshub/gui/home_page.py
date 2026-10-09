@@ -164,8 +164,11 @@ class HomePage(ctk.CTkScrollableFrame):
 
     def _zapret_done(self, error) -> None:
         self.zapret_card.set_busy(False)
+        on = self.app.core.settings.get("zapret", "enabled")
+        self.app.notify_if_hidden(f"Zapret: ошибка — {error}" if error else
+                                  ("Zapret включён" if on else "Zapret выключен"))
         self.check_services(delay_ms=2500)
-        if error:
+        if error and self.app.winfo_viewable():
             self.app.error(str(error), "Zapret")
 
     # ------------------------------------------------------------------ tg
@@ -180,8 +183,11 @@ class HomePage(ctk.CTkScrollableFrame):
 
     def _tg_done(self, error) -> None:
         self.tg_card.set_busy(False)
+        on = self.app.core.settings.get("tg", "enabled")
+        self.app.notify_if_hidden(f"TG WS Proxy: ошибка — {error}" if error else
+                                  ("TG WS Proxy включён" if on else "TG WS Proxy выключен"))
         self.check_services(delay_ms=2500)
-        if error:
+        if error and self.app.winfo_viewable():
             self.app.error(str(error), "TG WS Proxy")
 
     def open_in_telegram(self) -> None:

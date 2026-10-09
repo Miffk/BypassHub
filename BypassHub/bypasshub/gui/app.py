@@ -64,6 +64,9 @@ class App(ctk.CTk):
         threading.Thread(target=self._startup, daemon=True, name="startup").start()
 
         self._init_tray()
+        from ..hotkeys import HotkeyManager
+        self.hotkeys = HotkeyManager(lambda action: self.call_ui(lambda: self._on_hotkey(action)))
+        self.pages["settings"][1]._hk_render(self.apply_hotkeys())
         if start_minimized and self.tray is not None:
             self.withdraw()
 
@@ -261,6 +264,32 @@ class App(ctk.CTk):
                 self.tray.notify("Доступны обновления: " + ", ".join(f"{i.title} {i.latest}" for i in pending))
         self.run_task(work, done)
 
+    # ------------------------------------------------------------------ горячие клавиши
+    def apply_hotkeys(self) -> list:
+        h = self.core.settings.data["hotkeys"]
+        return self.hotkeys.apply(bool(h.get("enabled")), dict(h.get("bindings") or {}))
+
+    def _on_hotkey(self, action: str) -> None:
+        home: Any = self.pages["home"][1]
+        if action == "toggle_zapret":
+            home.toggle_zapret_from_tray()
+        elif action == "toggle_tg":
+            home.toggle_tg_from_tray()
+        elif action == "show_window":
+            if self.winfo_viewable() and self.focus_displayof() is not None:
+                self.withdraw() if self.tray is not None else self.iconify()
+            else:
+                self.show_window()
+        elif action == "check_services":
+            home.check_services()
+            if not self.winfo_viewable():
+                self.show_window()
+
+    def notify_if_hidden(self, text: str) -> None:
+        """Уведомление в трее, когда действие выполнено, а окно скрыто (например, горячей клавишей)."""
+        if self.tray is not None and not self.winfo_viewable():
+            self.tray.notify(text)
+
     # ------------------------------------------------------------------ диалоги
     def info(self, text: str, title: Optional[str] = None) -> None:
         messagebox.showinfo(title or APP_NAME, text, parent=self)
@@ -323,6 +352,7 @@ class App(ctk.CTk):
             self.core.shutdown()
         except Exception as exc:
             log.warning("shutdown: %r", exc)
+        self.hotkeys.stop()
         if self.tray is not None:
             self.tray.stop()
         self.destroy()

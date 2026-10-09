@@ -13,6 +13,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
+from .hotkeys import DEFAULT_BINDINGS
 from .log import log
 
 DEFAULTS: Dict[str, Any] = {
@@ -41,6 +42,10 @@ DEFAULTS: Dict[str, Any] = {
         "close_to_tray": True,
         "restore_state": True,     # при запуске включать то, что было включено
         "stop_on_exit": True,      # выключать zapret (режим process) и прокси при выходе
+    },
+    "hotkeys": {
+        "enabled": True,
+        "bindings": dict(DEFAULT_BINDINGS),  # действие → "Ctrl+Alt+Z"; пустая строка — без сочетания
     },
     "appearance": {
         "mode": "dark",            # dark | light | system
