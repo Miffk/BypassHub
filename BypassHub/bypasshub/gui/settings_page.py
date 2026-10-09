@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from tkinter import colorchooser, filedialog
+from tkinter import filedialog
 from typing import TYPE_CHECKING, List
 
 import customtkinter as ctk
@@ -204,18 +204,20 @@ class SettingsPage(GradientPage):
                           command=lambda: self._pick(len(colors))).pack(side="left")
 
     def _pick(self, index: int) -> None:
+        from .color_picker import ColorPicker
         colors = list(self._appearance.get("colors") or [])
         initial = colors[index] if index < len(colors) else W.P.accent
-        _, hex_color = colorchooser.askcolor(color=initial, parent=self.app, title="Выберите цвет")
-        if not hex_color:
-            return
-        if index < len(colors):
-            colors[index] = hex_color.lower()
-        else:
-            colors.append(hex_color.lower())
-        self._appearance["colors"] = T.normalize_colors(colors)
-        self._appearance["preset"] = "custom"
-        self._save_and_apply()
+
+        def picked(hex_color: str) -> None:
+            current = list(self._appearance.get("colors") or [])
+            if index < len(current):
+                current[index] = hex_color.lower()
+            else:
+                current.append(hex_color.lower())
+            self._appearance["colors"] = T.normalize_colors(current)
+            self._appearance["preset"] = "custom"
+            self._save_and_apply()
+        ColorPicker(self.app, initial, picked)
 
     def _remove_color(self, index: int) -> None:
         colors = list(self._appearance.get("colors") or [])
