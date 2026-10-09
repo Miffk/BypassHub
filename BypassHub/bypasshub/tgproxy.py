@@ -144,6 +144,27 @@ _VIRTUAL_HINTS = ("vpn", "radmin", "amnezia", "wireguard", "wintun", "openvpn", 
                   "loopback", "npcap", "wsl", "docker", "bluetooth")
 
 
+_VPN_HINTS = ("vpn", "amnezia", "wireguard", "wintun", "openvpn", "radmin", "zerotier", "hamachi",
+              "tailscale", "outline", "tap-windows", "proton", "nord", "warp")
+
+
+def vpn_adapters() -> List[str]:
+    """Включённые сетевые адаптеры VPN (по имени адаптера)."""
+    try:
+        import psutil
+        addrs, stats = psutil.net_if_addrs(), psutil.net_if_stats()
+    except Exception:
+        return []
+    found = []
+    for name, items in addrs.items():
+        st = stats.get(name)
+        if st is not None and not st.isup:
+            continue
+        if any(h in name.lower() for h in _VPN_HINTS) and any(a.family == socket.AF_INET for a in items):
+            found.append(name)
+    return sorted(found)
+
+
 def lan_addresses() -> List[Tuple[str, str]]:
     """Адреса компьютера в локальной сети: [(ip, имя адаптера)], лучший — первым.
     Сначала обычные адаптеры (Ethernet/Wi-Fi) с адресами 192.168.x.x, потом

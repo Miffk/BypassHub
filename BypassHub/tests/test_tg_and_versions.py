@@ -118,3 +118,16 @@ def test_links_for_pc_and_phone():
     assert tgproxy.proxy_link(cfg).startswith("tg://proxy?server=127.0.0.1&port=1443")
     assert tgproxy.phone_link(cfg, "192.168.31.129") == \
         "https://t.me/proxy?server=192.168.31.129&port=1443&secret=dd" + "ab" * 16
+
+
+def test_vpn_adapters(monkeypatch):
+    import socket as _socket
+    from types import SimpleNamespace as NS
+
+    import psutil
+    addr = lambda ip: NS(family=_socket.AF_INET, address=ip)  # noqa: E731
+    monkeypatch.setattr(psutil, "net_if_addrs", lambda: {
+        "Radmin VPN": [addr("26.100.213.53")], "AmneziaVPN": [addr("10.8.1.9")],
+        "Ethernet": [addr("192.168.31.129")], "WireGuard Tunnel": [addr("10.0.0.2")]})
+    monkeypatch.setattr(psutil, "net_if_stats", lambda: {"WireGuard Tunnel": NS(isup=False)})
+    assert tgproxy.vpn_adapters() == ["AmneziaVPN", "Radmin VPN"]

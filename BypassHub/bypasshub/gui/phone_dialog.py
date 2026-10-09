@@ -132,12 +132,24 @@ class PhoneDialog(ctk.CTkToplevel):
             box.pack(side="left", padx=(8, 0))
         else:
             ctk.CTkLabel(addr, text=server, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(8, 0))
-        hint = ("Если телефон не подключается, проверьте, что он в той же сети и что VPN на компьютере "
-                "не блокирует локальную сеть.")
-        if any(any(h in name.lower() for h in ("vpn", "amnezia", "wireguard", "radmin")) for _, name in lan):
-            hint += " Если адресов несколько — выберите тот, что от адаптера Wi-Fi или Ethernet."
-        ctk.CTkLabel(self.body, text=hint, text_color=P.muted, font=ctk.CTkFont(size=11), anchor="w",
-                     justify="left", wraplength=470).pack(fill="x", pady=(8, 0))
+        vpns = tgproxy.vpn_adapters()
+        if vpns:
+            warn = ctk.CTkFrame(self.body, fg_color=T.mix(P.surface, "#f6c343", 0.16), corner_radius=10,
+                                border_width=1, border_color=T.mix(P.surface, "#f6c343", 0.55))
+            warn.pack(fill="x", pady=(12, 0))
+            ctk.CTkLabel(warn, text="⚠  Включён VPN: " + ", ".join(vpns), anchor="w",
+                         font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=12, pady=(8, 0))
+            ctk.CTkLabel(warn, anchor="w", justify="left", wraplength=450, text=(
+                "VPN может не пропускать подключения из домашней сети — тогда телефон не подключится. "
+                "Если так случилось: разрешите в настройках VPN доступ к локальной сети (обычно "
+                "«Локальная сеть», «Allow LAN» или «Split tunneling»), либо временно выключите VPN. "
+                "Адрес в QR-коде — от Wi-Fi/Ethernet, а не от VPN; если адресов несколько, выберите "
+                "адрес вида 192.168.x.x.")).pack(fill="x", padx=12, pady=(2, 8))
+        else:
+            ctk.CTkLabel(self.body, text="Если телефон не подключается, проверьте, что он в той же Wi-Fi-сети "
+                                         "(не в гостевой) и что брандмауэр не блокирует BypassHub.",
+                         text_color=P.muted, font=ctk.CTkFont(size=11), anchor="w", justify="left",
+                         wraplength=470).pack(fill="x", pady=(8, 0))
 
         bar = ctk.CTkFrame(self.body, fg_color="transparent")
         bar.pack(fill="x", pady=(14, 0))
