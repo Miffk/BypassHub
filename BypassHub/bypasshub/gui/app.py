@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import traceback
 from tkinter import messagebox
 from typing import Any, Callable, List, Optional
+
+import tkinter as tk
 
 import customtkinter as ctk
 
@@ -15,9 +18,9 @@ from ..log import log
 from ..paths import resource_path
 from ..tgproxy import TgStatus
 from ..zapret import ZapretStatus
-from . import glass
 from . import theme as T
 from . import widgets as W
+from .surface import GradientPanel, build_mapping, crossfade, recolor_tree
 
 NAV = [
     ("home", "Главная", "home"),
@@ -29,6 +32,23 @@ NAV = [
 ]
 
 
+def set_dark_titlebar(window, dark: bool) -> None:
+    """Тёмный или светлый заголовок окна Windows в цвет темы."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (новые и старые сборки)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value),
+                                                          ctypes.sizeof(value)) == 0:
+                break
+    except Exception as exc:
+        log.debug("dark titlebar: %r", exc)
+
+
 class App(ctk.CTk):
     STATUS_INTERVAL = 3.0
 
@@ -36,6 +56,8 @@ class App(ctk.CTk):
         self.core = core
         W.apply_theme(T.make_palette(core.settings.data["appearance"]))
         super().__init__()
+        # картинки интерфейса рисуются сразу в масштабе экрана — так они чёткие
+        T.SCALE = ctk.ScalingTracker.get_widget_scaling(self)
         self.title(APP_NAME)
         self.geometry("1040x720")
         self.minsize(900, 600)
@@ -55,7 +77,10 @@ class App(ctk.CTk):
         self.current_page = "home"
 
         self._build()
-        self.apply_glass()
+        set_dark_titlebar(self, W.P.mode == "dark")
+        self.bind_all("<MouseWheel>", self._on_wheel, add="+")
+        self.bind_all("<Button-4>", lambda e: self._on_wheel(e, 120), add="+")
+        self.bind_all("<Button-5>", lambda e: self._on_wheel(e, -120), add="+")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._drain_queue)
         self.after(500, self._check_show_flag)
@@ -80,73 +105,102 @@ class App(ctk.CTk):
         from .zapret_page import ZapretPage
 
         P = W.P
-        self.configure(fg_color=P.window_bg)
+        self.configure(fg_color=P.bg)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.nav = ctk.CTkFrame(self, width=212, corner_radius=18, fg_color=P.surface)
-        self.nav.grid(row=0, column=0, sticky="nsw", padx=(14, 0), pady=14)
-        self.nav.grid_propagate(False)
-        self._logo = T.to_ctk(T.gradient_text(APP_NAME, 22, P.accents))
-        ctk.CTkLabel(self.nav, text="", image=self._logo).pack(padx=20, pady=(22, 0), anchor="w")
+        scale = ctk.ScalingTracker.get_widget_scaling(self)
+        self.nav = GradientPanel(self, width=int(216 * scale))
+        self.nav.grid(row=0, column=0, sticky="ns")
+        self.nav.pack_propagate(False)
+        W.GradientText(self.nav, APP_NAME, 22).pack(padx=20, pady=(24, 0), anchor="w")
         ctk.CTkLabel(self.nav, text="Zapret · TG WS Proxy", text_color=P.muted,
                      font=ctk.CTkFont(size=12)).pack(padx=20, pady=(0, 20), anchor="w")
 
-        self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.grid(row=0, column=1, sticky="nsew", padx=14, pady=14)
+        self.content = tk.Frame(self, bd=0, highlightthickness=0, bg=P.bg)
+        self.content.grid(row=0, column=1, sticky="nsew")
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
         classes = {"home": HomePage, "zapret": ZapretPage, "tg": TgPage, "updates": UpdatesPage,
                    "settings": SettingsPage, "log": LogPage}
         self.nav_items = {}
+        self._page_palette = {}
         for key, label, icon in NAV:
             self.pages[key] = (label, classes[key](self.content, self))
+            self._page_palette[key] = P
             item = W.NavItem(self.nav, label, icon, command=lambda k=key: self.show_page(k))
-            item.pack(padx=14, pady=2)
+            item.pack(padx=16, pady=2)
             self.nav_items[key] = item
 
         ctk.CTkLabel(self.nav, text=f"v{__version__}", text_color=P.muted,
                      font=ctk.CTkFont(size=11)).pack(side="bottom", pady=14)
         self.show_page(self.current_page)
 
-    def rebuild(self) -> None:
-        """Пересоздание интерфейса после смены оформления."""
-        W.apply_theme(T.make_palette(self.core.settings.data["appearance"]))
-        for child in (self.nav, self.content):
-            child.destroy()
-        self.pages = {}
-        self._build()
-        self.apply_glass()
-        self._apply_status(self.zapret_status, self.tg_status)
-        if self.last_infos:
-            self.pages["updates"][1].on_infos(self.last_infos)
-            self.pages["home"][1].on_infos(self.last_infos)
+    def apply_appearance(self, animate: bool = True) -> None:
+        """Сменить оформление без пересоздания окна: цвета заменяются на месте,
+        переход сглаживается растворением снимка старого вида."""
+        old = W.P
+        new = T.make_palette(self.core.settings.data["appearance"])
+        if new == old:
+            return
 
-    def apply_glass(self) -> str:
-        a = self.core.settings.data["appearance"]
-        P = W.P
-        glass.set_dark_titlebar(self, P.mode == "dark")
-        ok, desc = glass.apply(self, bool(a.get("glass")), P.glass_key, P.bg,
-                               int(a.get("opacity", 80)), bool(a.get("blur", True)), int(a.get("blur_level", 70)))
-        return desc
+        def apply() -> None:
+            W.apply_theme(new, set_mode=new.mode != old.mode)
+            mapping = build_mapping(old, new)
+            self.configure(fg_color=new.bg)
+            self.content.configure(bg=new.bg)
+            recolor_tree(self.nav, mapping)
+            for child in self.winfo_children():  # открытые диалоги
+                if isinstance(child, ctk.CTkToplevel):
+                    recolor_tree(child, mapping)
+            self._recolor_page(self.current_page)
+            set_dark_titlebar(self, new.mode == "dark")
+            self.update_idletasks()
+
+        if animate:
+            crossfade(self, apply)
+        else:
+            apply()
+
+    def _recolor_page(self, key: str) -> None:
+        """Страницы перекрашиваются при показе — так смена темы не тормозит."""
+        if self._page_palette.get(key) is W.P:
+            return
+        page = self.pages[key][1]
+        recolor_tree(page, build_mapping(self._page_palette[key], W.P))
+        self._page_palette[key] = W.P
+        if hasattr(page, "on_palette"):
+            page.on_palette()
 
     def show_page(self, key: str) -> None:
         self.current_page = key
         for k, (_, page) in self.pages.items():
             if k == key:
                 page.grid(row=0, column=0, sticky="nsew")
+                self._recolor_page(k)
                 if hasattr(page, "on_show"):
                     page.on_show()
             else:
                 page.grid_forget()
             self.nav_items[k].set_active(k == key)
 
-    def page_frame(self, parent) -> ctk.CTkScrollableFrame:
-        """Прокручиваемая страница; её фон — цвет окна (в режиме стекла он прозрачный)."""
-        P = W.P
-        return ctk.CTkScrollableFrame(parent, fg_color=P.window_bg, scrollbar_button_color=P.border,
-                                      scrollbar_button_hover_color=P.muted)
+    def _on_wheel(self, event, delta: Optional[int] = None):
+        try:
+            if event.widget.winfo_class() in ("Text", "Listbox"):
+                return None  # у полей ввода своя прокрутка
+        except Exception:
+            pass
+        page = self.pages.get(self.current_page, (None, None))[1]
+        if hasattr(page, "scroll_units"):
+            d = delta if delta is not None else event.delta
+            page.scroll_units(-60 if d > 0 else 60)
+        return None
+
+    def report_callback_exception(self, exc, val, tb):
+        # не даём ошибке обработчика уронить окно и не показываем её в журнале интерфейса
+        log.error("Ошибка в интерфейсе:\n%s", "".join(traceback.format_exception(exc, val, tb)),
+                  extra={"no_ui": True})
 
     # ------------------------------------------------------------------ потоки
     def call_ui(self, fn: Callable[[], None]) -> None:
@@ -160,7 +214,7 @@ class App(ctk.CTk):
                 try:
                     fn()
                 except Exception:
-                    log.error("Ошибка в интерфейсе:\n%s", traceback.format_exc())
+                    log.error("Ошибка в интерфейсе:\n%s", traceback.format_exc(), extra={"no_ui": True})
         except queue.Empty:
             pass
         if not self._closing:

@@ -47,6 +47,11 @@ def main() -> int:
         return 0
 
     setup_logging(paths.log_file)
+    # у exe без консоли sys.stderr/stdout = None: любая запись туда (например,
+    # предупреждение библиотеки) иначе ломает обработчик событий окна
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(paths.logs / "console.log", "a", encoding="utf-8", buffering=1))
     log.info("%s %s запущен, данные: %s", APP_NAME, __version__, paths.root)
 
     from bypasshub.core import Core

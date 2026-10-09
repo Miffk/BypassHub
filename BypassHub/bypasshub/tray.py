@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 def _base_icon() -> Image.Image:
     try:
-        return Image.open(str(resource_path("assets/icon.ico"))).convert("RGBA").resize((64, 64))
+        ico = Image.open(str(resource_path("assets/icon.ico")))
+        ico.size = (64, 64)  # готовый кадр 64×64 из .ico — без масштабирования
+        return ico.convert("RGBA")
     except Exception:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         ImageDraw.Draw(img).ellipse([2, 2, 62, 62], fill=(43, 127, 255, 255))

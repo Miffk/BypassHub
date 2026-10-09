@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, List
 import customtkinter as ctk
 
 from .. import APP_NAME, __version__, backup, hotkeys, winutil
-from . import glass
 from . import theme as T
 from . import widgets as W
+from .surface import GradientPage
 
 if TYPE_CHECKING:
     from .app import App
@@ -17,19 +17,19 @@ if TYPE_CHECKING:
 MODES = {"dark": "Тёмная", "light": "Светлая", "system": "Как в Windows"}
 
 
-class SettingsPage(ctk.CTkScrollableFrame):
+class SettingsPage(GradientPage):
     def __init__(self, parent, app: "App"):
-        super().__init__(parent, fg_color=W.P.window_bg, scrollbar_button_color=W.P.border)
+        super().__init__(parent)
         self.app = app
         s = app.core.settings
-        self._glass_job = None
+        self._tint_job = None
         W.page_title(self, "Настройки", "Оформление, запуск и поведение программы")
 
         # ------------------------------------------------------------ оформление
         a = s.data["appearance"]
         body = W.section(self, "Оформление",
-                         "Выберите тему и цвета. Если выбрать несколько цветов, элементы интерфейса "
-                         "будут залиты плавным градиентом.")
+                         "Выберите тему и цвета — в них окрасится всё окно. Если выбрать несколько цветов, "
+                         "фон станет плавным градиентом.")
         self.mode = W.row(body, "Тема", lambda p: ctk.CTkSegmentedButton(
             p, values=list(MODES.values()), command=self._mode_changed))
         self.mode.set(MODES.get(a.get("mode"), MODES["dark"]))
@@ -37,15 +37,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(body, text="Готовые наборы", anchor="w").pack(fill="x", pady=(10, 4))
         presets = ctk.CTkFrame(body, fg_color="transparent")
         presets.pack(fill="x")
-        self._swatch_imgs = []
-        for i, (name, colors) in enumerate(T.PRESETS.items()):
+        self._swatch_btns = {}
+        for i, name in enumerate(T.PRESETS):
             cell = ctk.CTkFrame(presets, fg_color="transparent")
             cell.grid(row=0, column=i, padx=(0, 10))
-            img = W.swatch(colors, 38, selected=(a.get("preset") == name))
-            self._swatch_imgs.append(img)
-            ctk.CTkButton(cell, text="", image=img, width=44, height=44, fg_color="transparent",
-                          hover_color=W.P.surface2, corner_radius=22,
-                          command=lambda n=name: self._preset(n)).pack()
+            btn = ctk.CTkButton(cell, text="", width=44, height=44, fg_color="transparent",
+                                hover_color=W.P.surface2, corner_radius=22,
+                                command=lambda n=name: self._preset(n))
+            btn.pack()
+            self._swatch_btns[name] = btn
             ctk.CTkLabel(cell, text=name, text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack()
 
         ctk.CTkLabel(body, text="Свои цвета (до трёх — градиент)", anchor="w").pack(fill="x", pady=(12, 4))
@@ -53,34 +53,12 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.custom.pack(fill="x")
         self._render_custom()
 
-        # ------------------------------------------------------------ прозрачность
-        body = W.section(self, "Прозрачность и размытие",
-                         "Фон окна становится полупрозрачным — видно рабочий стол и открытые окна. Карточки "
-                         "остаются непрозрачными, чтобы текст хорошо читался. Работает в Windows 10/11.")
-        self.glass_sw = ctk.CTkSwitch(body, text="Прозрачный фон окна", command=self._glass_changed)
-        self.glass_sw.pack(anchor="w", pady=3)
-        W.set_switch(self.glass_sw, a.get("glass"))
-
-        self.opacity_label = ctk.CTkLabel(body, text="", anchor="w")
-        self.opacity_label.pack(fill="x", pady=(8, 0))
-        self.opacity = ctk.CTkSlider(body, from_=0, to=100, number_of_steps=100,
-                                     command=lambda v: self._slider("opacity", v))
-        self.opacity.pack(fill="x")
-        self.opacity.set(int(a.get("opacity", 80)))
-
-        self.blur_sw = ctk.CTkSwitch(body, text="Размытие того, что под окном", command=self._glass_changed)
-        self.blur_sw.pack(anchor="w", pady=(12, 3))
-        W.set_switch(self.blur_sw, a.get("blur", True))
-        self.blur_label = ctk.CTkLabel(body, text="", anchor="w")
-        self.blur_label.pack(fill="x")
-        self.blur = ctk.CTkSlider(body, from_=1, to=100, number_of_steps=99,
-                                  command=lambda v: self._slider("blur_level", v))
-        self.blur.pack(fill="x")
-        self.blur.set(int(a.get("blur_level", 70)))
-        self.glass_info = ctk.CTkLabel(body, text="", anchor="w", text_color=W.P.muted,
-                                       font=ctk.CTkFont(size=11), justify="left", wraplength=640)
-        self.glass_info.pack(fill="x", pady=(6, 0))
-        self._update_glass_labels()
+        self.tint_label = ctk.CTkLabel(body, text="", anchor="w")
+        self.tint_label.pack(fill="x", pady=(14, 0))
+        self.tint = ctk.CTkSlider(body, from_=0, to=100, number_of_steps=100, command=self._tint_changed)
+        self.tint.pack(fill="x")
+        self.tint.set(int(a.get("tint", 70)))
+        self._refresh_appearance_controls()
 
         # ------------------------------------------------------------ запуск
         body = W.section(self, "Запуск")
@@ -159,19 +137,48 @@ class SettingsPage(ctk.CTkScrollableFrame):
     def _appearance(self) -> dict:
         return self.app.core.settings.data["appearance"]
 
-    def _save_and_rebuild(self) -> None:
+    def _save_and_apply(self) -> None:
         self.app.core.settings.save()
-        # пересоздание чуть позже, чтобы текущий обработчик клика успел завершиться
-        self.app.after(10, self.app.rebuild)
+        # применяем чуть позже, чтобы текущий обработчик клика успел завершиться
+        self.app.after(10, self._apply_now)
+
+    def _apply_now(self) -> None:
+        self.app.apply_appearance()
+        self._refresh_appearance_controls()
+
+    def _refresh_appearance_controls(self) -> None:
+        a = self._appearance
+        self.mode.set(MODES.get(a.get("mode"), MODES["dark"]))
+        self._swatch_imgs = []
+        for name, btn in self._swatch_btns.items():
+            img = W.swatch(T.PRESETS[name], 38, selected=(a.get("preset") == name))
+            self._swatch_imgs.append(img)
+            btn.configure(image=img)
+        self.tint_label.configure(text=f"Насыщенность фона: {int(a.get('tint', 70))}%")
+        self._render_custom()
+
+    def on_palette(self) -> None:
+        self._refresh_appearance_controls()
 
     def _mode_changed(self, label: str) -> None:
         self._appearance["mode"] = next((k for k, v in MODES.items() if v == label), "dark")
-        self._save_and_rebuild()
+        self._save_and_apply()
 
     def _preset(self, name: str) -> None:
         self._appearance["preset"] = name
         self._appearance["colors"] = list(T.PRESETS[name])
-        self._save_and_rebuild()
+        self._save_and_apply()
+
+    def _tint_changed(self, value: float) -> None:
+        self._appearance["tint"] = int(value)
+        self.tint_label.configure(text=f"Насыщенность фона: {int(value)}%")
+        if self._tint_job:
+            self.after_cancel(self._tint_job)
+        self._tint_job = self.after(350, self._tint_apply)
+
+    def _tint_apply(self) -> None:
+        self._tint_job = None
+        self._save_and_apply()
 
     def _render_custom(self) -> None:
         for child in self.custom.winfo_children():
@@ -208,7 +215,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
             colors.append(hex_color.lower())
         self._appearance["colors"] = T.normalize_colors(colors)
         self._appearance["preset"] = "custom"
-        self._save_and_rebuild()
+        self._save_and_apply()
 
     def _remove_color(self, index: int) -> None:
         colors = list(self._appearance.get("colors") or [])
@@ -216,46 +223,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
             colors.pop(index)
             self._appearance["colors"] = colors
             self._appearance["preset"] = "custom"
-            self._save_and_rebuild()
-
-    # ------------------------------------------------------------ стекло
-    def _glass_changed(self) -> None:
-        glass_was = bool(self._appearance.get("glass"))
-        self._appearance["glass"] = bool(self.glass_sw.get())
-        self._appearance["blur"] = bool(self.blur_sw.get())
-        self.app.core.settings.save()
-        if glass_was != self._appearance["glass"]:
-            # фон страниц зависит от режима стекла — интерфейс нужно пересоздать
-            self._save_and_rebuild()
-        else:
-            self._apply_glass()
-
-    def _slider(self, key: str, value: float) -> None:
-        self._appearance[key] = int(value)
-        self._update_glass_labels()
-        if self._glass_job:
-            self.after_cancel(self._glass_job)
-        self._glass_job = self.after(120, self._apply_glass)
-
-    def _apply_glass(self) -> None:
-        self._glass_job = None
-        self.app.core.settings.save()
-        desc = self.app.apply_glass()
-        self._update_glass_labels(desc)
-
-    def _update_glass_labels(self, desc: str = "") -> None:
-        a = self._appearance
-        self.opacity_label.configure(text=f"Непрозрачность фона: {int(a.get('opacity', 80))}%")
-        level = int(a.get("blur_level", 70))
-        self.blur_label.configure(text=f"Сила размытия: {level}% — {glass.blur_level_name(level)}")
-        enabled = bool(a.get("glass"))
-        for w in (self.opacity, self.blur, self.blur_sw):
-            w.configure(state="normal" if enabled else "disabled")
-        info = ("Windows поддерживает два вида размытия: мягкое (Aero) и сильное (Acrylic) — ползунок "
-                "переключает их на отметке 50%.")
-        if desc and enabled:
-            info += f" Сейчас: {desc}."
-        self.glass_info.configure(text=info)
+            self._save_and_apply()
 
     # ------------------------------------------------------------ горячие клавиши
     @property
@@ -371,7 +339,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
             if err:
                 self.app.error(f"Не удалось загрузить настройки: {err}")
                 return
-            self.app.rebuild()
+            self.app.apply_appearance()
+            self._refresh_appearance_controls()
             self.app.apply_hotkeys()
             text = "Настройки загружены."
             if warnings:

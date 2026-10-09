@@ -21,11 +21,20 @@ class MemoryHandler(logging.Handler):
         self._listeners: List[Callable[[str], None]] = []
         self._lock = threading.Lock()
 
-    def subscribe(self, fn: Callable[[str], None]) -> None:
+    def subscribe(self, fn: Callable[[str], None]) -> Callable[[], None]:
+        """Подписка на новые строки; возвращает функцию отписки."""
         with self._lock:
             self._listeners.append(fn)
 
+        def unsubscribe() -> None:
+            with self._lock:
+                if fn in self._listeners:
+                    self._listeners.remove(fn)
+        return unsubscribe
+
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "no_ui", False):
+            return  # ошибки самого интерфейса не показываем в интерфейсе — иначе возможна петля
         try:
             line = self.format(record)
         except Exception:

@@ -7,6 +7,7 @@ import customtkinter as ctk
 from .. import tgproxy, winutil
 from ..tgproxy import DEFAULT_CONFIG
 from . import widgets as W
+from .surface import GradientPage
 
 if TYPE_CHECKING:
     from .app import App
@@ -15,11 +16,11 @@ APPEARANCE = {"auto": "Как в системе", "light": "Светлая", "da
 LANGUAGES = {"ru": "Русский", "en": "English"}
 
 
-class TgPage(ctk.CTkScrollableFrame):
+class TgPage(GradientPage):
     """Все настройки из окна «Настройки» tg-ws-proxy."""
 
     def __init__(self, parent, app: "App"):
-        super().__init__(parent, fg_color=W.P.window_bg, scrollbar_button_color=W.P.border)
+        super().__init__(parent)
         self.app = app
         W.page_title(self, "TG WS Proxy", "Все настройки локального MTProto-прокси для Telegram Desktop")
 

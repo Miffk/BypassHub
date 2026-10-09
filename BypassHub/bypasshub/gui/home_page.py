@@ -9,6 +9,7 @@ from ..core import UpdateInfo
 from ..tgproxy import TgStatus
 from ..zapret import ZapretStatus
 from . import widgets as W
+from .surface import GradientPage, mark_card
 
 if TYPE_CHECKING:
     from .app import App
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 class ServiceCard(ctk.CTkFrame):
     def __init__(self, parent, title: str, subtitle: str, on_toggle):
         super().__init__(parent, fg_color=W.P.surface, corner_radius=18)
+        mark_card(self)
         self.on_toggle = on_toggle
         self.busy = False
 
@@ -56,19 +58,19 @@ class ServiceCard(ctk.CTkFrame):
         self.details.configure(text=details)
 
 
-class HomePage(ctk.CTkScrollableFrame):
+class HomePage(GradientPage):
     def __init__(self, parent, app: "App"):
-        super().__init__(parent, fg_color=W.P.window_bg, scrollbar_button_color=W.P.border)
+        super().__init__(parent)
         self.app = app
         core = app.core
 
         self.hero = W.Hero(self)
-        self.hero.pack(fill="x", padx=4, pady=(0, 14))
+        self.hero.pack(fill="x", padx=W.PAGE_PADX, pady=(8, 14))
         self.hero.set_text("BypassHub", "Проверяю состояние…")
 
         # индикаторы доступности сервисов
         chips = ctk.CTkFrame(self, fg_color="transparent")
-        chips.pack(fill="x", padx=4, pady=(0, 14))
+        chips.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
         self.chips = {}
         for i, name in enumerate(netcheck.SERVICES):
             chip = ctk.CTkFrame(chips, fg_color=W.P.surface, corner_radius=14)
@@ -88,8 +90,8 @@ class HomePage(ctk.CTkScrollableFrame):
         self._check_job = None
         self.after(1500, self._periodic_check)
 
-        self.banner = ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=14, border_width=1,
-                                   border_color=W.P.accent)
+        self.banner = mark_card(ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=14, border_width=1,
+                                             border_color=W.P.accent))
         self.banner_label = ctk.CTkLabel(self.banner, text="", anchor="w", justify="left")
         self.banner_label.pack(side="left", padx=14, pady=10, fill="x", expand=True)
         W.GradientButton(self.banner, text="Обновить", width=110,
@@ -97,7 +99,7 @@ class HomePage(ctk.CTkScrollableFrame):
 
         self.zapret_card = ServiceCard(self, "Zapret", "Обход блокировок Discord, YouTube и др. (winws.exe + WinDivert)",
                                        self.toggle_zapret)
-        self.zapret_card.pack(fill="x", padx=4, pady=(0, 14))
+        self.zapret_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
         bar = self.zapret_card.extra
         ctk.CTkLabel(bar, text="Стратегия:").pack(side="left", padx=(0, 6))
         self.strategy_box = ctk.CTkComboBox(bar, values=[], width=300, state="readonly",
@@ -111,7 +113,7 @@ class HomePage(ctk.CTkScrollableFrame):
 
         self.tg_card = ServiceCard(self, "TG WS Proxy", "Локальный MTProto-прокси, ускоряющий Telegram Desktop",
                                    self.toggle_tg)
-        self.tg_card.pack(fill="x", padx=4, pady=(0, 14))
+        self.tg_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
         bar = self.tg_card.extra
         W.add_button(bar, "Открыть в Telegram", self.open_in_telegram, width=170)
         W.add_button(bar, "Скопировать ссылку", self.copy_link, secondary=True, width=170)
@@ -120,7 +122,7 @@ class HomePage(ctk.CTkScrollableFrame):
                 "автоматически кнопкой «Подобрать». Для автозапуска при включении ПК "
                 "включите режим «Служба Windows» или автозапуск BypassHub в настройках.")
         ctk.CTkLabel(self, text=hint, text_color=W.GRAY, wraplength=680, justify="left",
-                     anchor="w").pack(fill="x", padx=8, pady=(4, 0))
+                     anchor="w").pack(fill="x", padx=(8, 18), pady=(4, 16))
         self.reload_strategies()
 
     # ------------------------------------------------------------------ zapret
@@ -295,7 +297,7 @@ class HomePage(ctk.CTkScrollableFrame):
         if pending:
             text = "Доступны обновления: " + ", ".join(f"{i.title} {i.installed} → {i.latest}" for i in pending)
             self.banner_label.configure(text=text)
-            self.banner.pack(fill="x", padx=4, pady=(0, 14), before=self.zapret_card)
+            self.banner.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14), before=self.zapret_card)
         else:
             self.banner.pack_forget()
         self.reload_strategies()

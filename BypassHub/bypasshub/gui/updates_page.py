@@ -8,6 +8,7 @@ import customtkinter as ctk
 from .. import __version__, selfupdate, tgproxy, winutil, zapret
 from ..core import UpdateInfo
 from . import widgets as W
+from .surface import GradientPage
 
 if TYPE_CHECKING:
     from .app import App
@@ -18,9 +19,9 @@ REPOS = {"zapret": zapret.REPO, "tg": tgproxy.REPO, "self": selfupdate.REPO}
 TITLES = {"zapret": "Zapret", "tg": "TG WS Proxy", "self": "BypassHub"}
 
 
-class UpdatesPage(ctk.CTkScrollableFrame):
+class UpdatesPage(GradientPage):
     def __init__(self, parent, app: "App"):
-        super().__init__(parent, fg_color=W.P.window_bg, scrollbar_button_color=W.P.border)
+        super().__init__(parent)
         self.app = app
         self.busy = False
         self.infos: Dict[str, UpdateInfo] = {}

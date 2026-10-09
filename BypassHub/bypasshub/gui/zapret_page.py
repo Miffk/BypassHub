@@ -9,6 +9,7 @@ from .. import winutil, zapret_diag
 from ..tgproxy import TgStatus
 from ..zapret import APP_EXCLUSIONS, FAKE_TARGETS, USER_LISTS, GameFilter, ZapretStatus, validate_ports
 from . import widgets as W
+from .surface import GradientPage
 
 if TYPE_CHECKING:
     from .app import App
@@ -18,9 +19,9 @@ IPSET_LABELS = {"none": "none", "loaded": "loaded", "any": "any"}
 MODE_LABELS = {"process": "Программа (winws.exe)", "service": "Служба Windows"}
 
 
-class ZapretPage(ctk.CTkScrollableFrame):
+class ZapretPage(GradientPage):
     def __init__(self, parent, app: "App"):
-        super().__init__(parent, fg_color=W.P.window_bg, scrollbar_button_color=W.P.border)
+        super().__init__(parent)
         self.app = app
         W.page_title(self, "Zapret", "Обход блокировок Discord, YouTube и других сервисов")
         self.not_installed = ctk.CTkLabel(self, text="zapret ещё не загружен. Он скачается автоматически, "
@@ -151,7 +152,7 @@ class ZapretPage(ctk.CTkScrollableFrame):
         if installed:
             self.not_installed.pack_forget()
         else:
-            self.not_installed.pack(fill="x", padx=4, pady=(0, 10), after=self.winfo_children()[0])
+            self.not_installed.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 10), after=self.winfo_children()[0])
         names = zm.strategies()
         self.strategy_box.configure(values=names or ["—"])
         cur = self.app.core.strategy

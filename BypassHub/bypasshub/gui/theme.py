@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Optional, Sequence, Tuple
 
@@ -23,37 +23,69 @@ PRESETS = {
 }
 DEFAULT_PRESET = "Океан"
 
-SCALE = 2  # картинки рисуются с запасом для чётких краёв на HiDPI
+# Картинки (кнопки, меню, логотип) рисуются сразу в физических пикселях экрана:
+# SCALE — масштаб Windows (1.0, 1.25, 1.5…), выставляется окном при запуске.
+# Текст рисуется в точном размере (без последующего масштабирования, иначе он
+# «мылится»), а края фигур сглаживаются суперсэмплингом (SS).
+SCALE = 1.0
+SS = 4
+
+
+def px(v: float) -> int:
+    """Логические единицы → физические пиксели (так же округляет CTkImage)."""
+    return max(1, int(round(v * SCALE)))
 
 
 @dataclass
 class Palette:
+    """Палитра: нейтральная база (тёмная/светлая), окрашенная в акцентные цвета.
+
+    Фон страниц и боковой панели — вертикальный градиент по акцентным цветам
+    (page_stops / side_stops); карточки — «полупрозрачная» подложка поверх
+    градиента в своей точке (card_on)."""
     mode: str                      # "dark" | "light"
     accents: List[str]
+    tint: float                    # насыщенность фона 0..1
+    page_stops: List[str]
+    side_stops: List[str]
     bg: str
     surface: str
     surface2: str
     border: str
     text: str
     muted: str
-    on_accent: str = "#ffffff"
-    glass_key: str = ""            # цвет-ключ, который становится прозрачным в режиме стекла
-    glass: bool = False
-    extras: dict = field(default_factory=dict)
+    accent_hover: str
+    on_accent: str
+    knob: str
+    knob_hover: str
 
     @property
     def accent(self) -> str:
         return self.accents[0]
 
-    @property
-    def window_bg(self) -> str:
-        return self.glass_key if self.glass else self.bg
+    def card_on(self, bg: str) -> str:
+        """Цвет карточки поверх фона bg."""
+        return mix(bg, "#ffffff", 0.055) if self.mode == "dark" else mix(bg, "#ffffff", 0.72)
+
+    def roles(self) -> dict:
+        """Именованные цвета — по ним интерфейс перекрашивается на лету."""
+        return {k: getattr(self, k) for k in (
+            "bg", "surface", "surface2", "border", "text", "muted", "accent_hover", "on_accent",
+            "knob", "knob_hover")} | {"accent": self.accent}
 
 
-DARK = dict(bg="#0f1115", surface="#171a21", surface2="#20242d", border="#2a2f3a",
-            text="#e9ebf1", muted="#8b93a7", glass_key="#0f1116")
-LIGHT = dict(bg="#f2f4f8", surface="#ffffff", surface2="#eceff5", border="#dfe3eb",
-             text="#151821", muted="#687085", glass_key="#f2f4f9")
+DARK = dict(bg="#0f1115", text="#e9ebf1")
+LIGHT = dict(bg="#f2f4f8", text="#151821")
+
+
+def gradient_at(stops: Sequence[str], t: float) -> str:
+    """Цвет градиента в точке t (0..1)."""
+    if len(stops) == 1:
+        return stops[0]
+    t = max(0.0, min(1.0, t))
+    segs = len(stops) - 1
+    i = min(int(t * segs), segs - 1)
+    return mix(stops[i], stops[i + 1], t * segs - i)
 
 
 def system_mode() -> str:
@@ -85,9 +117,30 @@ def make_palette(appearance: dict) -> Palette:
     mode = appearance.get("mode", "dark")
     if mode == "system":
         mode = system_mode()
-    base = DARK if mode == "dark" else LIGHT
-    return Palette(mode=mode, accents=normalize_colors(appearance.get("colors")),
-                   glass=bool(appearance.get("glass")), **base)
+    dark = mode == "dark"
+    base = DARK if dark else LIGHT
+    accents = normalize_colors(appearance.get("colors"))
+    tint = max(0, min(100, int(appearance.get("tint", 70)))) / 100
+    text = base["text"]
+    # фон страниц: база, окрашенная в каждый из акцентных цветов
+    page = [mix(base["bg"], c, (0.30 if dark else 0.40) * tint) for c in accents]
+    # боковая панель — того же цвета, но глубже (тёмная тема) или светлее (светлая)
+    side = [mix(c, "#000000", 0.30) if dark else mix(c, "#ffffff", 0.35) for c in page]
+    bg = gradient_at(page, 0.5)
+    p = Palette(mode=mode, accents=accents, tint=tint, page_stops=page, side_stops=side, bg=bg,
+                surface="", surface2="", border="", text=text, muted="", accent_hover="", on_accent="",
+                knob="", knob_hover="")
+    p.surface = p.card_on(bg)
+    p.surface2 = mix(p.surface, "#ffffff", 0.06) if dark else mix(p.surface, "#1b2440", 0.05)
+    p.border = mix(p.surface, text, 0.16 if dark else 0.13)
+    p.muted = mix(text, bg, 0.42)
+    p.accent_hover = mix(p.accent, "#ffffff" if dark else "#000000", 0.15)
+    p.on_accent = readable_on([p.accent])
+    # ползунок переключателя: почти белый в тёмной теме (не #ffffff, чтобы не совпасть
+    # с цветом текста на кнопках при перекраске) и тёмно-серый в светлой
+    p.knob = "#f3f4f6" if dark else mix(text, "#ffffff", 0.3)
+    p.knob_hover = mix(p.knob, p.muted, 0.3)
+    return p
 
 
 # ---------------------------------------------------------------- цвета
@@ -113,29 +166,28 @@ def readable_on(colors: Sequence[str]) -> str:
     return "#111318" if lum > 170 else "#ffffff"
 
 
-def apply_ctk_theme(p: Palette) -> None:
+def apply_ctk_theme(p: Palette, set_mode: bool = True) -> None:
     """Подменяет цвета встроенной темы customtkinter, чтобы все стандартные
-    виджеты выглядели в едином минималистичном стиле."""
-    ctk.set_appearance_mode(p.mode)
+    виджеты выглядели в едином стиле. Используются только цвета из p.roles()."""
+    if set_mode:
+        ctk.set_appearance_mode(p.mode)
     t = ctk.ThemeManager.theme
     two = lambda c: [c, c]  # noqa: E731
-    acc = p.accent
-    acc_hover = mix(acc, "#000000" if p.mode == "light" else "#ffffff", 0.15)
-    t["CTk"]["fg_color"] = two(p.window_bg)
+    acc, acc_hover = p.accent, p.accent_hover
+    t["CTk"]["fg_color"] = two(p.bg)
     t["CTkToplevel"]["fg_color"] = two(p.bg)
     t["CTkFrame"].update(fg_color=two(p.surface), top_fg_color=two(p.surface2), border_color=two(p.border))
     t["CTkButton"].update(fg_color=two(acc), hover_color=two(acc_hover), border_color=two(p.border),
-                          text_color=two(readable_on([acc])), text_color_disabled=two(p.muted))
+                          text_color=two(p.on_accent), text_color_disabled=two(p.muted))
     t["CTkLabel"]["text_color"] = two(p.text)
     t["CTkEntry"].update(fg_color=two(p.surface2), border_color=two(p.border), text_color=two(p.text),
                          placeholder_text_color=two(p.muted))
     t["CTkTextbox"].update(fg_color=two(p.surface2), border_color=two(p.border), text_color=two(p.text),
                            scrollbar_button_color=two(p.border), scrollbar_button_hover_color=two(p.muted))
-    knob = "#ffffff" if p.mode == "dark" else mix(p.text, "#ffffff", 0.3)
-    t["CTkSwitch"].update(fg_color=two(p.border), progress_color=two(acc), button_color=two(knob),
-                          button_hover_color=two(mix(knob, p.muted, 0.3)), text_color=two(p.text))
+    t["CTkSwitch"].update(fg_color=two(p.border), progress_color=two(acc), button_color=two(p.knob),
+                          button_hover_color=two(p.knob_hover), text_color=two(p.text))
     t["CTkCheckBox"].update(fg_color=two(acc), hover_color=two(acc_hover), border_color=two(p.muted),
-                            text_color=two(p.text))
+                            text_color=two(p.text), checkmark_color=two(p.on_accent))
     t["CTkSlider"].update(fg_color=two(p.border), progress_color=two(acc), button_color=two(acc),
                           button_hover_color=two(acc_hover))
     t["CTkProgressBar"].update(fg_color=two(p.border), progress_color=two(acc))
@@ -227,38 +279,55 @@ def _gradient_cached(size, colors, angle):
     return gradient(size, colors, angle)
 
 
-def rounded(img: Image.Image, radius: int) -> Image.Image:
-    mask = Image.new("L", img.size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, img.width - 1, img.height - 1], radius=radius, fill=255)
+def aa_mask(size: Tuple[int, int], shape: str = "rrect", radius: float = 0) -> Image.Image:
+    """Маска со сглаженными краями: рисуется в SS раз крупнее и уменьшается."""
+    w, h = size
+    big = Image.new("L", (w * SS, h * SS), 0)
+    d = ImageDraw.Draw(big)
+    if shape == "ellipse":
+        d.ellipse([0, 0, w * SS - 1, h * SS - 1], fill=255)
+    else:
+        d.rounded_rectangle([0, 0, w * SS - 1, h * SS - 1], radius=radius * SS, fill=255)
+    return big.resize((w, h), Image.LANCZOS)
+
+
+def rounded(img: Image.Image, radius_px: float) -> Image.Image:
     out = img.copy()
-    out.putalpha(mask)
+    out.putalpha(aa_mask(img.size, "rrect", radius_px))
     return out
 
 
-def pill(size: Tuple[int, int], colors: Sequence[str], radius: int, angle: str = "h") -> Image.Image:
-    w, h = size
-    g = _gradient_cached((w * SCALE, h * SCALE), tuple(colors), angle).copy()
+def pill(size: Tuple[int, int], colors: Sequence[str], radius: float, angle: str = "h") -> Image.Image:
+    """Скруглённая градиентная плашка; size и radius — в логических единицах."""
+    w, h = px(size[0]), px(size[1])
+    g = _gradient_cached((w, h), tuple(colors), angle).copy()
     return rounded(g, radius * SCALE)
 
 
 def draw_text(img: Image.Image, xy, text: str, size: int, color: str, bold: bool = False,
               anchor: str = "lm") -> None:
-    ImageDraw.Draw(img).text((xy[0] * SCALE, xy[1] * SCALE), text, font=font(size * SCALE, bold),
+    ImageDraw.Draw(img).text((round(xy[0] * SCALE), round(xy[1] * SCALE)), text, font=font(px(size), bold),
                              fill=color, anchor=anchor)
 
 
 def draw_icon(img: Image.Image, xy, name: str, size: int, color: str) -> bool:
-    f = icon_font(size * SCALE)
+    f = icon_font(px(size))
     if f is None or name not in ICONS:
         return False
-    ImageDraw.Draw(img).text((xy[0] * SCALE, xy[1] * SCALE), ICONS[name], font=f, fill=color, anchor="mm")
+    ImageDraw.Draw(img).text((round(xy[0] * SCALE), round(xy[1] * SCALE)), ICONS[name], font=f, fill=color,
+                             anchor="mm")
     return True
 
 
+def text_width(text: str, size: int, bold: bool = False) -> float:
+    """Ширина текста в логических единицах."""
+    return font(px(size), bold).getlength(text) / SCALE
+
+
 def gradient_text(text: str, size: int, colors: Sequence[str], bold: bool = True) -> Image.Image:
-    f = font(size * SCALE, bold)
+    f = font(px(size), bold)
     bbox = f.getbbox(text)
-    w, h = bbox[2] + 4, bbox[3] + 6
+    w, h = bbox[2] + px(2), bbox[3] + px(3)
     mask = Image.new("L", (w, h), 0)
     ImageDraw.Draw(mask).text((0, 0), text, font=f, fill=255)
     g = gradient((w, h), colors, "h")
@@ -267,4 +336,7 @@ def gradient_text(text: str, size: int, colors: Sequence[str], bold: bool = True
 
 
 def to_ctk(img: Image.Image) -> ctk.CTkImage:
-    return ctk.CTkImage(light_image=img, dark_image=img, size=(img.width // SCALE, img.height // SCALE))
+    # размер в логических единицах; CTkImage умножит его на тот же масштаб и
+    # получит ровно размер картинки — Pillow тогда не пересэмплирует изображение
+    size = (max(1, round(img.width / SCALE)), max(1, round(img.height / SCALE)))
+    return ctk.CTkImage(light_image=img, dark_image=img, size=size)

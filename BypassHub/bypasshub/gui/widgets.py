@@ -1,7 +1,8 @@
 """Общие элементы интерфейса в едином минималистичном стиле.
 
-Цвета берутся из текущей палитры (theme.Palette); при смене оформления
-интерфейс пересоздаётся, поэтому значения ниже переопределяются в apply_theme().
+Цвета берутся из текущей палитры (theme.Palette). При смене оформления окно
+не пересоздаётся: surface.recolor_tree() заменяет цвета старой палитры на новые,
+а виджеты-картинки перерисовываются через restyle().
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw
 
 from . import theme as T
+from .surface import GradientPage, mark_card
 
 GREEN = ("#16a34a", "#3ddc84")
 RED = ("#dc2626", "#ff6b6b")
@@ -22,11 +24,15 @@ CARD = P.surface
 TEXT = P.text
 
 
-def apply_theme(palette: T.Palette) -> None:
+# Отступ справа у элементов страницы — место под полосу прокрутки
+PAGE_PADX = (4, 18)
+
+
+def apply_theme(palette: T.Palette, set_mode: bool = True) -> None:
     global P, GRAY, CARD, TEXT
     P = palette
     GRAY, CARD, TEXT = palette.muted, palette.surface, palette.text
-    T.apply_ctk_theme(palette)
+    T.apply_ctk_theme(palette, set_mode=set_mode)
 
 
 def title_font(size: int = 20) -> ctk.CTkFont:
@@ -34,16 +40,16 @@ def title_font(size: int = 20) -> ctk.CTkFont:
 
 
 def page_title(parent, text: str, subtitle: str = "") -> None:
-    ctk.CTkLabel(parent, text=text, font=title_font(26), anchor="w").pack(fill="x", padx=6, pady=(2, 0))
+    ctk.CTkLabel(parent, text=text, font=title_font(26), anchor="w").pack(fill="x", padx=(6, 18), pady=(6, 0))
     if subtitle:
-        ctk.CTkLabel(parent, text=subtitle, anchor="w", text_color=GRAY).pack(fill="x", padx=6)
+        ctk.CTkLabel(parent, text=subtitle, anchor="w", text_color=GRAY).pack(fill="x", padx=(6, 18))
     ctk.CTkFrame(parent, height=12, fg_color="transparent").pack()
 
 
 def section(parent, title: str, hint: Optional[str] = None) -> ctk.CTkFrame:
     """Карточка с заголовком; возвращает внутренний фрейм для содержимого."""
-    card = ctk.CTkFrame(parent, fg_color=P.surface, corner_radius=14)
-    card.pack(fill="x", padx=4, pady=(0, 12))
+    card = mark_card(ctk.CTkFrame(parent, fg_color=P.surface, corner_radius=14))
+    card.pack(fill="x", padx=PAGE_PADX, pady=(0, 12))
     ctk.CTkLabel(card, text=title, font=title_font(15), anchor="w").pack(fill="x", padx=18, pady=(14, 0))
     if hint:
         ctk.CTkLabel(card, text=hint, anchor="w", justify="left", text_color=GRAY,
@@ -67,7 +73,7 @@ def row(parent, label: str, widget_factory, label_width: int = 230, hint: Option
 
 def button_bar(parent) -> ctk.CTkFrame:
     fr = ctk.CTkFrame(parent, fg_color="transparent")
-    fr.pack(fill="x", pady=(8, 0))
+    fr.pack(fill="x", pady=(8, 0), padx=PAGE_PADX if isinstance(parent, GradientPage) else 0)
     return fr
 
 
@@ -111,6 +117,9 @@ class _ImageWidget(ctk.CTkLabel):
         self._img = T.to_ctk(img)  # ссылка, чтобы картинку не собрал GC
         super().configure(image=self._img)
 
+    def restyle(self) -> None:
+        self._render()
+
 
 class GradientButton(_ImageWidget):
     """Основная кнопка: градиент из акцентных цветов."""
@@ -129,8 +138,7 @@ class GradientButton(_ImageWidget):
 
     @staticmethod
     def _auto_width(text: str) -> int:
-        f = T.font(14 * T.SCALE, True)
-        return int(f.getlength(text) / T.SCALE) + 36
+        return int(T.text_width(text, 13, True)) + 36
 
     def _set_hover(self, on: bool) -> None:
         self._ghover = on
@@ -218,18 +226,17 @@ class GradientSwitch(_ImageWidget):
             self.after(16, self._animate)
 
     def _render(self) -> None:
-        w, h, s = self._iw, self._ih, T.SCALE
+        w, h = self._iw, self._ih
         off = T.pill((w, h), [P.border], h // 2)
         on = T.pill((w, h), P.accents, h // 2)
         img = Image.blend(off, on, self._pos) if 0 < self._pos < 1 else (on if self._pos >= 1 else off)
         img = img.copy()
         if self._gstate == "disabled":
             img.putalpha(img.getchannel("A").point(lambda a: a * 0.5))
-        d = ImageDraw.Draw(img)
-        pad = 4 * s
-        knob = h * s - 2 * pad
-        x = pad + (w * s - 2 * pad - knob) * self._pos
-        d.ellipse([x, pad, x + knob, pad + knob], fill="#ffffff")
+        pad = T.px(4)
+        knob = img.height - 2 * pad
+        x = pad + round((img.width - 2 * pad - knob) * self._pos)
+        img.paste((255, 255, 255, 255), (x, pad), T.aa_mask((knob, knob), "ellipse"))
         self._show(img)
 
     def configure(self, require_redraw=False, **kwargs):
@@ -272,13 +279,26 @@ class NavItem(_ImageWidget):
             img = T.pill((w, h), [P.surface2], 12)
             color = P.text
         else:
-            img = Image.new("RGBA", (w * T.SCALE, h * T.SCALE), (0, 0, 0, 0))
+            img = Image.new("RGBA", (T.px(w), T.px(h)), (0, 0, 0, 0))
             color = P.muted
         x = 16
         if T.draw_icon(img, (x + 8, h / 2), self._icon, 15, color):
             x += 28
         T.draw_text(img, (x, h / 2), self._gtext, 13, color, bold=self._active)
         self._show(img)
+
+
+class GradientText(_ImageWidget):
+    """Надпись, залитая градиентом акцентных цветов (логотип)."""
+
+    def __init__(self, parent, text: str, size: int):
+        self._gtext, self._gsize = text, size
+        img = T.gradient_text(text, size, P.accents)
+        super().__init__(parent, round(img.width / T.SCALE), round(img.height / T.SCALE))
+        self._render()
+
+    def _render(self) -> None:
+        self._show(T.gradient_text(self._gtext, self._gsize, P.accents))
 
 
 class Hero(ctk.CTkLabel):
@@ -290,6 +310,9 @@ class Hero(ctk.CTkLabel):
         self._title, self._subtitle = "", ""
         self._width = 0
         self.bind("<Configure>", self._on_resize)
+
+    def restyle(self) -> None:
+        self._render()
 
     def set_text(self, title: str, subtitle: str) -> None:
         if (title, subtitle) != (self._title, self._subtitle):
@@ -305,7 +328,7 @@ class Hero(ctk.CTkLabel):
     def _render(self) -> None:
         w, h = max(self._width, 200), self._hh
         s = T.SCALE
-        img = T.gradient((w * s, h * s), P.accents, "diag")
+        img = T.gradient((T.px(w), T.px(h)), P.accents, "diag")
         # мягкие декоративные круги — отдельным слоем, чтобы они просвечивали
         layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
@@ -320,12 +343,13 @@ class Hero(ctk.CTkLabel):
 
 
 def swatch(colors, size: int = 34, selected: bool = False) -> ctk.CTkImage:
-    s = T.SCALE
-    img = T.gradient((size * s, size * s), colors, "diag")
-    mask = Image.new("L", img.size, 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, size * s - 1, size * s - 1], fill=255)
-    img.putalpha(mask)
-    if selected:
-        d = ImageDraw.Draw(img)
-        d.ellipse([3 * s, 3 * s, size * s - 3 * s, size * s - 3 * s], outline="#ffffff", width=2 * s)
+    n = T.px(size)
+    img = T.gradient((n, n), colors, "diag")
+    img.putalpha(T.aa_mask((n, n), "ellipse"))
+    if selected:  # белое кольцо внутри кружка, со сглаженными краями
+        ss = T.SS
+        ring = Image.new("L", (n * ss, n * ss), 0)
+        inset, width = T.px(3) * ss, max(ss, round(2 * T.SCALE * ss))
+        ImageDraw.Draw(ring).ellipse([inset, inset, n * ss - inset, n * ss - inset], outline=255, width=width)
+        img.paste((255, 255, 255, 255), (0, 0), ring.resize((n, n), Image.LANCZOS))
     return T.to_ctk(img)
