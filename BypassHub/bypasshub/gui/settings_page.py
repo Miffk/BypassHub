@@ -215,10 +215,14 @@ class SettingsPage(GradientPage):
                           command=lambda i=i: self._apply_saved(i)).pack()
             line = ctk.CTkFrame(cell, fg_color="transparent")
             line.pack()
-            ctk.CTkLabel(line, text=name, text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack(side="left")
-            ctk.CTkButton(line, text="✕", width=16, height=16, fg_color="transparent", hover_color=W.P.surface2,
-                          text_color=W.P.muted, font=ctk.CTkFont(size=10),
-                          command=lambda i=i: self._delete_saved(i)).pack(side="left", padx=(2, 0))
+            label = ctk.CTkLabel(line, text=name, text_color=W.P.muted, font=ctk.CTkFont(size=11), cursor="hand2")
+            label.pack(side="left")
+            label.bind("<Double-Button-1>", lambda e, i=i, ln=line: self._rename_saved(i, ln))
+            for text, cmd in (("✎", lambda i=i, ln=line: self._rename_saved(i, ln)),
+                              ("✕", lambda i=i: self._delete_saved(i))):
+                ctk.CTkButton(line, text=text, width=16, height=16, fg_color="transparent",
+                              hover_color=W.P.surface2, text_color=W.P.muted, font=ctk.CTkFont(size=10),
+                              command=cmd).pack(side="left", padx=(2, 0))
 
     def _apply_saved(self, index: int) -> None:
         saved = self._appearance.get("saved") or []
@@ -234,6 +238,41 @@ class SettingsPage(GradientPage):
             self._appearance["preset"] = T.preset_key_for(self._appearance)
             self.app.core.settings.save()
             self._refresh_appearance_controls()
+
+    def _rename_saved(self, index: int, line) -> None:
+        """Переименовать тему прямо на месте: Enter — сохранить, Esc — отмена."""
+        saved = self._appearance.get("saved") or []
+        if index >= len(saved):
+            return
+        old = saved[index].get("name", "")
+        for child in line.winfo_children():
+            child.pack_forget()
+        entry = ctk.CTkEntry(line, width=110, height=24, font=ctk.CTkFont(size=11))
+        entry.pack(side="left")
+        entry.insert(0, old)
+        entry.select_range(0, "end")
+        entry.focus_set()
+        done = {"v": False}
+
+        def finish(save: bool) -> None:
+            if done["v"]:
+                return
+            done["v"] = True
+            new = entry.get().strip()[:24]
+            if save and new and new != old:
+                if any(t.get("name") == new for t in saved):
+                    self.app.error(f"Тема «{new}» уже есть.")
+                else:
+                    saved[index]["name"] = new
+                    if self._appearance.get("preset") == T.MY_PREFIX + old:
+                        self._appearance["preset"] = T.MY_PREFIX + new
+                    self.app.core.settings.save()
+            self._shown_saved = None  # перерисовать раздел
+            self._refresh_appearance_controls()
+
+        entry.bind("<Return>", lambda e: finish(True))
+        entry.bind("<FocusOut>", lambda e: finish(True))
+        entry.bind("<Escape>", lambda e: finish(False))
 
     def _save_current(self) -> None:
         self._appearance["preset"] = T.remember_theme(self._appearance)
