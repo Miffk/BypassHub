@@ -17,7 +17,7 @@ from urllib.request import urlopen
 from . import __version__, github, winutil
 from .log import log
 
-REPO = "Miffk/games"
+REPO = "Miffk/BypassHub"
 TAG_PREFIX = "bypasshub-v"
 ASSET = "BypassHub.exe"
 

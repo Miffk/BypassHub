@@ -52,10 +52,10 @@ def test_is_public():
 
 
 def test_selfupdate_version():
-    rel = Release("Miffk/games", "bypasshub-v9.9.9", "")
+    rel = Release("Miffk/BypassHub", "bypasshub-v9.9.9", "")
     assert selfupdate.version_of(rel) == "9.9.9"
     assert selfupdate.is_newer(rel)
-    assert not selfupdate.is_newer(Release("Miffk/games", "bypasshub-v0.1.0", ""))
+    assert not selfupdate.is_newer(Release("Miffk/BypassHub", "bypasshub-v0.1.0", ""))
 
 
 def test_backup_roundtrip(tmp_path):
