@@ -130,4 +130,4 @@ def test_vpn_adapters(monkeypatch):
         "Radmin VPN": [addr("26.100.213.53")], "AmneziaVPN": [addr("10.8.1.9")],
         "Ethernet": [addr("192.168.31.129")], "WireGuard Tunnel": [addr("10.0.0.2")]})
     monkeypatch.setattr(psutil, "net_if_stats", lambda: {"WireGuard Tunnel": NS(isup=False)})
-    assert tgproxy.vpn_adapters() == ["AmneziaVPN", "Radmin VPN"]
+    assert tgproxy.vpn_adapters() == ["AmneziaVPN"]  # Radmin VPN локальную сеть не блокирует

@@ -144,8 +144,10 @@ _VIRTUAL_HINTS = ("vpn", "radmin", "amnezia", "wireguard", "wintun", "openvpn", 
                   "loopback", "npcap", "wsl", "docker", "bluetooth")
 
 
-_VPN_HINTS = ("vpn", "amnezia", "wireguard", "wintun", "openvpn", "radmin", "zerotier", "hamachi",
+_VPN_HINTS = ("vpn", "amnezia", "wireguard", "wintun", "openvpn", "zerotier", "hamachi",
               "tailscale", "outline", "tap-windows", "proton", "nord", "warp")
+# Сети для игр/удалённого доступа: локальную сеть не блокируют, предупреждать не нужно
+_VPN_IGNORE = ("radmin",)
 
 
 def vpn_adapters() -> List[str]:
@@ -160,7 +162,10 @@ def vpn_adapters() -> List[str]:
         st = stats.get(name)
         if st is not None and not st.isup:
             continue
-        if any(h in name.lower() for h in _VPN_HINTS) and any(a.family == socket.AF_INET for a in items):
+        low = name.lower()
+        if any(h in low for h in _VPN_IGNORE):
+            continue
+        if any(h in low for h in _VPN_HINTS) and any(a.family == socket.AF_INET for a in items):
             found.append(name)
     return sorted(found)
 
