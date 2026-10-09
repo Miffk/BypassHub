@@ -278,7 +278,10 @@ class SettingsPage(GradientPage):
         entry.bind("<Return>", lambda e: finish(True))
         entry.bind("<FocusOut>", lambda e: finish(True))
         entry.bind("<Escape>", lambda e: finish(False))
-        self._editing = (entry, finish)
+        # «клик мимо поля» начинаем отслеживать чуть позже: иначе тот же клик по ✎
+        # (или двойной клик по имени), который открыл поле, сразу бы его закрыл
+        self._editing = None
+        self.after(150, lambda: None if done["v"] else setattr(self, "_editing", (entry, finish)))
 
     def _click_anywhere(self, event) -> None:
         if not self._editing:
