@@ -1,6 +1,6 @@
 """Поверхности с градиентным фоном и перекраска интерфейса на лету.
 
-Tk не умеет полупрозрачные виджеты, поэтому фон рисуется картинкой на
+Tk не умеет полупрозрачные виджеты, поэтому фон рисуется полосами на
 tk.Canvas, а виджеты поверх него получают цвет фона в своей точке градиента:
 - обычные элементы (заголовки, подписи, кнопки) — цвет градиента под ними;
 - карточки — «полупрозрачную» подложку (Palette.card_on) и свои цвета
@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 import customtkinter as ctk
 from customtkinter.windows.widgets.core_widget_classes import CTkBaseClass
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
 from . import theme as T
 
@@ -32,15 +32,6 @@ def gradient_column(stops: Sequence[str], height: int, period: int) -> List[str]
         t = phase if phase <= 1 else 2 - phase
         out.append(T.gradient_at(stops, t))
     return out
-
-
-def gradient_image(width: int, height: int, stops: Sequence[str], period: int) -> Image.Image:
-    # Градиент плавный, поэтому считаем цвет для каждой 4-й строки и растягиваем
-    step = 4
-    col = gradient_column(stops, max(1, height // step + 1), max(1, period // step))
-    strip = Image.new("RGB", (1, len(col)))
-    strip.putdata([T.hex_to_rgb(c) for c in col])
-    return strip.resize((max(1, width), max(1, height)), Image.BILINEAR)
 
 
 def set_bg_tree(widget, color: str) -> None:
@@ -62,15 +53,35 @@ def mark_card(frame: ctk.CTkFrame) -> ctk.CTkFrame:
     return frame
 
 
+_FRAME_ATTRS = {"fg_color": "_fg_color", "bg_color": "_bg_color", "border_color": "_border_color",
+                "background_corner_colors": "_background_corner_colors"}
+
+
+def quiet_frame_configure(frame: ctk.CTkFrame, **changes) -> None:
+    """Перекрасить CTkFrame без каскадной перерисовки всех его потомков
+    (CTkFrame.configure(fg_color=...) перерисовывает каждого ребёнка — при
+    перекраске всего окна это удваивает работу; детей мы перекрасим сами)."""
+    rest = {}
+    for key, value in changes.items():
+        attr = _FRAME_ATTRS.get(key)
+        if attr:
+            setattr(frame, attr, value)
+        else:
+            rest[key] = value
+    frame._draw()
+    if rest:
+        frame.configure(**rest)
+
+
 class _GradientMixin:
-    """Общая логика: градиентная картинка + подстройка цветов прямых потомков."""
+    """Общая логика: градиентный фон полосами + цвета прямых потомков."""
 
     stops_attr = "page_stops"
 
     def _gm_init(self) -> None:
-        self._bg_item = None
-        self._bg_photo = None
-        self._bg_key = None
+        self._bands: List[int] = []
+        self._band_geom = None
+        self._band_key = None
         self._job = None
         self._period = 900
         self._applied: Dict[str, tuple] = {}
@@ -89,57 +100,102 @@ class _GradientMixin:
             self._job = self.after(40, self.apply_layout)
 
     def restyle(self) -> None:
-        """Палитра сменилась: перерисовать фон и пересчитать все цвета."""
-        self._bg_key = None
+        """Палитра сменилась (без карты цветов): пересчитать всё заново."""
+        self._band_key = None
         self._applied.clear()
         self.apply_layout()
 
     def _draw_background(self, width: int, height: int) -> None:
-        key = (width, height, self._period, tuple(self._stops()))
-        if key == self._bg_key or width < 2 or height < 2:
+        """Фон — горизонтальные полосы по 4 px: перекрашиваются почти мгновенно,
+        в отличие от большой картинки."""
+        if width < 2 or height < 2:
             return
-        self._bg_key = key
-        img = gradient_image(width, height, self._stops(), self._period)
-        self._bg_photo = ImageTk.PhotoImage(img)
-        if self._bg_item is None:
-            self._bg_item = self.create_image(0, 0, image=self._bg_photo, anchor="nw")
-        else:
-            self.itemconfigure(self._bg_item, image=self._bg_photo)
-        self.tag_lower(self._bg_item)
-        self.configure(bg=self.color_at(height / 2))
+        step = max(2, T.px(4))
+        key = (width, height, self._period, tuple(self._stops()))
+        if key == self._band_key:
+            return
+        self._band_key = key
+        n = height // step + 1
+        while len(self._bands) < n:
+            self._bands.append(self.create_rectangle(0, 0, 0, 0, outline="", width=0, tags=("bg",)))
+        while len(self._bands) > n:
+            self.delete(self._bands.pop())
+        geom = (width, height, step)
+        if geom != self._band_geom:
+            self._band_geom = geom
+            for i, item in enumerate(self._bands):
+                self.coords(item, 0, i * step, width, (i + 1) * step)
+        for i, item in enumerate(self._bands):
+            self.itemconfigure(item, fill=self.color_at(i * step + step / 2))
+        self.tag_lower("bg")
+        self.configure(bg=self.color_at(0))
+
+    def _child_state(self, child) -> Optional[tuple]:
+        try:
+            if child.winfo_manager() == "":
+                return None
+            top, h = child.winfo_y(), child.winfo_height()
+        except tk.TclError:
+            return None
+        if h <= 1:
+            return None  # ещё не разложен
+        mid = self.color_at(top + h / 2)
+        if getattr(child, "_bh_card", False):
+            c_top, c_bot = self.color_at(top), self.color_at(top + h)
+            return ("card", _palette().card_on(mid), c_top, c_bot, mid)
+        return ("bg", mid)
 
     def _apply_children(self) -> None:
-        P = _palette()
+        """Подстроить цвета прямых потомков под градиент (после изменения раскладки)."""
         pending = False
         for child in self.winfo_children():
             if not isinstance(child, CTkBaseClass):
                 continue
-            if not child.winfo_ismapped():
+            state = self._child_state(child)
+            if state is None:
                 pending = pending or child.winfo_manager() != ""
                 continue
-            top = child.winfo_y()
-            h = child.winfo_height()
-            mid = self.color_at(top + h / 2)
-            if getattr(child, "_bh_card", False):
-                c_top, c_bot = self.color_at(top), self.color_at(top + h)
-                state = ("card", P.card_on(mid), c_top, c_bot, mid)
-                if self._applied.get(str(child)) == state:
-                    continue
-                self._applied[str(child)] = state
-                child.configure(fg_color=state[1], bg_color=mid,
-                                background_corner_colors=(c_top, c_top, c_bot, c_bot))
+            if self._applied.get(str(child)) == state:
+                continue
+            self._applied[str(child)] = state
+            if state[0] == "card":
+                child.configure(fg_color=state[1], bg_color=state[4],
+                                background_corner_colors=(state[2], state[2], state[3], state[3]))
             else:
-                state = ("bg", mid)
-                if self._applied.get(str(child)) == state:
-                    continue
-                self._applied[str(child)] = state
-                set_bg_tree(child, mid)
-        # элементы, которые Tk ещё не успел показать, раскрасим чуть позже
-        if pending and self.winfo_ismapped() and self._retries < 20:
+                set_bg_tree(child, state[1])
+        # элементы, которые Tk ещё не успел разложить, раскрасим чуть позже
+        if pending and self._retries < 25:
             self._retries += 1
             self.after(120, self.schedule_layout)
         elif not pending:
             self._retries = 0
+
+    def recolor(self, mapping: Dict[str, str]) -> None:
+        """Перекраска при смене палитры: каждый виджет перекрашивается один раз.
+        Старые «градиентные» цвета потомков добавляются в карту замены."""
+        for child in self.winfo_children():
+            if not isinstance(child, CTkBaseClass):
+                recolor_tree(child, mapping)
+                continue
+            old = self._applied.get(str(child))
+            new = self._child_state(child)
+            local = dict(mapping)
+            if old and new and old[0] == new[0]:
+                if new[0] == "card":
+                    local[old[1].lower()] = new[1]
+                    local[old[4].lower()] = new[4]
+                else:
+                    local[old[1].lower()] = new[1]
+                self._applied[str(child)] = new
+            if new and new[0] == "card":
+                quiet_frame_configure(child, fg_color=new[1], bg_color=new[4],
+                                      background_corner_colors=(new[2], new[2], new[3], new[3]))
+                for grandchild in child.winfo_children():
+                    recolor_tree(grandchild, local)
+            else:
+                recolor_tree(child, local)
+        self._band_key = None
+        self.apply_layout()  # фон и всё, что не удалось сопоставить
 
 
 class GradientPage(tk.Canvas, _GradientMixin):
@@ -268,17 +324,26 @@ COLOR_ATTRS = (
     "button_color", "button_hover_color", "progress_color", "selected_color", "selected_hover_color",
     "unselected_color", "unselected_hover_color", "placeholder_text_color", "scrollbar_button_color",
     "scrollbar_button_hover_color", "dropdown_fg_color", "dropdown_hover_color", "dropdown_text_color",
-    "checkmark_color",
+    "checkmark_color", "background_corner_colors",
 )
 
 
 def _remap(value, mapping: Dict[str, str]):
+    """Новое значение цвета (строка, пара цветов или вложенные кортежи) или None."""
     if isinstance(value, str):
         return mapping.get(value.lower())
-    if isinstance(value, (list, tuple)) and value and all(isinstance(v, str) for v in value):
-        new = [mapping.get(v.lower(), v) for v in value]
-        if new != list(value):
-            return type(value)(new) if isinstance(value, tuple) else new
+    if isinstance(value, (list, tuple)) and value:
+        changed = False
+        out = []
+        for v in value:
+            nv = _remap(v, mapping)
+            if nv is not None:
+                changed = True
+                out.append(nv)
+            else:
+                out.append(v)
+        if changed:
+            return tuple(out) if isinstance(value, tuple) else out
     return None
 
 
@@ -289,11 +354,14 @@ def build_mapping(old: T.Palette, new: T.Palette) -> Dict[str, str]:
 
 def recolor_tree(root, mapping: Dict[str, str]) -> None:
     """Обойти виджеты сверху вниз и заменить цвета старой палитры на новые;
-    у кого есть restyle() (картинки, градиентные поверхности) — перерисовать."""
+    у кого есть restyle() (картинки) — перерисовать; градиентные поверхности
+    перекрашивают свою область сами (recolor)."""
     stack = [root]
-    gradient_surfaces = []
     while stack:
         w = stack.pop()
+        if isinstance(w, _GradientMixin):
+            w.recolor(mapping)
+            continue
         if isinstance(w, (CTkBaseClass, ctk.CTk, ctk.CTkToplevel)) and mapping:
             changes = {}
             for attr in COLOR_ATTRS:
@@ -306,12 +374,13 @@ def recolor_tree(root, mapping: Dict[str, str]) -> None:
                     changes[attr] = new
             if changes:
                 try:
-                    w.configure(**changes)
+                    if isinstance(w, ctk.CTkFrame):
+                        quiet_frame_configure(w, **changes)
+                    else:
+                        w.configure(**changes)
                 except Exception:
                     pass
-        if isinstance(w, _GradientMixin):
-            gradient_surfaces.append(w)
-        elif hasattr(w, "restyle"):
+        if hasattr(w, "restyle"):
             try:
                 w.restyle()
             except Exception:
@@ -321,9 +390,6 @@ def recolor_tree(root, mapping: Dict[str, str]) -> None:
         except tk.TclError:
             continue
         stack.extend(reversed(children))
-    # градиент — в конце, чтобы цвета прямых потомков пересчитались после перекраски
-    for s in gradient_surfaces:
-        s.restyle()
 
 
 def crossfade(window, apply: Callable[[], None], duration_ms: int = 260) -> None:

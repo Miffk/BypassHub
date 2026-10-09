@@ -2,6 +2,7 @@
 градиентных элементов через Pillow."""
 from __future__ import annotations
 
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -280,15 +281,32 @@ def _gradient_cached(size, colors, angle):
 
 
 def aa_mask(size: Tuple[int, int], shape: str = "rrect", radius: float = 0) -> Image.Image:
-    """Маска со сглаженными краями: рисуется в SS раз крупнее и уменьшается."""
+    """Маска со сглаженными краями. Для скруглённого прямоугольника сглаживаются
+    только углы (быстро даже для больших картинок)."""
     w, h = size
-    big = Image.new("L", (w * SS, h * SS), 0)
-    d = ImageDraw.Draw(big)
     if shape == "ellipse":
-        d.ellipse([0, 0, w * SS - 1, h * SS - 1], fill=255)
-    else:
-        d.rounded_rectangle([0, 0, w * SS - 1, h * SS - 1], radius=radius * SS, fill=255)
-    return big.resize((w, h), Image.LANCZOS)
+        big = Image.new("L", (w * SS, h * SS), 0)
+        ImageDraw.Draw(big).ellipse([0, 0, w * SS - 1, h * SS - 1], fill=255)
+        return big.resize((w, h), Image.LANCZOS)
+    mask = Image.new("L", (w, h), 255)
+    r = max(0.0, min(float(radius), w / 2, h / 2))
+    ri = int(math.ceil(r))
+    if ri < 1:
+        return mask
+    corner = _aa_corner(ri, round(r, 2))
+    mask.paste(corner, (0, 0))
+    mask.paste(corner.transpose(Image.FLIP_LEFT_RIGHT), (w - ri, 0))
+    mask.paste(corner.transpose(Image.FLIP_TOP_BOTTOM), (0, h - ri))
+    mask.paste(corner.transpose(Image.ROTATE_180), (w - ri, h - ri))
+    return mask
+
+
+@lru_cache(maxsize=64)
+def _aa_corner(ri: int, r: float) -> Image.Image:
+    """Левый верхний угол ri×ri: четверть круга радиуса r, со сглаживанием."""
+    big = Image.new("L", (ri * SS, ri * SS), 0)
+    ImageDraw.Draw(big).ellipse([0, 0, 2 * r * SS - 1, 2 * r * SS - 1], fill=255)
+    return big.resize((ri, ri), Image.LANCZOS)
 
 
 def rounded(img: Image.Image, radius_px: float) -> Image.Image:

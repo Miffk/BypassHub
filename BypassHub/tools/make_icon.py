@@ -33,20 +33,21 @@ def render(size: int) -> Image.Image:
     def P(x, y):  # координаты в долях значка
         return (x * n, y * n)
 
-    small = size <= 36  # панель задач и трей: только крупный самолётик — так чётче
-    if not small:  # щит
-        d.polygon([P(.5, .15), P(.79, .25), P(.79, .5), P(.5, .86), P(.21, .5), P(.21, .25)],
-                  fill=(255, 255, 255, 255))
-        plane_color, fold = (45, 132, 255, 255), (20, 86, 210, 255)
+    small = size <= 36  # панель задач, трей, заголовок: тот же рисунок, но крупнее и проще
+    if small:
+        shield = [P(.5, .10), P(.85, .22), P(.85, .50), P(.5, .92), P(.15, .50), P(.15, .22)]
+        k, cx, cy = 0.62, 0.5, 0.48
+    else:
+        shield = [P(.5, .15), P(.79, .25), P(.79, .5), P(.5, .86), P(.21, .5), P(.21, .25)]
         k, cx, cy = 0.52, 0.5, 0.47
-    else:  # на мелких размерах — только крупный белый самолётик
-        plane_color, fold = (255, 255, 255, 255), (200, 220, 255, 255)
-        k, cx, cy = 0.95, 0.47, 0.52
+    d.polygon(shield, fill=(255, 255, 255, 255))
+    plane_color, fold = (37, 120, 245, 255), (20, 80, 200, 255)
     # бумажный самолётик (координаты относительно центра)
     pts = [(-.40, .03), (.40, -.32), (.22, .40), (.04, .20), (-.07, .33), (-.08, .12)]
     tr = lambda x, y: P(cx + x * k, cy + y * k)  # noqa: E731
     d.polygon([tr(*p) for p in pts], fill=plane_color)
-    d.polygon([tr(-.08, .12), tr(.04, .20), tr(.40, -.32)], fill=fold)
+    if size > 20:  # на самых мелких размерах складка сливается — без неё чётче
+        d.polygon([tr(-.08, .12), tr(.04, .20), tr(.40, -.32)], fill=fold)
 
     out = img.resize((size, size), Image.LANCZOS)
     if size <= 48:  # вернуть резкость краям после уменьшения
@@ -59,7 +60,9 @@ def render(size: int) -> Image.Image:
 def main() -> None:
     images = [render(s) for s in SIZES]
     target = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
-    images[-1].save(target, format="ICO", sizes=[(s, s) for s in SIZES], append_images=images[:-1])
+    # кадры в классическом формате BMP — Windows читает их надёжнее, чем PNG внутри .ico
+    images[-1].save(target, format="ICO", sizes=[(s, s) for s in SIZES], append_images=images[:-1],
+                    bitmap_format="bmp")
     print("saved", target)
 
 

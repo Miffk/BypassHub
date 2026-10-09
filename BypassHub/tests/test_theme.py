@@ -43,3 +43,12 @@ def test_gradient_at_bounds():
     assert T.gradient_at(["#000000", "#ffffff"], -1) == "#000000"
     assert T.gradient_at(["#000000", "#ffffff"], 2) == "#ffffff"
     assert T.gradient_at(["#123456"], 0.5) == "#123456"
+
+
+def test_remap_nested_corner_colors():
+    from bypasshub.gui.surface import _remap
+    m = {"#111111": "#222222"}
+    assert _remap(("#111111", ["#111111", "#111111"], "#333333"), m) == \
+        ("#222222", ["#222222", "#222222"], "#333333")
+    assert _remap(("#333333",), m) is None
+    assert _remap("#111111", m) == "#222222"

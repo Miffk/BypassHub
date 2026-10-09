@@ -172,15 +172,19 @@ class App(ctk.CTk):
         self.show_page(self.current_page)
 
     def apply_appearance(self, animate: bool = True) -> None:
-        """Сменить оформление без пересоздания окна: цвета заменяются на месте,
-        переход сглаживается растворением снимка старого вида."""
+        """Сменить оформление без пересоздания окна: цвета заменяются на месте.
+        animate=True — переход сглаживается растворением снимка старого вида;
+        False — мгновенно (для предпросмотра при выборе цвета)."""
         old = W.P
         new = T.make_palette(self.core.settings.data["appearance"])
         if new == old:
             return
 
         def apply() -> None:
-            W.apply_theme(new, set_mode=new.mode != old.mode)
+            # Режим customtkinter (светлый/тёмный) не переключаем: его смена в Windows
+            # прячет и заново показывает окно. Все цвета задаются явно, заголовок
+            # окна перекрашиваем сами.
+            W.apply_theme(new, set_mode=False)
             mapping = build_mapping(old, new)
             self.configure(fg_color=new.bg)
             self.content.configure(bg=new.bg)
@@ -188,8 +192,10 @@ class App(ctk.CTk):
             for child in self.winfo_children():  # открытые диалоги
                 if isinstance(child, ctk.CTkToplevel):
                     recolor_tree(child, mapping)
+                    set_dark_titlebar(child, new.mode == "dark")
             self._recolor_page(self.current_page)
-            set_dark_titlebar(self, new.mode == "dark")
+            if new.mode != old.mode:
+                set_dark_titlebar(self, new.mode == "dark")
             self.update_idletasks()
 
         if animate:

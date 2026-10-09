@@ -51,7 +51,6 @@ class SettingsPage(GradientPage):
         ctk.CTkLabel(body, text="Свои цвета (до трёх — градиент)", anchor="w").pack(fill="x", pady=(12, 4))
         self.custom = ctk.CTkFrame(body, fg_color="transparent")
         self.custom.pack(fill="x")
-        self._render_custom()
 
         self.tint_label = ctk.CTkLabel(body, text="", anchor="w")
         self.tint_label.pack(fill="x", pady=(14, 0))
@@ -147,17 +146,26 @@ class SettingsPage(GradientPage):
         self._refresh_appearance_controls()
 
     def _refresh_appearance_controls(self) -> None:
+        """Обновить элементы «Оформления» — только то, что изменилось."""
         a = self._appearance
         self.mode.set(MODES.get(a.get("mode"), MODES["dark"]))
-        self._swatch_imgs = []
-        for name, btn in self._swatch_btns.items():
-            img = W.swatch(T.PRESETS[name], 38, selected=(a.get("preset") == name))
-            self._swatch_imgs.append(img)
-            btn.configure(image=img)
+        preset = a.get("preset")
+        if getattr(self, "_shown_preset", object()) != preset:
+            self._shown_preset = preset
+            self._swatch_imgs = []
+            for name, btn in self._swatch_btns.items():
+                img = W.swatch(T.PRESETS[name], 38, selected=(preset == name))
+                self._swatch_imgs.append(img)
+                btn.configure(image=img)
         self.tint_label.configure(text=f"Насыщенность фона: {int(a.get('tint', 70))}%")
-        self._render_custom()
+        colors = tuple(a.get("colors") or [])
+        if getattr(self, "_shown_colors", None) != colors:
+            self._shown_colors = colors
+            self._render_custom()
 
     def on_palette(self) -> None:
+        if getattr(self.app, "_color_picker", None) is not None:
+            return  # пока открыт выбор цвета, обновим панель при его закрытии
         self._refresh_appearance_controls()
 
     def _mode_changed(self, label: str) -> None:
@@ -205,19 +213,15 @@ class SettingsPage(GradientPage):
 
     def _pick(self, index: int) -> None:
         from .color_picker import ColorPicker
-        colors = list(self._appearance.get("colors") or [])
-        initial = colors[index] if index < len(colors) else W.P.accent
+        picker = getattr(self.app, "_color_picker", None)
+        if picker is not None and picker.winfo_exists():
+            picker.lift()
+            return
 
-        def picked(hex_color: str) -> None:
-            current = list(self._appearance.get("colors") or [])
-            if index < len(current):
-                current[index] = hex_color.lower()
-            else:
-                current.append(hex_color.lower())
-            self._appearance["colors"] = T.normalize_colors(current)
-            self._appearance["preset"] = "custom"
-            self._save_and_apply()
-        ColorPicker(self.app, initial, picked)
+        def closed() -> None:
+            self.app._color_picker = None
+            self._refresh_appearance_controls()
+        self.app._color_picker = ColorPicker(self.app, index, on_close=closed)
 
     def _remove_color(self, index: int) -> None:
         colors = list(self._appearance.get("colors") or [])
