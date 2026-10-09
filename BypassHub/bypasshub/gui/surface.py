@@ -374,7 +374,9 @@ def recolor_tree(root, mapping: Dict[str, str]) -> None:
                     changes[attr] = new
             if changes:
                 try:
-                    if isinstance(w, ctk.CTkFrame):
+                    # у CTkSegmentedButton (тоже CTkFrame) цвета живут во внутренних
+                    # кнопках — тихий путь их не обновит, нужен обычный configure
+                    if isinstance(w, ctk.CTkFrame) and not isinstance(w, ctk.CTkSegmentedButton):
                         quiet_frame_configure(w, **changes)
                     else:
                         w.configure(**changes)
