@@ -10,7 +10,8 @@ from PIL import Image, ImageDraw, ImageFilter
 
 SS = 8  # суперсэмплинг для гладких краёв
 TOP, BOTTOM = (45, 132, 255), (20, 86, 210)
-SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
+# 24/30/36 — значок панели задач при масштабе 100/125/150%, 16/20 — заголовок окна и трей
+SIZES = [16, 20, 24, 30, 32, 36, 40, 48, 64, 96, 128, 256]
 
 
 def render(size: int) -> Image.Image:
@@ -23,7 +24,7 @@ def render(size: int) -> Image.Image:
         grad.putpixel((0, y), tuple(int(TOP[i] + (BOTTOM[i] - TOP[i]) * t) for i in range(3)) + (255,))
     grad = grad.resize((n, n))
     mask = Image.new("L", (n, n), 0)
-    margin = 0 if size <= 32 else n * 0.03
+    margin = 0 if size <= 36 else n * 0.03
     ImageDraw.Draw(mask).rounded_rectangle([margin, margin, n - 1 - margin, n - 1 - margin],
                                            radius=n * 0.22, fill=255)
     img.paste(grad, (0, 0), mask)
@@ -32,7 +33,7 @@ def render(size: int) -> Image.Image:
     def P(x, y):  # координаты в долях значка
         return (x * n, y * n)
 
-    small = size <= 24
+    small = size <= 36  # панель задач и трей: только крупный самолётик — так чётче
     if not small:  # щит
         d.polygon([P(.5, .15), P(.79, .25), P(.79, .5), P(.5, .86), P(.21, .5), P(.21, .25)],
                   fill=(255, 255, 255, 255))

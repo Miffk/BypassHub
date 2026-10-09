@@ -49,6 +49,38 @@ def set_dark_titlebar(window, dark: bool) -> None:
         log.debug("dark titlebar: %r", exc)
 
 
+def set_window_icon(window, ico_path: str) -> None:
+    """Значки окна точного размера для текущего масштаба экрана.
+
+    Tk отдаёт Windows один крупный значок, и панель задач уменьшает его сама —
+    получается «мыльно». Здесь из .ico берутся готовые кадры нужного размера:
+    большой — размер значка панели задач (24 px × масштаб), малый — 16 px × масштаб."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.LoadImageW.restype = ctypes.c_void_p
+        user32.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_int,
+                                      ctypes.c_int, ctypes.c_uint]
+        user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+        window.update_idletasks()
+        hwnd = user32.GetParent(window.winfo_id())
+        try:
+            dpi = user32.GetDpiForWindow(hwnd) or 96
+        except Exception:
+            dpi = 96
+        scale = dpi / 96
+        IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
+        for kind, base in ((1, 24), (0, 16)):  # ICON_BIG, ICON_SMALL
+            size = round(base * scale)
+            hicon = user32.LoadImageW(None, ico_path, IMAGE_ICON, size, size, LR_LOADFROMFILE)
+            if hicon:
+                user32.SendMessageW(hwnd, WM_SETICON, kind, hicon)
+    except Exception as exc:
+        log.debug("window icon: %r", exc)
+
+
 class App(ctk.CTk):
     STATUS_INTERVAL = 3.0
 
@@ -65,6 +97,8 @@ class App(ctk.CTk):
             self.iconbitmap(str(resource_path("assets/icon.ico")))
         except Exception:
             pass
+        # после того как Tk выставит свой значок — заменить его на кадры точного размера
+        self.after(400, lambda: set_window_icon(self, str(resource_path("assets/icon.ico"))))
 
         self._queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self._closing = False
