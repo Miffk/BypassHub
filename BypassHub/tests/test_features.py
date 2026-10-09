@@ -87,3 +87,26 @@ def test_backup_roundtrip(tmp_path):
     assert zm2.ipset_status() == "loaded"
     assert zm2.read_user_list("list-general-user.txt").strip() == "my.site"
     assert zm2.active_fakes()["game"] == "tls_clienthello_4pda_to"
+
+
+def test_clean_env_drops_pyinstaller_state(monkeypatch, tmp_path):
+    import os
+    import sys
+
+    from bypasshub import winutil
+    mei = str(tmp_path / "_MEI12345")
+    monkeypatch.setattr(sys, "_MEIPASS", mei, raising=False)
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\\BypassHub\\BypassHub.exe")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", mei)
+    monkeypatch.setenv("_MEIPASS2", mei)
+    monkeypatch.setenv("TCL_LIBRARY", os.path.join(mei, "tcl"))
+    monkeypatch.setenv("PATH", os.pathsep.join([mei, "/usr/bin"]))
+    env = winutil.clean_env()
+    assert not any(k.startswith("_PYI_") or k.startswith("_MEIPASS") for k in env)
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert "TCL_LIBRARY" not in env
+    assert mei not in env["PATH"].split(os.pathsep) and "/usr/bin" in env["PATH"]
+
+
+def test_cleanup_old_noop_when_not_frozen():
+    assert selfupdate.cleanup_old() is True

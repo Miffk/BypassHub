@@ -198,7 +198,8 @@ class Core:
                 shutil.rmtree(f) if f.is_dir() else f.unlink()
             except OSError:
                 pass
-        selfupdate.cleanup_old()
+        # старый exe после самообновления удаляется в фоне — он может ещё быть занят
+        threading.Thread(target=selfupdate.cleanup_old, daemon=True, name="cleanup-old").start()
         old = self.tg.exe.with_suffix(".old")
         try:
             old.unlink(missing_ok=True)

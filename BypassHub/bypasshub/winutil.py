@@ -166,6 +166,30 @@ def kill_by_name(name: str) -> None:
         kill_pid_tree(p.pid)
 
 
+def clean_env() -> dict:
+    """Окружение для запуска других программ из собранного exe.
+
+    PyInstaller передаёт дочерним процессам служебные переменные (_PYI_*,
+    _MEIPASS2) и свою временную папку в PATH. Если запустить exe с тем же путём
+    (например, обновлённый BypassHub.exe), он решит, что уже распакован, и
+    возьмёт файлы из временной папки старого процесса, которая исчезает."""
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith("_PYI_") or key.startswith("_MEIPASS"):
+            del env[key]
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # PyInstaller 6.9+: «запускаемся с нуля»
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mei = os.path.normcase(os.path.abspath(meipass))
+        env["PATH"] = os.pathsep.join(
+            p for p in env.get("PATH", "").split(os.pathsep)
+            if p and os.path.normcase(os.path.abspath(p)) != mei)
+    for key in ("TCL_LIBRARY", "TK_LIBRARY"):  # указывают внутрь временной папки
+        if meipass and env.get(key, "").startswith(meipass):
+            del env[key]
+    return env
+
+
 def popen_hidden(cmd: Sequence[str], cwd: Optional[Path] = None, stdout=None,
                  detached: bool = False) -> subprocess.Popen:
     flags = 0
@@ -178,7 +202,7 @@ def popen_hidden(cmd: Sequence[str], cwd: Optional[Path] = None, stdout=None,
         stdin=subprocess.DEVNULL,
         stdout=stdout if stdout is not None else subprocess.DEVNULL,
         stderr=subprocess.STDOUT if stdout is not None else subprocess.DEVNULL,
-        creationflags=flags, close_fds=True,
+        creationflags=flags, close_fds=True, env=clean_env(),
     )
 
 

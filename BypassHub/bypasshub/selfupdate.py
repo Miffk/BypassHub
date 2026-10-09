@@ -58,9 +58,23 @@ def is_newer(release: github.Release) -> bool:
     return github.is_newer(version_of(release), __version__)
 
 
-def cleanup_old() -> None:
-    if is_frozen():
-        Path(sys.executable).with_name("BypassHub.old.exe").unlink(missing_ok=True)
+def cleanup_old(attempts: int = 40, delay: float = 0.5) -> bool:
+    """Удалить BypassHub.old.exe, оставшийся после обновления.
+
+    Старый процесс может ещё несколько секунд держать файл (загрузчик PyInstaller
+    убирает за собой временную папку), поэтому пробуем несколько раз."""
+    if not is_frozen():
+        return True
+    import time
+    old = Path(sys.executable).with_name("BypassHub.old.exe")
+    for _ in range(attempts):
+        try:
+            old.unlink(missing_ok=True)
+            return True
+        except OSError:
+            time.sleep(delay)
+    log.warning("Не удалось удалить %s — удалю при следующем запуске", old)
+    return False
 
 
 def install(release: github.Release, progress: Optional[github.ProgressCb] = None) -> None:
@@ -84,4 +98,5 @@ def install(release: github.Release, progress: Optional[github.ProgressCb] = Non
         raise
     log.info("BypassHub обновлён до %s, перезапуск", version_of(release))
     flags = winutil.DETACHED_PROCESS | winutil.CREATE_NEW_PROCESS_GROUP if winutil.IS_WINDOWS else 0
-    subprocess.Popen([str(exe), "--wait-pid", str(os.getpid())], creationflags=flags, close_fds=True)
+    subprocess.Popen([str(exe), "--wait-pid", str(os.getpid())], creationflags=flags, close_fds=True,
+                     env=winutil.clean_env())
