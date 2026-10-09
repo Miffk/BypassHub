@@ -52,3 +52,22 @@ def test_remap_nested_corner_colors():
         ("#222222", ["#222222", "#222222"], "#333333")
     assert _remap(("#333333",), m) is None
     assert _remap("#111111", m) == "#222222"
+
+
+def test_remember_theme():
+    a = {"colors": ["#2b7fff", "#00c6ff"]}
+    assert T.remember_theme(a) == "Океан"  # готовый набор не сохраняется
+    assert "saved" not in a or a["saved"] == []
+    a["colors"] = ["#123456", "#abcdef"]
+    assert T.remember_theme(a) == "my:Тема 1"
+    assert T.remember_theme(a) == "my:Тема 1"  # повтор не дублируется
+    a["colors"] = ["#111111"]
+    assert T.remember_theme(a) == "my:Тема 2"
+    a["saved"].pop(0)
+    a["colors"] = ["#222222"]
+    assert T.remember_theme(a) == "my:Тема 1"  # имя освободилось
+    assert T.preset_key_for({"colors": ["#999999"], "saved": a["saved"]}) == "custom"
+    for i in range(30):
+        a["colors"] = ["#%06x" % (i + 1000)]
+        T.remember_theme(a)
+    assert len(a["saved"]) == T.MAX_SAVED

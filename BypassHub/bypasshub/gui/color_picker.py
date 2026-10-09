@@ -321,12 +321,14 @@ class ColorPicker(ctk.CTkToplevel):
         self._dirty = False
         a = self.app.core.settings.data["appearance"]
         a["colors"] = list(self.colors)
-        a["preset"] = next((name for name, cols in T.PRESETS.items() if cols == self.colors), "custom")
+        a["preset"] = T.preset_key_for(a)
         self.app.apply_appearance(animate=False)
 
     def done(self) -> None:
         self._hex_entered()
         self._flush()
+        a = self.app.core.settings.data["appearance"]
+        a["preset"] = T.remember_theme(a)  # свои цвета сохраняются в «Мои темы»
         self.app.core.settings.save()
         self._close()
 

@@ -48,6 +48,15 @@ class SettingsPage(GradientPage):
             self._swatch_btns[name] = btn
             ctk.CTkLabel(cell, text=name, text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack()
 
+        head = ctk.CTkFrame(body, fg_color="transparent")
+        head.pack(fill="x", pady=(14, 4))
+        ctk.CTkLabel(head, text="Мои темы", anchor="w").pack(side="left")
+        ctk.CTkButton(head, text="Сохранить текущие цвета", width=190, height=26, corner_radius=8,
+                      fg_color="transparent", border_width=1, border_color=W.P.border, text_color=W.P.text,
+                      hover_color=W.P.surface2, command=self._save_current).pack(side="left", padx=12)
+        self.mythemes = ctk.CTkFrame(body, fg_color="transparent")
+        self.mythemes.pack(fill="x")
+
         ctk.CTkLabel(body, text="Свои цвета (до трёх — градиент)", anchor="w").pack(fill="x", pady=(12, 4))
         self.custom = ctk.CTkFrame(body, fg_color="transparent")
         self.custom.pack(fill="x")
@@ -157,6 +166,10 @@ class SettingsPage(GradientPage):
                 img = W.swatch(T.PRESETS[name], 38, selected=(preset == name))
                 self._swatch_imgs.append(img)
                 btn.configure(image=img)
+        saved_state = (preset, tuple((t.get("name"), tuple(t.get("colors") or [])) for t in a.get("saved") or []))
+        if getattr(self, "_shown_saved", None) != saved_state:
+            self._shown_saved = saved_state
+            self._render_mythemes()
         self.tint_label.configure(text=f"Насыщенность фона: {int(a.get('tint', 70))}%")
         colors = tuple(a.get("colors") or [])
         if getattr(self, "_shown_colors", None) != colors:
@@ -176,6 +189,56 @@ class SettingsPage(GradientPage):
         self._appearance["preset"] = name
         self._appearance["colors"] = list(T.PRESETS[name])
         self._save_and_apply()
+
+    # ------------------------------------------------------------ мои темы
+    def _render_mythemes(self) -> None:
+        for child in self.mythemes.winfo_children():
+            child.destroy()
+        a = self._appearance
+        saved = a.get("saved") or []
+        if not saved:
+            ctk.CTkLabel(self.mythemes, text="Здесь появятся ваши темы: выберите цвета через «+ Цвет» и нажмите "
+                                             "«Готово» — тема сохранится автоматически.",
+                         anchor="w", justify="left", wraplength=640, text_color=W.P.muted,
+                         font=ctk.CTkFont(size=11)).pack(fill="x")
+            return
+        self._my_imgs = []
+        for i, theme in enumerate(saved):
+            name = theme.get("name", "")
+            cell = ctk.CTkFrame(self.mythemes, fg_color="transparent")
+            cell.grid(row=i // 8, column=i % 8, padx=(0, 10), pady=(0, 6))
+            img = W.swatch(T.normalize_colors(theme.get("colors")), 38,
+                           selected=(a.get("preset") == T.MY_PREFIX + name))
+            self._my_imgs.append(img)
+            ctk.CTkButton(cell, text="", image=img, width=44, height=44, fg_color="transparent",
+                          hover_color=W.P.surface2, corner_radius=22,
+                          command=lambda i=i: self._apply_saved(i)).pack()
+            line = ctk.CTkFrame(cell, fg_color="transparent")
+            line.pack()
+            ctk.CTkLabel(line, text=name, text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack(side="left")
+            ctk.CTkButton(line, text="✕", width=16, height=16, fg_color="transparent", hover_color=W.P.surface2,
+                          text_color=W.P.muted, font=ctk.CTkFont(size=10),
+                          command=lambda i=i: self._delete_saved(i)).pack(side="left", padx=(2, 0))
+
+    def _apply_saved(self, index: int) -> None:
+        saved = self._appearance.get("saved") or []
+        if index < len(saved):
+            self._appearance["colors"] = T.normalize_colors(saved[index].get("colors"))
+            self._appearance["preset"] = T.MY_PREFIX + saved[index].get("name", "")
+            self._save_and_apply()
+
+    def _delete_saved(self, index: int) -> None:
+        saved = self._appearance.get("saved") or []
+        if index < len(saved):
+            saved.pop(index)
+            self._appearance["preset"] = T.preset_key_for(self._appearance)
+            self.app.core.settings.save()
+            self._refresh_appearance_controls()
+
+    def _save_current(self) -> None:
+        self._appearance["preset"] = T.remember_theme(self._appearance)
+        self.app.core.settings.save()
+        self._refresh_appearance_controls()
 
     def _tint_changed(self, value: float) -> None:
         self._appearance["tint"] = int(value)
@@ -228,7 +291,7 @@ class SettingsPage(GradientPage):
         if len(colors) > 1:
             colors.pop(index)
             self._appearance["colors"] = colors
-            self._appearance["preset"] = "custom"
+            self._appearance["preset"] = T.preset_key_for(self._appearance)
             self._save_and_apply()
 
     # ------------------------------------------------------------ горячие клавиши

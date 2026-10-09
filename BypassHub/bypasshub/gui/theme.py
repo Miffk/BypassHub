@@ -89,6 +89,39 @@ def gradient_at(stops: Sequence[str], t: float) -> str:
     return mix(stops[i], stops[i + 1], t * segs - i)
 
 
+MAX_SAVED = 16
+MY_PREFIX = "my:"
+
+
+def preset_key_for(appearance: dict) -> str:
+    """Ключ набора для текущих цветов: имя готового набора, «my:<имя>» своей темы или custom."""
+    colors = normalize_colors(appearance.get("colors"))
+    for name, cols in PRESETS.items():
+        if cols == colors:
+            return name
+    for theme in appearance.get("saved") or []:
+        if normalize_colors(theme.get("colors")) == colors:
+            return MY_PREFIX + theme.get("name", "")
+    return "custom"
+
+
+def remember_theme(appearance: dict) -> str:
+    """Сохранить текущие цвета в «Мои темы», если такой темы ещё нет.
+    Возвращает ключ набора (см. preset_key_for)."""
+    key = preset_key_for(appearance)
+    if key != "custom":
+        return key
+    saved = appearance.setdefault("saved", [])
+    used = {t.get("name") for t in saved}
+    n = 1
+    while f"Тема {n}" in used:
+        n += 1
+    name = f"Тема {n}"
+    saved.append({"name": name, "colors": normalize_colors(appearance.get("colors"))})
+    del saved[:-MAX_SAVED]  # самые старые уходят, если тем слишком много
+    return MY_PREFIX + name
+
+
 def system_mode() -> str:
     if sys.platform == "win32":
         try:
