@@ -83,6 +83,7 @@ class TgPage(GradientPage):
         home = lambda: app.pages["home"][1]  # noqa: E731
         W.add_button(bar, "Открыть в Telegram", lambda: home().open_in_telegram(), width=170)
         W.add_button(bar, "Скопировать ссылку", lambda: home().copy_link(), secondary=True, width=170)
+        W.add_button(bar, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
         W.add_button(bar, "Лог прокси", self.open_log, secondary=True)
         W.add_button(bar, "Перезапустить", self.restart, secondary=True)
 
@@ -159,6 +160,10 @@ class TgPage(GradientPage):
             return
         self.app.core.tg.save_config(result)
         self._fill(result)
+        try:  # адрес 0.0.0.0 — нужен доступ из сети: правило брандмауэра добавляется/удаляется само
+            self.app.core.tg.sync_firewall(result)
+        except Exception as exc:
+            self.app.error(str(exc), "Брандмауэр")
 
         def done(restarted, err):
             if err:

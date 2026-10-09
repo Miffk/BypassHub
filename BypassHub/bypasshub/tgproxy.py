@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
@@ -16,7 +17,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from . import github, winutil
 from .log import log
@@ -137,16 +138,65 @@ def validate(values: Dict[str, Any]) -> Union[Dict[str, Any], str]:
     return cfg
 
 
-def proxy_link(cfg: Dict[str, Any]) -> str:
-    host = cfg.get("host", DEFAULT_CONFIG["host"])
+# Адаптеры, адрес которых телефону в домашней сети не подходит
+_VIRTUAL_HINTS = ("vpn", "radmin", "amnezia", "wireguard", "wintun", "openvpn", "tap", "tun", "hyper-v",
+                  "vethernet", "virtualbox", "vmware", "zerotier", "hamachi", "tailscale", "outline",
+                  "loopback", "npcap", "wsl", "docker", "bluetooth")
+
+
+def lan_addresses() -> List[Tuple[str, str]]:
+    """Адреса компьютера в локальной сети: [(ip, имя адаптера)], лучший — первым.
+    Сначала обычные адаптеры (Ethernet/Wi-Fi) с адресами 192.168.x.x, потом
+    172.16–31.x.x и 10.x.x.x; адаптеры VPN и виртуальных машин — в конце."""
+    try:
+        import psutil
+        addrs, stats = psutil.net_if_addrs(), psutil.net_if_stats()
+    except Exception:
+        return []
+    found = []
+    for name, items in addrs.items():
+        st = stats.get(name)
+        if st is not None and not st.isup:
+            continue
+        for a in items:
+            if a.family != socket.AF_INET:
+                continue
+            try:
+                ip = ipaddress.ip_address(a.address)
+            except ValueError:
+                continue
+            if not ip.is_private or ip.is_loopback or ip.is_link_local:
+                continue
+            virtual = any(h in name.lower() for h in _VIRTUAL_HINTS)
+            if ip in ipaddress.ip_network("192.168.0.0/16"):
+                net_rank = 0
+            elif ip in ipaddress.ip_network("172.16.0.0/12"):
+                net_rank = 1
+            else:
+                net_rank = 2
+            found.append(((virtual, net_rank, name), a.address, name))
+    found.sort()
+    return [(ip, name) for _, ip, name in found]
+
+
+def proxy_link(cfg: Dict[str, Any], server: Optional[str] = None, web: bool = False) -> str:
+    """Ссылка для подключения Telegram.
+    server — адрес для телефона; без него для 0.0.0.0 берётся 127.0.0.1 (этот компьютер).
+    web=True — ссылка https://t.me/proxy (её открывает камера телефона)."""
+    host = server or cfg.get("host", DEFAULT_CONFIG["host"])
     if host == "0.0.0.0":
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                host = s.getsockname()[0]
-        except OSError:
-            host = "127.0.0.1"
-    return f"tg://proxy?server={host}&port={cfg.get('port', 1443)}&secret=dd{cfg.get('secret', '')}"
+        host = "127.0.0.1"
+    query = f"server={host}&port={cfg.get('port', 1443)}&secret=dd{cfg.get('secret', '')}"
+    return f"https://t.me/proxy?{query}" if web else f"tg://proxy?{query}"
+
+
+def phone_link(cfg: Dict[str, Any], server: Optional[str] = None) -> Optional[str]:
+    if server is None:
+        lan = lan_addresses()
+        if not lan:
+            return None
+        server = lan[0][0]
+    return proxy_link(cfg, server=server, web=True)
 
 
 def choose_asset(preference: str = "auto") -> str:
@@ -170,9 +220,32 @@ class TgStatus:
     foreign: List[str] = field(default_factory=list)
 
 
+FIREWALL_RULE = "BypassHub TG WS Proxy"
+
+
 class TgProxyManager:
     def __init__(self, root: Path):
         self.root = root
+
+    # ---------------------------------------------------------- доступ с телефона
+    def phone_access(self) -> bool:
+        return self.load_config().get("host") == "0.0.0.0"
+
+    def sync_firewall(self, cfg: Dict[str, Any]) -> None:
+        """Правило брандмауэра есть, только пока прокси открыт для локальной сети."""
+        if cfg.get("host") == "0.0.0.0":
+            winutil.firewall_allow_tcp(FIREWALL_RULE, int(cfg.get("port", 1443)))
+        else:
+            winutil.firewall_remove(FIREWALL_RULE)
+
+    def set_phone_access(self, enabled: bool) -> None:
+        cfg = self.load_config()
+        cfg["host"] = "0.0.0.0" if enabled else "127.0.0.1"
+        self.save_config(cfg)
+        self.sync_firewall(cfg)
+        log.info("Доступ к прокси с телефона %s", "включён" if enabled else "выключен")
+        if self._own_processes():
+            self.restart()
 
     @property
     def exe(self) -> Path:

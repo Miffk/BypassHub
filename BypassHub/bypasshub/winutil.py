@@ -256,6 +256,31 @@ def list_services() -> str:
     return run(["sc", "query"], encoding="cp437", timeout=30).stdout
 
 
+# ---------------------------------------------------------------- брандмауэр
+
+def firewall_rule_exists(name: str) -> bool:
+    if not IS_WINDOWS:
+        return False
+    res = run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"], encoding="cp437")
+    return res.returncode == 0 and "no rules match" not in res.stdout.lower()
+
+
+def firewall_allow_tcp(name: str, port: int) -> None:
+    """Разрешить входящие TCP-подключения на порт (для всех профилей сети)."""
+    if not IS_WINDOWS:
+        return
+    firewall_remove(name)
+    res = run(["netsh", "advfirewall", "firewall", "add", "rule", f"name={name}", "dir=in", "action=allow",
+               "protocol=TCP", f"localport={int(port)}", "profile=any"], encoding="cp437")
+    if res.returncode != 0:
+        raise RuntimeError(f"не удалось добавить правило брандмауэра: {(res.stdout + res.stderr).strip()}")
+
+
+def firewall_remove(name: str) -> None:
+    if IS_WINDOWS:
+        run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"], encoding="cp437")
+
+
 # ---------------------------------------------------------------- автозапуск
 
 TASK_NAME = "BypassHub"

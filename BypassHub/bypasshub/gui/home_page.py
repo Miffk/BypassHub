@@ -117,6 +117,7 @@ class HomePage(GradientPage):
         bar = self.tg_card.extra
         W.add_button(bar, "Открыть в Telegram", self.open_in_telegram, width=170)
         W.add_button(bar, "Скопировать ссылку", self.copy_link, secondary=True, width=170)
+        W.add_button(bar, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
 
         hint = ("Подсказка: перебирайте стратегии, пока Discord/YouTube не заработают. Подобрать стратегию "
                 "автоматически кнопкой «Подобрать». Для автозапуска при включении ПК "

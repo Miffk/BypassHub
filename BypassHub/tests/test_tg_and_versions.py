@@ -88,3 +88,33 @@ def test_settings_merge_defaults(tmp_path):
     assert s.get("appearance", "mode") == "dark"
     s.set("appearance", "colors", ["#ff0000", "#00ff00"])
     assert json.loads(p.read_text(encoding="utf-8"))["appearance"]["colors"] == ["#ff0000", "#00ff00"]
+
+
+def test_lan_addresses_prefers_home_network(monkeypatch):
+    import socket as _socket
+    from types import SimpleNamespace as NS
+
+    import psutil
+    addr = lambda ip: NS(family=_socket.AF_INET, address=ip)  # noqa: E731
+    monkeypatch.setattr(psutil, "net_if_addrs", lambda: {
+        "Radmin VPN": [addr("26.100.213.53")],
+        "AmneziaVPN": [addr("10.8.1.9")],
+        "Ethernet": [addr("192.168.31.129")],
+        "Loopback Pseudo-Interface 1": [addr("127.0.0.1")],
+        "vEthernet (WSL)": [addr("172.20.0.1")],
+        "Беспроводная сеть": [addr("192.168.1.50")],
+    })
+    monkeypatch.setattr(psutil, "net_if_stats", lambda: {
+        "Беспроводная сеть": NS(isup=False)})
+    ips = [ip for ip, _ in tgproxy.lan_addresses()]
+    assert ips[0] == "192.168.31.129"          # как в ipconfig пользователя: адрес Ethernet
+    assert "26.100.213.53" not in ips          # не частный адрес (Radmin)
+    assert "192.168.1.50" not in ips           # адаптер выключен
+    assert ips.index("10.8.1.9") > ips.index("192.168.31.129")
+
+
+def test_links_for_pc_and_phone():
+    cfg = {"host": "0.0.0.0", "port": 1443, "secret": "ab" * 16}
+    assert tgproxy.proxy_link(cfg).startswith("tg://proxy?server=127.0.0.1&port=1443")
+    assert tgproxy.phone_link(cfg, "192.168.31.129") == \
+        "https://t.me/proxy?server=192.168.31.129&port=1443&secret=dd" + "ab" * 16

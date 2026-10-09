@@ -379,6 +379,14 @@ class App(ctk.CTk):
             if not self.winfo_viewable():
                 self.show_window()
 
+    def open_phone_dialog(self) -> None:
+        from .phone_dialog import PhoneDialog
+        dlg = getattr(self, "_phone_dialog", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.lift()
+            return
+        self._phone_dialog = PhoneDialog(self)
+
     def notify_if_hidden(self, text: str) -> None:
         """Уведомление в трее, когда действие выполнено, а окно скрыто (например, горячей клавишей)."""
         if self.tray is not None and not self.winfo_viewable():
