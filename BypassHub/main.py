@@ -11,11 +11,27 @@ from bypasshub.log import log, setup_logging
 from bypasshub.paths import Paths
 
 
+def _wait_for_exit(pid: int, timeout: float = 30.0) -> None:
+    import time
+    try:
+        import psutil
+    except ImportError:
+        time.sleep(5)
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline and psutil.pid_exists(pid):
+        time.sleep(0.3)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog=APP_NAME)
     ap.add_argument("--minimized", action="store_true", help="запуск свёрнутым в трей")
     ap.add_argument("--data-dir", type=Path, default=None, help="папка данных (по умолчанию C:\\ProgramData\\BypassHub)")
+    ap.add_argument("--wait-pid", type=int, default=0, help=argparse.SUPPRESS)  # после самообновления
     args = ap.parse_args()
+
+    if args.wait_pid:
+        _wait_for_exit(args.wait_pid)
 
     if winutil.IS_WINDOWS and not winutil.is_admin():
         # zapret (WinDivert), службы и hosts требуют прав администратора

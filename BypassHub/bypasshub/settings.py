@@ -21,6 +21,7 @@ DEFAULTS: Dict[str, Any] = {
         "strategy": "general.bat",
         "mode": "process",         # process — winws.exe запускается программой; service — служба Windows
         "installed_version": "",
+        "learn_apps": False,       # экспериментально: исключать IP, к которым подключаются выбранные программы
     },
     "tg": {
         "enabled": False,
@@ -31,6 +32,7 @@ DEFAULTS: Dict[str, Any] = {
         "check_on_start": True,
         "interval_hours": 6,       # 0 — только при запуске
         "auto_install": True,
+        "self_update": True,       # проверять обновления самого BypassHub
         "last_check": 0,
     },
     "app": {

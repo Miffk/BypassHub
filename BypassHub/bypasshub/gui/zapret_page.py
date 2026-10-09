@@ -86,6 +86,14 @@ class ZapretPage(ctk.CTkScrollableFrame):
                                 lambda p: ctk.CTkEntry(p, placeholder_text="example.com, game.net"))
         bar = W.button_bar(body)
         W.add_button(bar, "Применить", self._apps_changed)
+        self.learn_sw = ctk.CTkSwitch(body, text="Экспериментально: также исключать IP-адреса, к которым "
+                                                "подключаются отмеченные программы", command=self._learn_changed)
+        self.learn_sw.pack(anchor="w", pady=(12, 0))
+        self.learn_info = ctk.CTkLabel(body, text="", anchor="w", justify="left", wraplength=640,
+                                       text_color=W.P.muted, font=ctk.CTkFont(size=11))
+        self.learn_info.pack(fill="x")
+        bar = W.button_bar(body)
+        W.add_button(bar, "Очистить выученные адреса", self._learn_clear, secondary=True, width=220)
 
         # --- пользовательские списки
         body = W.section(self, "Пользовательские списки",
@@ -117,14 +125,15 @@ class ZapretPage(ctk.CTkScrollableFrame):
         # --- инструменты
         body = W.section(self, "Инструменты")
         bar = W.button_bar(body)
+        W.add_button(bar, "Автоподбор стратегии", self._auto_pick)
         W.add_button(bar, "Диагностика", self._diagnostics)
-        W.add_button(bar, "Тест стратегий", self._run_tests)
         W.add_button(bar, "Удалить службы", self._remove_services, secondary=True)
         bar = W.button_bar(body)
         W.add_button(bar, "Открыть папку zapret", lambda: winutil.open_path(self.app.core.zapret.root),
                      secondary=True, width=180)
         W.add_button(bar, "Лог winws.exe", self._open_winws_log, secondary=True)
         W.add_button(bar, "Показать команду", self._show_command, secondary=True, width=160)
+        W.add_button(bar, "Тест в PowerShell", self._run_tests, secondary=True, width=160)
 
         self.sync_from_settings()
         self.reload()
@@ -166,6 +175,8 @@ class ZapretPage(ctk.CTkScrollableFrame):
         for name, cb in self.app_checks.items():
             W.set_switch(cb, name in names)
         W.set_entry(self.app_custom, ", ".join(custom))
+        W.set_switch(self.learn_sw, self.app.core.settings.get("zapret", "learn_apps"))
+        self._update_learn_info()
         for name, box in self.list_boxes.items():
             W.set_text(box, zm.read_user_list(name))
 
@@ -231,7 +242,6 @@ class ZapretPage(ctk.CTkScrollableFrame):
             self.app.error(str(exc))
             self.ipset_btn.set(zm.ipset_status())
             return
-        self._after_change("IPSet Filter")
 
     def _update_ipset(self) -> None:
         def done(count, err):
@@ -240,7 +250,6 @@ class ZapretPage(ctk.CTkScrollableFrame):
             else:
                 self.ipset_btn.set(self.app.core.zapret.ipset_status())
                 self.app.info(f"IPSet-список обновлён ({count} записей). Режим: loaded.")
-                self._after_change("IPSet")
         self.app.run_task(self.app.core.zapret.update_ipset_list, done)
 
     def _fake_changed(self, kind: str, value: str) -> None:
@@ -262,15 +271,42 @@ class ZapretPage(ctk.CTkScrollableFrame):
         custom = [d for d in self.app_custom.get().replace(";", ",").replace(" ", ",").split(",") if d.strip()]
         zm.set_app_exclusions(names, custom)
         W.set_text(self.list_boxes["list-exclude-user.txt"], zm.read_user_list("list-exclude-user.txt"))
-        self._after_change("исключения")
+        self.app.core.update_learner()
+        self._update_learn_info()
+        self.app.info("Исключения применены. Перезапуск обхода не нужен — zapret сам перечитывает списки.")
+
+    def _learn_changed(self) -> None:
+        on = bool(self.learn_sw.get())
+        self.app.core.settings.set("zapret", "learn_apps", on)
+        self.app.core.update_learner()
+        self._update_learn_info()
+
+    def _learn_clear(self) -> None:
+        self.app.core.learner.clear()
+        W.set_text(self.list_boxes["ipset-exclude-user.txt"],
+                   self.app.core.zapret.read_user_list("ipset-exclude-user.txt"))
+        self._update_learn_info()
+
+    def _update_learn_info(self) -> None:
+        count = len(self.app.core.learner.learned())
+        text = ("Раз в 8 секунд программа смотрит, к каким адресам подключены отмеченные программы (только "
+                "локальная таблица соединений — сеть не нагружается), и добавляет их в ipset-exclude-user.txt. "
+                "Первое подключение к новому адресу ещё идёт через обход. Адреса Discord и YouTube "
+                f"не исключаются. Выучено адресов: {count}.")
+        self.learn_info.configure(text=text)
+
+    def _auto_pick(self) -> None:
+        if not self.app.core.zapret.is_installed():
+            self.app.error("zapret ещё не загружен")
+            return
+        from .strategy_dialog import StrategyDialog
+        StrategyDialog(self.app)
 
     def _save_list(self, name: str) -> None:
         zm = self.app.core.zapret
         zm.write_user_list(name, self.list_boxes[name].get("1.0", "end-1c"))
         W.set_text(self.list_boxes[name], zm.read_user_list(name))
-        self._after_change("списки")
-        if not (self.app.zapret_status.running or self.app.zapret_status.service_installed):
-            self.app.info(f"{name} сохранён.")
+        self.app.info(f"{name} сохранён. zapret подхватит изменения сам, без перезапуска.")
 
     # ------------------------------------------------------------------ hosts
     def _hosts_check(self) -> None:
@@ -341,9 +377,9 @@ class ZapretPage(ctk.CTkScrollableFrame):
         if not self.app.core.zapret.is_installed():
             self.app.error("zapret ещё не загружен")
             return
-        if not self.app.ask("Тест сам запускает все стратегии по очереди, поэтому текущий обход будет выключен. "
-                            "Откроется окно PowerShell — следуйте его инструкциям (Standard tests → All "
-                            "configs). В конце будет показана лучшая стратегия — выберите её здесь.\n\nНачать?"):
+        if not self.app.ask("Расширенный тест из zapret-discord-youtube (в том числе DPI checkers). Текущий обход "
+                            "будет выключен, откроется окно PowerShell — следуйте его инструкциям. Для обычного "
+                            "подбора удобнее кнопка «Автоподбор стратегии».\n\nНачать?"):
             return
 
         def work():

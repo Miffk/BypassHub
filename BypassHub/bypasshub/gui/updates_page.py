@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Dict, List
 
 import customtkinter as ctk
 
-from .. import tgproxy, winutil, zapret
+from .. import __version__, selfupdate, tgproxy, winutil, zapret
 from ..core import UpdateInfo
 from . import widgets as W
 
@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 INTERVALS = {0: "Только при запуске", 1: "Каждый час", 3: "Каждые 3 часа", 6: "Каждые 6 часов",
              12: "Каждые 12 часов", 24: "Раз в сутки"}
-REPOS = {"zapret": zapret.REPO, "tg": tgproxy.REPO}
+REPOS = {"zapret": zapret.REPO, "tg": tgproxy.REPO, "self": selfupdate.REPO}
+TITLES = {"zapret": "Zapret", "tg": "TG WS Proxy", "self": "BypassHub"}
 
 
 class UpdatesPage(ctk.CTkScrollableFrame):
@@ -32,7 +33,7 @@ class UpdatesPage(ctk.CTkScrollableFrame):
                          "При обновлении zapret сохраняются ваши списки, Game Filter, IPSet, фейки и свои "
                          "стратегии; работающий обход перезапускается автоматически.")
         self.rows: Dict[str, Dict[str, ctk.CTkBaseClass]] = {}
-        for key, title in (("zapret", "Zapret"), ("tg", "TG WS Proxy")):
+        for key, title in TITLES.items():
             fr = ctk.CTkFrame(body, fg_color=W.P.surface2, corner_radius=12)
             fr.pack(fill="x", pady=4)
             left = ctk.CTkFrame(fr, fg_color="transparent")
@@ -71,6 +72,10 @@ class UpdatesPage(ctk.CTkScrollableFrame):
                                           command=lambda: s.set("updates", "auto_install",
                                                                 bool(self.auto_install.get())))
         self.auto_install.pack(anchor="w", pady=3)
+        self.self_update = ctk.CTkSwitch(body, text="Обновлять сам BypassHub",
+                                         command=lambda: s.set("updates", "self_update",
+                                                               bool(self.self_update.get())))
+        self.self_update.pack(anchor="w", pady=3)
         self.interval = W.row(body, "Периодическая проверка", lambda p: ctk.CTkComboBox(
             p, values=list(INTERVALS.values()), state="readonly", command=self._interval_changed))
         assets = {"auto": "Автоматически"}
@@ -83,6 +88,7 @@ class UpdatesPage(ctk.CTkScrollableFrame):
 
         W.set_switch(self.check_on_start, s.get("updates", "check_on_start"))
         W.set_switch(self.auto_install, s.get("updates", "auto_install"))
+        W.set_switch(self.self_update, s.get("updates", "self_update"))
         self.interval.set(INTERVALS.get(int(s.get("updates", "interval_hours")), INTERVALS[6]))
         self.asset.set(assets.get(s.get("tg", "asset"), "Автоматически"))
         self.render()
@@ -104,6 +110,7 @@ class UpdatesPage(ctk.CTkScrollableFrame):
         installed = {
             "zapret": core.zapret.local_version() if core.zapret.is_installed() else "",
             "tg": core.tg.local_version() if core.tg.is_installed() else "",
+            "self": __version__,
         }
         for key, row in self.rows.items():
             info = self.infos.get(key)
@@ -119,6 +126,10 @@ class UpdatesPage(ctk.CTkScrollableFrame):
             else:
                 row["state"].configure(text="Актуальная версия", text_color=W.GREEN)
             avail = bool(info and info.available)
+            if key == "self":
+                row["btn"].configure(text="Обновить", state="normal" if avail and not self.busy and
+                                     selfupdate.is_frozen() else "disabled")
+                continue
             row["btn"].configure(text="Обновить" if avail and installed[key] else
                                  ("Установить" if not installed[key] else "Переустановить"),
                                  state="disabled" if self.busy else "normal")
@@ -142,7 +153,7 @@ class UpdatesPage(ctk.CTkScrollableFrame):
         self.render()
 
     def on_progress(self, component: str, done: int, total: int) -> None:
-        name = "Zapret" if component == "zapret" else "TG WS Proxy"
+        name = TITLES.get(component, component)
         if total:
             self.progress.stop()
             self.progress.configure(mode="determinate")
@@ -170,7 +181,7 @@ class UpdatesPage(ctk.CTkScrollableFrame):
         def work():
             info = self.infos.get(key)
             if info is None or info.release is None:
-                info = core.check_zapret() if key == "zapret" else core.check_tg()
+                info = {"zapret": core.check_zapret, "tg": core.check_tg, "self": core.check_self}[key]()
             core.install(info, progress)
             return info
 
@@ -181,6 +192,9 @@ class UpdatesPage(ctk.CTkScrollableFrame):
                 self.app.error(str(err), "Обновление")
                 return
             self.infos[key] = info
+            if core.restarting_for_update:
+                self.app.quit_app()
+                return
             self.render()
             self.app.pages["home"][1].reload_strategies()
             self.app.pages["zapret"][1].reload()

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, List
 
 import customtkinter as ctk
 
-from .. import tgproxy, winutil
+from .. import netcheck, tgproxy, winutil
 from ..core import UpdateInfo
 from ..tgproxy import TgStatus
 from ..zapret import ZapretStatus
@@ -66,6 +66,28 @@ class HomePage(ctk.CTkScrollableFrame):
         self.hero.pack(fill="x", padx=4, pady=(0, 14))
         self.hero.set_text("BypassHub", "Проверяю состояние…")
 
+        # индикаторы доступности сервисов
+        chips = ctk.CTkFrame(self, fg_color="transparent")
+        chips.pack(fill="x", padx=4, pady=(0, 14))
+        self.chips = {}
+        for i, name in enumerate(netcheck.SERVICES):
+            chip = ctk.CTkFrame(chips, fg_color=W.P.surface, corner_radius=14)
+            chip.grid(row=0, column=i, sticky="ew", padx=(0, 10))
+            chips.grid_columnconfigure(i, weight=1)
+            dot = ctk.CTkLabel(chip, text="●", text_color=W.P.muted, font=ctk.CTkFont(size=16), width=20)
+            dot.pack(side="left", padx=(14, 4), pady=10)
+            ctk.CTkLabel(chip, text=name, font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+            info = ctk.CTkLabel(chip, text="…", text_color=W.P.muted)
+            info.pack(side="right", padx=(4, 14))
+            self.chips[name] = (dot, info, chip)
+        refresh = ctk.CTkButton(chips, text="⟳", width=44, height=44, corner_radius=14, fg_color=W.P.surface,
+                                hover_color=W.P.surface2, text_color=W.P.text, font=ctk.CTkFont(size=18),
+                                command=self.check_services)
+        refresh.grid(row=0, column=len(self.chips), sticky="e")
+        self._checking = False
+        self._check_job = None
+        self.after(1500, self._periodic_check)
+
         self.banner = ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=14, border_width=1,
                                    border_color=W.P.accent)
         self.banner_label = ctk.CTkLabel(self.banner, text="", anchor="w", justify="left")
@@ -84,6 +106,7 @@ class HomePage(ctk.CTkScrollableFrame):
         self.mode_btn = ctk.CTkSegmentedButton(bar, values=["Программа", "Служба Windows"],
                                                command=self._mode_changed)
         self.mode_btn.pack(side="left", padx=10)
+        W.add_button(bar, "Подобрать", lambda: app.pages["zapret"][1]._auto_pick(), secondary=True, width=110)
         self.mode_btn.set("Служба Windows" if core.zapret_mode == "service" else "Программа")
 
         self.tg_card = ServiceCard(self, "TG WS Proxy", "Локальный MTProto-прокси, ускоряющий Telegram Desktop",
@@ -94,7 +117,7 @@ class HomePage(ctk.CTkScrollableFrame):
         W.add_button(bar, "Скопировать ссылку", self.copy_link, secondary=True, width=170)
 
         hint = ("Подсказка: перебирайте стратегии, пока Discord/YouTube не заработают. Подобрать стратегию "
-                "автоматически можно во вкладке Zapret → «Тест стратегий». Для автозапуска при включении ПК "
+                "автоматически кнопкой «Подобрать». Для автозапуска при включении ПК "
                 "включите режим «Служба Windows» или автозапуск BypassHub в настройках.")
         ctk.CTkLabel(self, text=hint, text_color=W.GRAY, wraplength=680, justify="left",
                      anchor="w").pack(fill="x", padx=8, pady=(4, 0))
@@ -141,6 +164,7 @@ class HomePage(ctk.CTkScrollableFrame):
 
     def _zapret_done(self, error) -> None:
         self.zapret_card.set_busy(False)
+        self.check_services(delay_ms=2500)
         if error:
             self.app.error(str(error), "Zapret")
 
@@ -156,6 +180,7 @@ class HomePage(ctk.CTkScrollableFrame):
 
     def _tg_done(self, error) -> None:
         self.tg_card.set_busy(False)
+        self.check_services(delay_ms=2500)
         if error:
             self.app.error(str(error), "TG WS Proxy")
 
@@ -170,6 +195,46 @@ class HomePage(ctk.CTkScrollableFrame):
         url = tgproxy.proxy_link(self.app.core.tg.load_config())
         self.app.copy_to_clipboard(url)
         self.app.info("Ссылка скопирована:\n" + url)
+
+    # ------------------------------------------------------------------ доступность сервисов
+    CHECK_PERIOD_MS = 180_000
+
+    def _periodic_check(self) -> None:
+        if self.app.winfo_viewable():  # не тратим трафик, пока окно скрыто в трее
+            self.check_services()
+        self.after(self.CHECK_PERIOD_MS, self._periodic_check)
+
+    def check_services(self, delay_ms: int = 0) -> None:
+        if delay_ms:
+            if self._check_job:
+                self.after_cancel(self._check_job)
+            self._check_job = self.after(delay_ms, self.check_services)
+            return
+        self._check_job = None
+        if self._checking:
+            return
+        self._checking = True
+        for _dot, info, _ in self.chips.values():
+            info.configure(text="проверка…")
+        self.app.run_task(netcheck.check_services, self._services_done)
+
+    def _services_done(self, states, error) -> None:
+        self._checking = False
+        if error or not states:
+            return
+        for st in states:
+            if st.name not in self.chips:
+                continue
+            dot, info, _ = self.chips[st.name]
+            if st.ok:
+                dot.configure(text_color=W.GREEN)
+                info.configure(text=f"доступен · {st.ms:.0f} мс")
+            elif st.partial:
+                dot.configure(text_color=W.YELLOW)
+                info.configure(text="частично")
+            else:
+                dot.configure(text_color=W.RED)
+                info.configure(text="недоступен")
 
     # ------------------------------------------------------------------ статус
     def on_status(self, zs: ZapretStatus, ts: TgStatus) -> None:

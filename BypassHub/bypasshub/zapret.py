@@ -368,12 +368,11 @@ class ZapretManager:
         if mode in ("none", "any"):
             if current == "loaded":
                 shutil.copyfile(self.ipset_file, self.ipset_backup)
-            self.ipset_file.write_text(IPSET_NONE_MARK + "\n" if mode == "none" else "",
-                                       encoding="utf-8")
+            _atomic_write(self.ipset_file, IPSET_NONE_MARK + "\n" if mode == "none" else "")
         elif mode == "loaded":
             if not self.ipset_backup.exists():
                 raise FileNotFoundError("нет сохранённого списка IP — сначала обновите IPSet-список")
-            shutil.copyfile(self.ipset_backup, self.ipset_file)
+            _atomic_write(self.ipset_file, self.ipset_backup.read_text(encoding="utf-8", errors="replace"))
         else:
             raise ValueError(mode)
         log.info("IPSet Filter: %s → %s", current, mode)
@@ -439,7 +438,7 @@ class ZapretManager:
         content = "\n".join(ln for ln in lines if ln)
         if not any(ln and not ln.startswith("#") for ln in lines):
             content = USER_LISTS[name][1].strip()  # пустой список ломает winws
-        (self.lists / name).write_text(content + "\n", encoding="utf-8")
+        _atomic_write(self.lists / name, content + "\n")
         log.info("Сохранён список %s", name)
 
     # ---------------------------------------------------------- исключения программ
@@ -492,7 +491,7 @@ class ZapretManager:
             lines += [APP_BLOCK_BEGIN] + block + [APP_BLOCK_END]
         if not any(ln.strip() and not ln.strip().startswith("#") for ln in lines):
             lines = [USER_LISTS["list-exclude-user.txt"][1].strip()]
-        (self.lists / "list-exclude-user.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _atomic_write(self.lists / "list-exclude-user.txt", "\n".join(lines) + "\n")
         log.info("Исключения программ: %s", ", ".join(names + (["свои домены"] if domains else [])) or "нет")
 
     # ---------------------------------------------------------- статус
@@ -729,6 +728,14 @@ class ZapretManager:
         if restore_running and (was_service or was_process):
             self.start(strategy, "service" if was_service else mode)
         return strategy
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """winws сам перечитывает списки при изменении файла — пишем атомарно,
+    чтобы он не прочитал файл наполовину."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _retry(fn, message: str, attempts: int = 6) -> None:

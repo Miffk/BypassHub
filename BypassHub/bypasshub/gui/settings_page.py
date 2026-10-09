@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from tkinter import colorchooser
+from pathlib import Path
+from tkinter import colorchooser, filedialog
 from typing import TYPE_CHECKING, List
 
 import customtkinter as ctk
 
-from .. import APP_NAME, __version__, winutil
+from .. import APP_NAME, __version__, backup, winutil
 from . import glass
 from . import theme as T
 from . import widgets as W
@@ -102,6 +103,14 @@ class SettingsPage(ctk.CTkScrollableFrame):
                      wraplength=640, text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack(fill="x")
         bar = W.button_bar(body)
         W.add_button(bar, "Открыть папку", lambda: winutil.open_path(app.core.paths.root), secondary=True)
+
+        body = W.section(self, "Резервная копия настроек",
+                         "Все настройки в одном файле: BypassHub, zapret (Game Filter, IPSet, фейки, списки, "
+                         "исключения) и TG WS Proxy. Удобно для переноса на другой компьютер. В файле есть "
+                         "secret прокси — не публикуйте его.")
+        bar = W.button_bar(body)
+        W.add_button(bar, "Экспорт", self._export)
+        W.add_button(bar, "Импорт", self._import, secondary=True)
 
         body = W.section(self, "О программе")
         ctk.CTkLabel(body, text=f"{APP_NAME} {__version__} — управление zapret-discord-youtube и tg-ws-proxy "
@@ -219,6 +228,52 @@ class SettingsPage(ctk.CTkScrollableFrame):
         if desc and enabled:
             info += f" Сейчас: {desc}."
         self.glass_info.configure(text=info)
+
+    # ------------------------------------------------------------ резервная копия
+    def _export(self) -> None:
+        import time
+        path = filedialog.asksaveasfilename(
+            parent=self.app, title="Сохранить настройки", defaultextension=".json",
+            initialfile=f"BypassHub-settings-{time.strftime('%Y%m%d')}.json",
+            filetypes=[("Настройки BypassHub", "*.json")])
+        if not path:
+            return
+        core = self.app.core
+        try:
+            backup.export_file(Path(path), core.settings.data, core.zapret, core.tg)
+        except Exception as exc:
+            self.app.error(f"Не удалось сохранить: {exc}")
+            return
+        self.app.info(f"Настройки сохранены:\n{path}")
+
+    def _import(self) -> None:
+        path = filedialog.askopenfilename(parent=self.app, title="Загрузить настройки",
+                                          filetypes=[("Настройки BypassHub", "*.json"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        core = self.app.core
+
+        def work():
+            warnings = backup.import_file(Path(path), core.settings, core.zapret, core.tg)
+            try:
+                winutil.set_autostart(bool(core.settings.get("app", "autostart")))
+            except Exception as exc:
+                warnings.append(f"автозапуск: {exc}")
+            core.zapret_apply()
+            core.tg_apply()
+            core.update_learner()
+            return warnings
+
+        def done(warnings, err):
+            if err:
+                self.app.error(f"Не удалось загрузить настройки: {err}")
+                return
+            self.app.rebuild()
+            text = "Настройки загружены."
+            if warnings:
+                text += "\n\n" + "\n".join(warnings)
+            self.app.info(text)
+        self.app.run_task(work, done)
 
     # ------------------------------------------------------------ запуск
     def _switch(self, parent, text: str, key: str) -> ctk.CTkSwitch:

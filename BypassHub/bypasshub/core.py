@@ -6,7 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-from . import github, tgproxy, zapret
+from . import github, selfupdate, tgproxy, zapret
+from .applearn import AppLearner
 from .log import log
 from .paths import Paths
 from .settings import Settings
@@ -40,6 +41,8 @@ class Core:
         # Все операции, меняющие состояние, выполняются по одной
         self.lock = threading.RLock()
         self.last_updates: List[UpdateInfo] = []
+        self.learner = AppLearner(self.zapret.lists / "ipset-exclude-user.txt")
+        self.restarting_for_update = False
 
     # ------------------------------------------------------------ zapret
     @property
@@ -109,8 +112,18 @@ class Core:
             return UpdateInfo("tg", "TG WS Proxy", installed, "", None, str(exc))
         return UpdateInfo("tg", "TG WS Proxy", installed, rel.version, rel)
 
+    def check_self(self) -> UpdateInfo:
+        from . import __version__
+        try:
+            rel = selfupdate.latest_release()
+        except Exception as exc:
+            return UpdateInfo("self", "BypassHub", __version__, "", None, str(exc))
+        return UpdateInfo("self", "BypassHub", __version__, selfupdate.version_of(rel), rel)
+
     def check_all(self) -> List[UpdateInfo]:
         infos = [self.check_zapret(), self.check_tg()]
+        if self.settings.get("updates", "self_update"):
+            infos.append(self.check_self())
         self.settings.set("updates", "last_check", int(time.time()))
         for i in infos:
             if i.error:
@@ -129,6 +142,9 @@ class Core:
         with self.lock:
             if info.component == "zapret":
                 self._install_zapret(info.release, cb)
+            elif info.component == "self":
+                selfupdate.install(info.release, cb)
+                self.restarting_for_update = True
             else:
                 asset = tgproxy.choose_asset(self.settings.get("tg", "asset"))
                 self.tg.install_release(info.release, asset, self.paths.downloads, cb)
@@ -156,8 +172,11 @@ class Core:
         """Проверка + (при включённой автоустановке или если компонент ещё не скачан) установка."""
         infos = self.check_all()
         auto = self.settings.get("updates", "auto_install") or force_install
-        for info in infos:
+        # сначала компоненты, сам BypassHub — последним (после него программа перезапустится)
+        for info in sorted(infos, key=lambda i: i.component == "self"):
             if not info.available:
+                continue
+            if info.component == "self" and not selfupdate.is_frozen():
                 continue
             if auto or not info.installed:
                 try:
@@ -179,13 +198,21 @@ class Core:
                 shutil.rmtree(f) if f.is_dir() else f.unlink()
             except OSError:
                 pass
+        selfupdate.cleanup_old()
         old = self.tg.exe.with_suffix(".old")
         try:
             old.unlink(missing_ok=True)
         except OSError:
             pass
 
+    def update_learner(self) -> None:
+        if self.settings.get("zapret", "learn_apps") and self.zapret.is_installed():
+            self.learner.start(self.zapret.app_exclusions()[0])
+        else:
+            self.learner.stop()
+
     def restore_state(self) -> None:
+        self.update_learner()
         if not self.settings.get("app", "restore_state"):
             return
         if self.settings.get("zapret", "enabled"):
@@ -202,7 +229,8 @@ class Core:
                 log.error("Не удалось запустить tg-ws-proxy: %s", exc)
 
     def shutdown(self) -> None:
-        if not self.settings.get("app", "stop_on_exit"):
+        self.learner.stop()
+        if self.restarting_for_update or not self.settings.get("app", "stop_on_exit"):
             return
         with self.lock:
             try:

@@ -250,6 +250,9 @@ class App(ctk.CTk):
                 page.show_error(str(error))
                 return
             self.last_infos = infos
+            if self.core.restarting_for_update:  # установлена новая версия BypassHub — она уже запускается
+                self.quit_app()
+                return
             page.on_infos(infos)
             self.pages["home"][1].on_infos(infos)
             self.pages["zapret"][1].reload()
