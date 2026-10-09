@@ -23,6 +23,10 @@ class SettingsPage(GradientPage):
         self.app = app
         s = app.core.settings
         self._tint_job = None
+        self._editing = None  # (поле ввода, функция сохранения) при переименовании темы
+        # клик в любом месте окна завершает переименование (на клик по надписи или
+        # фону Tk фокус не снимает, поэтому одного FocusOut недостаточно)
+        app.bind("<Button-1>", self._click_anywhere, add="+")
         W.page_title(self, "Настройки", "Оформление, запуск и поведение программы")
 
         # ------------------------------------------------------------ оформление
@@ -258,6 +262,7 @@ class SettingsPage(GradientPage):
             if done["v"]:
                 return
             done["v"] = True
+            self._editing = None
             new = entry.get().strip()[:24]
             if save and new and new != old:
                 if any(t.get("name") == new for t in saved):
@@ -273,6 +278,15 @@ class SettingsPage(GradientPage):
         entry.bind("<Return>", lambda e: finish(True))
         entry.bind("<FocusOut>", lambda e: finish(True))
         entry.bind("<Escape>", lambda e: finish(False))
+        self._editing = (entry, finish)
+
+    def _click_anywhere(self, event) -> None:
+        if not self._editing:
+            return
+        entry, finish = self._editing
+        if not str(event.widget).startswith(str(entry)):
+            # после обработки самого клика, чтобы не мешать нажатию на кнопку рядом
+            self.after(1, lambda: finish(True))
 
     def _save_current(self) -> None:
         self._appearance["preset"] = T.remember_theme(self._appearance)
