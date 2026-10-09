@@ -1,0 +1,56 @@
+"""BypassHub — точка входа."""
+from __future__ import annotations
+
+import argparse
+import sys
+import traceback
+from pathlib import Path
+
+from bypasshub import APP_NAME, __version__, winutil
+from bypasshub.log import log, setup_logging
+from bypasshub.paths import Paths
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog=APP_NAME)
+    ap.add_argument("--minimized", action="store_true", help="запуск свёрнутым в трей")
+    ap.add_argument("--data-dir", type=Path, default=None, help="папка данных (по умолчанию C:\\ProgramData\\BypassHub)")
+    args = ap.parse_args()
+
+    if winutil.IS_WINDOWS and not winutil.is_admin():
+        # zapret (WinDivert), службы и hosts требуют прав администратора
+        if not winutil.relaunch_as_admin():
+            winutil.message_box("Для работы zapret нужны права администратора.", APP_NAME, error=True)
+        return 0
+
+    paths = Paths(args.data_dir)
+    paths.ensure()
+
+    if not winutil.acquire_single_instance():
+        paths.show_flag.touch()  # попросить уже запущенную копию показать окно
+        return 0
+
+    setup_logging(paths.log_file)
+    log.info("%s %s запущен, данные: %s", APP_NAME, __version__, paths.root)
+
+    from bypasshub.core import Core
+    from bypasshub.gui.app import App
+
+    core = Core(paths)
+    minimized = args.minimized or bool(core.settings.get("app", "start_minimized"))
+    app = App(core, start_minimized=minimized)
+    app.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        text = traceback.format_exc()
+        try:
+            log.critical(text)
+        except Exception:
+            pass
+        winutil.message_box(f"Непредвиденная ошибка:\n\n{text}", APP_NAME, error=True)
+        sys.exit(1)
