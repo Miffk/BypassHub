@@ -33,15 +33,15 @@ def test_applearn_block(tmp_path):
     f = tmp_path / "ipset-exclude-user.txt"
     f.write_text("10.0.0.0/8\n")
     applearn.write_block(f, ["1.2.3.4", "5.6.7.8"], "203.0.113.113/32")
-    text = f.read_text()
+    text = f.read_text(encoding="utf-8")
     assert "10.0.0.0/8" in text and "1.2.3.4" in text and text.count(applearn.BEGIN) == 1
     learner = applearn.AppLearner(f)
     assert learner.learned() == ["1.2.3.4", "5.6.7.8"]
     learner.clear()
-    assert f.read_text().strip() == "10.0.0.0/8"
+    assert f.read_text(encoding="utf-8").strip() == "10.0.0.0/8"
     f.write_text("")
     learner.clear()  # пустой файл не допускается
-    assert "203.0.113.113/32" in f.read_text()
+    assert "203.0.113.113/32" in f.read_text(encoding="utf-8")
 
 
 def test_is_public():
@@ -74,7 +74,7 @@ def test_backup_roundtrip(tmp_path):
     s.set("updates", "last_check", 123)
     out = tmp_path / "backup.json"
     backup.export_file(out, s.data, zm, tg)
-    assert "last_check" not in json.loads(out.read_text())["bypasshub"]["updates"]
+    assert "last_check" not in json.loads(out.read_text(encoding="utf-8"))["bypasshub"]["updates"]
 
     zm2 = make_zapret(tmp_path / "b" / "zapret")
     tg2 = TgProxyManager(tmp_path / "b" / "tg")

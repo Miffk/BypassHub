@@ -39,8 +39,8 @@ PROTECTED_DOMAINS = [
     "discord.com", "gateway.discord.gg", "cdn.discordapp.com", "media.discordapp.net",
     "www.youtube.com", "i.ytimg.com", "redirector.googlevideo.com", "www.google.com",
 ]
-BEGIN = "# >>> BypassHub: выученные адреса программ >>>"
-END = "# <<< BypassHub: выученные адреса программ <<<"
+BEGIN = "# >>> BypassHub: learned app addresses >>>"
+END = "# <<< BypassHub: learned app addresses <<<"
 MAX_ENTRIES = 3000
 
 

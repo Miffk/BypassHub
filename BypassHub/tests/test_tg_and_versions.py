@@ -44,7 +44,7 @@ def test_config_roundtrip_forces_manager_owned_keys(tmp_path):
     assert cfg["cfproxy_user_domain_enabled"] is True
     assert cfg["h2"] is True  # значение по умолчанию добавилось
     tg.ensure_config()
-    saved = json.loads(tg.config_file.read_text())
+    saved = json.loads(tg.config_file.read_text(encoding="utf-8"))
     assert saved["check_updates"] is False
     assert (tg.data_dir / ".first_run_done_mtproto").exists()
 
@@ -87,4 +87,4 @@ def test_settings_merge_defaults(tmp_path):
     assert s.get("zapret", "mode") == "process"
     assert s.get("appearance", "mode") == "dark"
     s.set("appearance", "colors", ["#ff0000", "#00ff00"])
-    assert json.loads(p.read_text())["appearance"]["colors"] == ["#ff0000", "#00ff00"]
+    assert json.loads(p.read_text(encoding="utf-8"))["appearance"]["colors"] == ["#ff0000", "#00ff00"]

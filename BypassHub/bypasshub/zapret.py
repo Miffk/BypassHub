@@ -65,8 +65,8 @@ APP_EXCLUSIONS: Dict[str, List[str]] = {
     "FACEIT": ["faceit.com", "faceit-cdn.net"],
     "Xbox / Microsoft Store": ["xboxlive.com", "xbox.com", "gamepass.com"],
 }
-APP_BLOCK_BEGIN = "# >>> BypassHub: исключённые программы >>>"
-APP_BLOCK_END = "# <<< BypassHub: исключённые программы <<<"
+APP_BLOCK_BEGIN = "# >>> BypassHub: excluded apps >>>"
+APP_BLOCK_END = "# <<< BypassHub: excluded apps <<<"
 
 
 # ======================================================================

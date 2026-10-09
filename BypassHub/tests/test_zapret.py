@@ -39,7 +39,7 @@ def test_expand_vars():
 
 
 def test_parse_general_bat():
-    text = (FIXTURES / "general.bat").read_text()
+    text = (FIXTURES / "general.bat").read_text(encoding="utf-8")
     gf = GameFilter().variables()
     args = parse_strategy(text, {"~dp0": "C:\\z\\", **gf})
     assert args[0] == "--wf-tcp=80,443,2053,2083,2087,2096,8443,12"
@@ -50,7 +50,7 @@ def test_parse_general_bat():
 
 
 def test_parse_fake_tls_caret_bang():
-    text = (FIXTURES / "general (FAKE TLS AUTO).bat").read_text()
+    text = (FIXTURES / "general (FAKE TLS AUTO).bat").read_text(encoding="utf-8")
     args = parse_strategy(text, {"~dp0": "C:\\z\\", **GameFilter(mode="all").variables()})
     assert "--dpi-desync-fake-tls=!" in args
     assert "--filter-tcp=1024-65535" in args
@@ -181,11 +181,11 @@ def test_hosts_block(tmp_path, monkeypatch):
     monkeypatch.setattr(zapret.winutil, "run_logged", lambda *a, **k: 0)
     zm.hosts_apply("1.2.3.4 a.com\n5.6.7.8 b.com\n")
     zm.hosts_apply("1.2.3.4 a.com\n9.9.9.9 c.com\n")
-    text = hosts.read_text()
+    text = hosts.read_text(encoding="utf-8")
     assert text.count(ZapretManager.HOSTS_BEGIN) == 1
     assert "c.com" in text and "b.com" not in text and "localhost" in text
     assert zm.hosts_remove()
-    assert "a.com" not in hosts.read_text() and "localhost" in hosts.read_text()
+    assert "a.com" not in hosts.read_text(encoding="utf-8") and "localhost" in hosts.read_text(encoding="utf-8")
 
 
 def test_app_exclusions_block(tmp_path):
