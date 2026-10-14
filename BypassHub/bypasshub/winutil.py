@@ -256,6 +256,53 @@ def list_services() -> str:
     return run(["sc", "query"], encoding="cp437", timeout=30).stdout
 
 
+# ---------------------------------------------------------------- системный прокси
+
+_INET_KEY = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+PROXY_BYPASS = ("localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;"
+                "172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;"
+                "192.168.*;<local>")
+
+
+def get_system_proxy() -> dict:
+    """Текущие настройки прокси Windows (как в «Параметры → Сеть → Прокси»)."""
+    if not IS_WINDOWS:
+        return {}
+    import winreg
+    result = {"enable": False, "server": "", "override": ""}
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _INET_KEY) as k:
+        for name, key in (("enable", "ProxyEnable"), ("server", "ProxyServer"), ("override", "ProxyOverride")):
+            try:
+                value = winreg.QueryValueEx(k, key)[0]
+                result[name] = bool(value) if name == "enable" else str(value)
+            except OSError:
+                pass
+    return result
+
+
+def set_system_proxy(enable: bool, server: str = "", override: str = "") -> None:
+    if not IS_WINDOWS:
+        return
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _INET_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, "ProxyEnable", 0, winreg.REG_DWORD, 1 if enable else 0)
+        if server:
+            winreg.SetValueEx(k, "ProxyServer", 0, winreg.REG_SZ, server)
+        else:
+            try:
+                winreg.DeleteValue(k, "ProxyServer")
+            except OSError:
+                pass
+        if override:
+            winreg.SetValueEx(k, "ProxyOverride", 0, winreg.REG_SZ, override)
+    try:  # сообщить программам, что настройки изменились
+        wininet = ctypes.windll.wininet
+        wininet.InternetSetOptionW(None, 39, None, 0)  # INTERNET_OPTION_SETTINGS_CHANGED
+        wininet.InternetSetOptionW(None, 37, None, 0)  # INTERNET_OPTION_REFRESH
+    except Exception as exc:
+        log.debug("InternetSetOption: %r", exc)
+
+
 # ---------------------------------------------------------------- брандмауэр
 
 def firewall_rule_exists(name: str) -> bool:

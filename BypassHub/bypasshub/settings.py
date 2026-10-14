@@ -29,6 +29,16 @@ DEFAULTS: Dict[str, Any] = {
         "asset": "auto",           # какой exe скачивать из релиза; auto — по системе
         "installed_version": "",
     },
+    "vpn": {
+        "enabled": False,
+        "mode": "tun",             # tun — весь трафик; proxy — системный прокси (только для VLESS)
+        "ru_direct": True,         # российские сайты — напрямую (только для VLESS)
+        "lan_access": True,        # AmneziaWG: не блокировать локальную сеть
+        "proxy_port": 2080,
+        "profiles": [],            # [{"id", "kind": "vless"|"awg", "name", "data", "sub"}]
+        "active": "",              # id выбранного сервера
+        "subscriptions": [],       # ссылки на подписки
+    },
     "updates": {
         "check_on_start": True,
         "interval_hours": 6,       # 0 — только при запуске

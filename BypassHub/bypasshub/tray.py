@@ -25,11 +25,13 @@ def _base_icon() -> Image.Image:
         return img
 
 
-def make_icon(zapret_on: bool, tg_on: bool) -> Image.Image:
+def make_icon(zapret_on: bool, tg_on: bool, vpn_on: bool = False) -> Image.Image:
     img = _base_icon().copy()
     d = ImageDraw.Draw(img)
-    if zapret_on or tg_on:
-        color = (61, 220, 132, 255) if (zapret_on and tg_on) else (246, 195, 67, 255)
+    if zapret_on or tg_on or vpn_on:
+        # зелёный — обход работает полностью (zapret + прокси) или включён VPN
+        full = (zapret_on and tg_on) or vpn_on
+        color = (61, 220, 132, 255) if full else (246, 195, 67, 255)
     else:
         color = (150, 150, 150, 255)
     d.ellipse([40, 40, 63, 63], fill=color, outline=(255, 255, 255, 255), width=3)
@@ -41,7 +43,7 @@ class Tray:
         import pystray  # импорт здесь: без графической среды pystray падает при импорте
         self._pystray = pystray
         self.app = app
-        self._state = (False, False)
+        self._state = (False, False, False)
         self.icon = pystray.Icon(APP_NAME, make_icon(False, False), APP_NAME, menu=self._menu())
         self._thread: Optional[threading.Thread] = None
 
@@ -55,6 +57,8 @@ class Tray:
                         checked=lambda _: self._state[0]),
             ps.MenuItem("TG WS Proxy", lambda: app.call_ui(lambda: app.pages["home"][1].toggle_tg_from_tray()),
                         checked=lambda _: self._state[1]),
+            ps.MenuItem("VPN", lambda: app.call_ui(lambda: app.pages["home"][1].toggle_vpn_from_tray()),
+                        checked=lambda _: self._state[2]),
             ps.MenuItem("Открыть прокси в Telegram",
                         lambda: app.call_ui(lambda: app.pages["home"][1].open_in_telegram())),
             ps.Menu.SEPARATOR,
@@ -72,14 +76,15 @@ class Tray:
         except Exception:
             pass
 
-    def update(self, zapret_on: bool, tg_on: bool) -> None:
-        state = (bool(zapret_on), bool(tg_on))
+    def update(self, zapret_on: bool, tg_on: bool, vpn_on: bool = False) -> None:
+        state = (bool(zapret_on), bool(tg_on), bool(vpn_on))
         if state == self._state:
             return
         self._state = state
         try:
             self.icon.icon = make_icon(*state)
-            parts = [f"Zapret: {'вкл' if state[0] else 'выкл'}", f"TG Proxy: {'вкл' if state[1] else 'выкл'}"]
+            parts = [f"Zapret: {'вкл' if state[0] else 'выкл'}", f"TG Proxy: {'вкл' if state[1] else 'выкл'}",
+                     f"VPN: {'вкл' if state[2] else 'выкл'}"]
             self.icon.title = f"{APP_NAME}\n" + "\n".join(parts)
             self.icon.update_menu()
         except Exception as exc:

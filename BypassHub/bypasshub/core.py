@@ -4,14 +4,16 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
-from . import github, selfupdate, tgproxy, zapret
+from . import awg, github, selfupdate, tgproxy, vpn, zapret
 from .applearn import AppLearner
+from .awg import AwgManager
 from .log import log
 from .paths import Paths
 from .settings import Settings
 from .tgproxy import TgProxyManager
+from .vpn import Profile, VpnManager
 from .zapret import ZapretManager
 
 ProgressCb = Callable[[str, int, int], None]  # (компонент, сделано, всего)
@@ -19,7 +21,7 @@ ProgressCb = Callable[[str, int, int], None]  # (компонент, сдела�
 
 @dataclass
 class UpdateInfo:
-    component: str          # "zapret" | "tg"
+    component: str          # "zapret" | "tg" | "singbox" | "awg" | "self"
     title: str
     installed: str
     latest: str
@@ -31,6 +33,15 @@ class UpdateInfo:
         return self.release is not None and github.is_newer(self.latest, self.installed)
 
 
+@dataclass
+class VpnState:
+    running: bool = False
+    kind: str = ""          # vless | awg
+    mode: str = ""          # tun | proxy
+    singbox: Optional[vpn.VpnStatus] = None
+    awg: Optional[awg.AwgStatus] = None
+
+
 class Core:
     def __init__(self, paths: Paths):
         self.paths = paths
@@ -38,6 +49,8 @@ class Core:
         self.settings = Settings(paths.settings)
         self.zapret = ZapretManager(paths.zapret, paths.winws_log)
         self.tg = TgProxyManager(paths.tgproxy)
+        self.singbox = VpnManager(paths.singbox, paths.vpn_log)
+        self.awg = AwgManager(paths.amneziawg)
         # Все операции, меняющие состояние, выполняются по одной
         self.lock = threading.RLock()
         self.last_updates: List[UpdateInfo] = []
@@ -91,6 +104,163 @@ class Core:
                 return True
             return False
 
+    # ------------------------------------------------------------ VPN
+    def vpn_profiles(self) -> List[Profile]:
+        items = [Profile.from_dict(d) for d in self.settings.get("vpn", "profiles") or []
+                 if isinstance(d, dict)]
+        return [p for p in items if p is not None]
+
+    def _save_profiles(self, profiles: List[Profile]) -> None:
+        self.settings.set("vpn", "profiles", [p.to_dict() for p in profiles])
+
+    def vpn_active(self) -> Optional[Profile]:
+        profiles = self.vpn_profiles()
+        active = self.settings.get("vpn", "active")
+        return next((p for p in profiles if p.id == active), profiles[0] if profiles else None)
+
+    def vpn_select(self, profile_id: str) -> None:
+        self.settings.set("vpn", "active", profile_id)
+
+    def vpn_add(self, text: str) -> Tuple[List[Profile], List[str]]:
+        """Добавляет серверы из вставленного текста; подписки скачиваются сразу.
+        Возвращает (новые серверы, предупреждения)."""
+        parsed = vpn.parse_input(text)
+        problems = list(parsed.problems)
+        found = list(parsed.profiles)
+        subs = list(self.settings.get("vpn", "subscriptions") or [])
+        for url in parsed.subscriptions:
+            try:
+                keys, extra = vpn.fetch_subscription(url)
+            except Exception as exc:
+                problems.append(f"подписка {url}: не удалось скачать ({exc})")
+                continue
+            if not keys:
+                problems.append(f"в подписке {url} нет ключей VLESS")
+            found += [vpn.vless_profile(k, url) for k in keys]
+            problems += extra
+            if url not in subs:
+                subs.append(url)
+        self.settings.set("vpn", "subscriptions", subs, save=False)
+        profiles = self.vpn_profiles()
+        known = {p.id for p in profiles}
+        added: List[Profile] = []
+        for p in found:
+            if p.id not in known:
+                known.add(p.id)
+                added.append(p)
+        profiles += added
+        self._save_profiles(profiles)
+        if added and not any(p.id == self.settings.get("vpn", "active") for p in profiles):
+            self.vpn_select(added[0].id)
+        return added, problems
+
+    def vpn_remove(self, profile_id: str) -> None:
+        self._save_profiles([p for p in self.vpn_profiles() if p.id != profile_id])
+
+    def vpn_rename(self, profile_id: str, name: str) -> None:
+        profiles = self.vpn_profiles()
+        for p in profiles:
+            if p.id == profile_id and name.strip():
+                p.name = name.strip()
+        self._save_profiles(profiles)
+
+    def vpn_refresh_subscriptions(self) -> Tuple[int, List[str]]:
+        """Обновляет серверы из подписок: старые ключи подписки заменяются новыми."""
+        problems: List[str] = []
+        profiles = self.vpn_profiles()
+        total = 0
+        for url in self.settings.get("vpn", "subscriptions") or []:
+            try:
+                keys, extra = vpn.fetch_subscription(url)
+            except Exception as exc:
+                problems.append(f"{url}: {exc}")
+                continue
+            problems += extra
+            fresh = [vpn.vless_profile(k, url) for k in keys]
+            names = {p.id: p.name for p in profiles if p.sub == url}
+            for p in fresh:  # сохранить переименования
+                p.name = names.get(p.id, p.name)
+            profiles = [p for p in profiles if p.sub != url] + fresh
+            total += len(fresh)
+        self._save_profiles(profiles)
+        return total, problems
+
+    def vpn_remove_subscription(self, url: str) -> None:
+        subs = [u for u in self.settings.get("vpn", "subscriptions") or [] if u != url]
+        self.settings.set("vpn", "subscriptions", subs, save=False)
+        self._save_profiles([p for p in self.vpn_profiles() if p.sub != url])
+
+    def vpn_running(self) -> bool:
+        return self.singbox.status().running or self.awg.status().running
+
+    def vpn_state(self) -> "VpnState":
+        sb, aw = self.singbox.status(), self.awg.status()
+        if aw.running:
+            kind, mode = "awg", (sb.mode if sb.running else "tun")
+        elif sb.running:
+            kind, mode = "vless", sb.mode
+        else:
+            kind, mode = "", ""
+        return VpnState(running=sb.running or aw.running, kind=kind, mode=mode, singbox=sb, awg=aw)
+
+    def _ensure_engines(self, need_singbox: bool, need_awg: bool, progress: Optional[ProgressCb]) -> None:
+        if need_awg and not self.awg.is_installed():
+            self.install(self.check_awg(), progress)
+        if need_singbox and not self.singbox.is_installed():
+            self.install(self.check_singbox(), progress)
+
+    def _vpn_start(self, progress: Optional[ProgressCb] = None) -> None:
+        profile = self.vpn_active()
+        if profile is None:
+            raise RuntimeError("Сначала добавьте сервер: вкладка VPN → вставьте ключ vless://… или vpn://…")
+        s = self.settings
+        mode = s.get("vpn", "mode")
+        ru_direct = bool(s.get("vpn", "ru_direct"))
+        port = int(s.get("vpn", "proxy_port"))
+        if profile.kind == "awg":
+            conf = awg.parse_conf(profile.data, profile.name)
+            # раздельное туннелирование и режим прокси — через sing-box поверх туннеля
+            split = ru_direct or mode == "proxy"
+            self._ensure_engines(split, True, progress)
+            self.singbox.stop()
+            if not split:
+                self.awg.start(conf, bool(s.get("vpn", "lan_access")))
+                return
+            bypass = awg.endpoint_ips(conf)
+            self.awg.start(conf, split=True)
+            try:
+                self.singbox.start(vpn.awg_outbound(awg.TUNNEL_NAME), profile.name, mode, ru_direct, port, bypass)
+            except Exception:
+                self.awg.stop()
+                raise
+        else:
+            self._ensure_engines(True, False, progress)
+            self.awg.stop()
+            self.singbox.start(vpn.outbound(vpn.parse_vless(profile.data)), profile.name, mode, ru_direct, port)
+
+    def vpn_enable(self, progress: Optional[ProgressCb] = None) -> None:
+        with self.lock:
+            self.settings.set("vpn", "enabled", True)
+            try:
+                self._vpn_start(progress)
+            except Exception:
+                self.settings.set("vpn", "enabled", False)
+                raise
+
+    def vpn_disable(self) -> None:
+        with self.lock:
+            self.settings.set("vpn", "enabled", False)
+            self.singbox.stop()
+            self.awg.stop()
+
+    def vpn_apply(self) -> bool:
+        """Перезапуск VPN с новыми настройками или другим сервером, если он включён."""
+        with self.lock:
+            if self.vpn_running():
+                self._vpn_start()
+                return True
+            return False
+
     # ------------------------------------------------------------ обновления
     def check_zapret(self) -> UpdateInfo:
         installed = self.zapret.local_version() if self.zapret.is_installed() else ""
@@ -120,8 +290,30 @@ class Core:
             return UpdateInfo("self", "BypassHub", __version__, "", None, str(exc))
         return UpdateInfo("self", "BypassHub", __version__, selfupdate.version_of(rel), rel)
 
+    def check_singbox(self) -> UpdateInfo:
+        installed = self.singbox.local_version() if self.singbox.is_installed() else ""
+        try:
+            rel = vpn.latest_release()
+        except Exception as exc:
+            return UpdateInfo("singbox", "VPN: sing-box", installed, "", None, str(exc))
+        return UpdateInfo("singbox", "VPN: sing-box", installed, rel.version, rel)
+
+    def check_awg(self) -> UpdateInfo:
+        installed = self.awg.local_version() if self.awg.is_installed() else ""
+        try:
+            rel = awg.latest_release()
+        except Exception as exc:
+            return UpdateInfo("awg", "VPN: AmneziaWG", installed, "", None, str(exc))
+        return UpdateInfo("awg", "VPN: AmneziaWG", installed, rel.version, rel)
+
     def check_all(self) -> List[UpdateInfo]:
         infos = [self.check_zapret(), self.check_tg()]
+        # движки VPN скачиваются при первом включении, дальше — обновляются как всё остальное
+        if self.singbox.is_installed():
+            infos.append(self.check_singbox())
+            self.singbox.update_rule_sets()  # базы раздельного туннелирования, если устарели
+        if self.awg.is_installed():
+            infos.append(self.check_awg())
         if self.settings.get("updates", "self_update"):
             infos.append(self.check_self())
         self.settings.set("updates", "last_check", int(time.time()))
@@ -145,6 +337,10 @@ class Core:
             elif info.component == "self":
                 selfupdate.install(info.release, cb)
                 self.restarting_for_update = True
+            elif info.component == "singbox":
+                self.singbox.install_release(info.release, self.paths.downloads, cb)
+            elif info.component == "awg":
+                self.awg.install_release(info.release, self.paths.downloads, cb)
             else:
                 asset = tgproxy.choose_asset(self.settings.get("tg", "asset"))
                 self.tg.install_release(info.release, asset, self.paths.downloads, cb)
@@ -200,6 +396,10 @@ class Core:
                 pass
         # старый exe после самообновления удаляется в фоне — он может ещё быть занят
         threading.Thread(target=selfupdate.cleanup_old, daemon=True, name="cleanup-old").start()
+        try:  # прокси Windows остался указывать на выключенный VPN (сбой, выключение ПК)
+            self.singbox.recover()
+        except Exception as exc:
+            log.warning("VPN: восстановление настроек прокси: %r", exc)
         old = self.tg.exe.with_suffix(".old")
         try:
             old.unlink(missing_ok=True)
@@ -228,6 +428,11 @@ class Core:
                 self.tg.start()
             except Exception as exc:
                 log.error("Не удалось запустить tg-ws-proxy: %s", exc)
+        if self.settings.get("vpn", "enabled") and not self.vpn_running():
+            try:
+                self._vpn_start()
+            except Exception as exc:
+                log.error("Не удалось включить VPN: %s", exc)
 
     def shutdown(self) -> None:
         self.learner.stop()
@@ -244,3 +449,8 @@ class Core:
                 self.tg.stop()
             except Exception as exc:
                 log.warning("Остановка tg-ws-proxy при выходе: %r", exc)
+            try:
+                self.singbox.stop()
+                self.awg.stop()
+            except Exception as exc:
+                log.warning("Остановка VPN при выходе: %r", exc)

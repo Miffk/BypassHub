@@ -139,7 +139,7 @@ def validate(values: Dict[str, Any]) -> Union[Dict[str, Any], str]:
 
 
 # Адаптеры, адрес которых телефону в домашней сети не подходит
-_VIRTUAL_HINTS = ("vpn", "radmin", "amnezia", "wireguard", "wintun", "openvpn", "tap", "tun", "hyper-v",
+_VIRTUAL_HINTS = ("vpn", "bypasshub", "radmin", "amnezia", "wireguard", "wintun", "openvpn", "tap", "tun", "hyper-v",
                   "vethernet", "virtualbox", "vmware", "zerotier", "hamachi", "tailscale", "outline",
                   "loopback", "npcap", "wsl", "docker", "bluetooth")
 
@@ -147,7 +147,8 @@ _VIRTUAL_HINTS = ("vpn", "radmin", "amnezia", "wireguard", "wintun", "openvpn", 
 _VPN_HINTS = ("vpn", "amnezia", "wireguard", "wintun", "openvpn", "zerotier", "hamachi",
               "tailscale", "outline", "tap-windows", "proton", "nord", "warp")
 # Сети для игр/удалённого доступа: локальную сеть не блокируют, предупреждать не нужно
-_VPN_IGNORE = ("radmin",)
+# и собственный VPN BypassHub: доступ из локальной сети он не закрывает
+_VPN_IGNORE = ("radmin", "bypasshub")
 
 
 def vpn_adapters() -> List[str]:

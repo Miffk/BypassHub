@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Dict, List
 
 import customtkinter as ctk
 
-from .. import __version__, selfupdate, tgproxy, winutil, zapret
+from .. import __version__, awg, selfupdate, tgproxy, vpn, winutil, zapret
 from ..core import UpdateInfo
 from . import widgets as W
 from .surface import GradientPage
@@ -15,8 +15,12 @@ if TYPE_CHECKING:
 
 INTERVALS = {0: "Только при запуске", 1: "Каждый час", 3: "Каждые 3 часа", 6: "Каждые 6 часов",
              12: "Каждые 12 часов", 24: "Раз в сутки"}
-REPOS = {"zapret": zapret.REPO, "tg": tgproxy.REPO, "self": selfupdate.REPO}
-TITLES = {"zapret": "Zapret", "tg": "TG WS Proxy", "self": "BypassHub"}
+REPOS = {"zapret": zapret.REPO, "tg": tgproxy.REPO, "singbox": vpn.REPO, "awg": awg.REPO,
+         "self": selfupdate.REPO}
+TITLES = {"zapret": "Zapret", "tg": "TG WS Proxy", "singbox": "VPN: sing-box (VLESS)",
+          "awg": "VPN: AmneziaWG", "self": "BypassHub"}
+# движки VPN не скачиваются заранее — только при первом включении VPN с таким ключом
+LAZY = {"singbox", "awg"}
 
 
 class UpdatesPage(GradientPage):
@@ -111,6 +115,8 @@ class UpdatesPage(GradientPage):
         installed = {
             "zapret": core.zapret.local_version() if core.zapret.is_installed() else "",
             "tg": core.tg.local_version() if core.tg.is_installed() else "",
+            "singbox": core.singbox.local_version() if core.singbox.is_installed() else "",
+            "awg": core.awg.local_version() if core.awg.is_installed() else "",
             "self": __version__,
         }
         for key, row in self.rows.items():
@@ -118,7 +124,9 @@ class UpdatesPage(GradientPage):
             cur = installed[key] or "не установлен"
             latest = info.latest if info and info.latest else "?"
             row["ver"].configure(text=f"установлена: {cur} · последняя: {latest}")
-            if info is None:
+            if info is None and key in LAZY and not installed[key]:
+                row["state"].configure(text="Скачается при первом включении VPN", text_color=W.GRAY)
+            elif info is None:
                 row["state"].configure(text="", text_color=W.GRAY)
             elif info.error:
                 row["state"].configure(text=f"Не удалось проверить: {info.error}", text_color=W.RED)
@@ -182,7 +190,8 @@ class UpdatesPage(GradientPage):
         def work():
             info = self.infos.get(key)
             if info is None or info.release is None:
-                info = {"zapret": core.check_zapret, "tg": core.check_tg, "self": core.check_self}[key]()
+                info = {"zapret": core.check_zapret, "tg": core.check_tg, "singbox": core.check_singbox,
+                        "awg": core.check_awg, "self": core.check_self}[key]()
             core.install(info, progress)
             return info
 

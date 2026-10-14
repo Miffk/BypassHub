@@ -2,7 +2,7 @@
 
 # BypassHub
 
-**Zapret и TG WS Proxy в одной программе — включаются одной кнопкой и обновляются сами.**
+**Zapret, TG WS Proxy и свой VPN в одной программе — включаются одной кнопкой и обновляются сами.**
 
 [![Последний релиз](https://img.shields.io/github/v/release/Miffk/BypassHub?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=7f5af0)](https://github.com/Miffk/BypassHub/releases/latest)
 [![Скачивания](https://img.shields.io/github/downloads/Miffk/BypassHub/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F&color=2cb67d)](https://github.com/Miffk/BypassHub/releases)
@@ -15,10 +15,11 @@
 
 </div>
 
-BypassHub — программа для Windows, которая собирает в одном окне два популярных инструмента:
+BypassHub — программа для Windows, которая собирает в одном окне:
 
 - **[zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)** — обход блокировок Discord, YouTube и других сайтов;
-- **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** — локальный MTProto-прокси, который ускоряет Telegram.
+- **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** — локальный MTProto-прокси, который ускоряет Telegram;
+- **свой VPN** — по ключу VLESS или ключу AmneziaVPN (AmneziaWG), с раздельным туннелированием: российское — напрямую.
 
 Больше не нужно запускать `.bat`-файлы, вспоминать пункты `service.bat`, следить за новыми версиями на GitHub
 и вручную переносить свои списки после обновления. Всё это BypassHub делает сам, а настройки обоих проектов
@@ -29,6 +30,7 @@ BypassHub — программа для Windows, которая собирает
 - [Возможности](#возможности)
 - [Скриншоты](#скриншоты)
 - [Установка и первый запуск](#установка-и-первый-запуск)
+- [VPN](#vpn)
 - [Telegram на телефоне](#telegram-на-телефоне)
 - [Вопросы и проблемы](#вопросы-и-проблемы)
 - [Где хранятся данные](#где-хранятся-данные)
@@ -40,7 +42,7 @@ BypassHub — программа для Windows, которая собирает
 
 ### Главное
 
-- **Два переключателя** — zapret и TG WS Proxy включаются и выключаются одним кликом, из окна, из трея или горячей клавишей.
+- **Три переключателя** — zapret, TG WS Proxy и VPN включаются и выключаются одним кликом, из окна, из трея или горячей клавишей.
 - **Индикаторы доступности** Discord, YouTube и Telegram: зелёный — сервис открывается, с задержкой в миллисекундах.
   Проверка каждые 3 минуты, после каждого переключения и по кнопке ⟳.
 - **Автоподбор стратегии zapret**: программа по очереди пробует все стратегии, проверяет сайты по TLS 1.2 и 1.3
@@ -65,6 +67,18 @@ BypassHub — программа для Windows, которая собирает
 Адрес и порт, secret, соответствие DC → IP, Cloudflare-прокси (HTTP/2, свой домен), Cloudflare Worker, подробный журнал,
 размер буфера и пула, размер лога, тестовые DC. Кнопки **«Открыть в Telegram»** (прокси добавляется в Telegram Desktop
 в один клик), **«Скопировать ссылку»** и **«Подключить телефон»**.
+
+### VPN — свой сервер
+
+- Вставьте **ключ VLESS** (`vless://…`), **ключ AmneziaVPN** (`vpn://…`), конфиг **AmneziaWG** (`.conf`) или ссылку на
+  **подписку** — и включите VPN переключателем. Можно держать несколько серверов и переключаться между ними.
+- **Раздельное туннелирование**: через VPN идёт всё зарубежное, а российское — напрямую, с домашнего IP
+  (подробнее — в разделе [VPN](#vpn)).
+- Режимы: **«Весь трафик»** (виртуальный сетевой адаптер — через VPN идут все программы, включая игры)
+  или **«Системный прокси»** (только браузеры и программы, которые учитывают настройки прокси Windows).
+- Движки — официальные [sing-box](https://github.com/SagerNet/sing-box) (VLESS) и
+  [клиент AmneziaWG](https://github.com/amnezia-vpn/amneziawg-windows-client) (AmneziaWG, в том числе протокол 3.1);
+  скачиваются с GitHub при первом включении и обновляются сами.
 
 ### Обновления
 
@@ -92,6 +106,7 @@ BypassHub — программа для Windows, которая собирает
 |---|---|
 | Zapret вкл/выкл | `Ctrl+Alt+Z` |
 | TG WS Proxy вкл/выкл | `Ctrl+Alt+T` |
+| VPN вкл/выкл | `Ctrl+Alt+V` |
 | Показать/скрыть окно | `Ctrl+Alt+B` |
 | Проверить доступность сервисов | не задано |
 
@@ -100,7 +115,8 @@ BypassHub — программа для Windows, которая собирает
 
 ### Прочее
 
-- **Резервная копия**: экспорт и импорт всех настроек (BypassHub, zapret, TG WS Proxy) в один JSON-файл — удобно при переустановке Windows.
+- **Резервная копия**: экспорт и импорт всех настроек (BypassHub, zapret, TG WS Proxy, серверы VPN) в один JSON-файл — удобно при переустановке Windows.
+  В файле будут и ключи VPN — храните его как пароль.
 - **Журнал** событий прямо в программе.
 
 ## Скриншоты
@@ -130,6 +146,35 @@ BypassHub — программа для Windows, которая собирает
 
 > [!TIP]
 > Если Windows Defender или другой антивирус ругается на zapret — это ожидаемо, см. [вопросы](#вопросы-и-проблемы).
+
+## VPN
+
+<img align="right" src="docs/screenshots/vpn.png" width="420" alt="Вкладка VPN">
+
+1. Откройте вкладку **VPN** и вставьте ключ: `vless://…` от вашего VPN-сервиса, ключ AmneziaVPN `vpn://…`
+   (в AmneziaVPN: сервер → «Поделиться») или ссылку на подписку. Конфиг AmneziaWG можно выбрать файлом.
+2. Включите VPN на главной. При первом включении BypassHub скачает нужный движок — это занимает несколько секунд.
+
+**Раздельное туннелирование** (включено по умолчанию):
+
+- через VPN идёт всё зарубежное;
+- напрямую, с домашнего IP, идут сайты `.ru`, `.рф`, `.su` со всеми поддоменами, российские IP-адреса и российские
+  сервисы на «нерусских» доменах (vk.com, userapi.com, yastatic.net, банки и т. д.) — по базам
+  [roscomvpn](https://github.com/hydraponique/roscomvpn-routing);
+- YouTube, Telegram, GitHub и Google Play всегда идут через VPN, даже если их сервер оказался на российском IP.
+
+Российский трафик вообще не попадает на VPN-сервер, а банки и Госуслуги видят обычный домашний адрес. Базы
+обновляются автоматически.
+
+Для AmneziaWG раздельное туннелирование работает так: туннель AmneziaWG поднимается без своих маршрутов, а sing-box
+решает, что отправить в туннель, а что — напрямую. Если раздельное туннелирование выключить, через AmneziaWG идёт
+весь трафик, как в AmneziaVPN.
+
+> [!IMPORTANT]
+> Ключ VPN — это пароль от вашего сервера. Не публикуйте его и не пересылайте. Если ключ попал в чужие руки,
+> удалите этого пользователя на сервере (в AmneziaVPN — «Поделиться» → список пользователей) и создайте новый ключ.
+
+<br clear="right">
 
 ## Telegram на телефоне
 
@@ -193,6 +238,17 @@ zapret работает на уровне сетевых пакетов и не 
 </details>
 
 <details>
+<summary><b>VPN не подключается</b></summary>
+
+- Если открыт AmneziaVPN, Hiddify, v2rayN или другой VPN — отключите его: два VPN одновременно мешают друг другу.
+- Ключи VLESS с транспортом XHTTP пока не поддерживаются движком sing-box — попросите у VPN-сервиса ключ
+  с TCP (Reality), WebSocket или gRPC.
+- Ошибки подключения видны во вкладке «Журнал» и в логе VPN (кнопка «Лог VPN» на вкладке VPN).
+- Если какой-то сайт не открывается при раздельном туннелировании, выключите его на вкладке VPN — тогда через VPN
+  пойдёт весь трафик.
+</details>
+
+<details>
 <summary><b>Как удалить BypassHub</b></summary>
 
 1. В «Настройках» выключите автозапуск, а в разделе Zapret — удалите службы (если включали режим «Служба Windows»).
@@ -209,7 +265,9 @@ C:\ProgramData\BypassHub\
   settings.json     настройки BypassHub
   zapret\           релиз zapret-discord-youtube с вашими списками и настройками
   tgwsproxy\        TgWsProxy.exe + TgWsProxy_data\config.json (портативный режим)
-  logs\             bypasshub.log, winws.log
+  vpn\sing-box\     sing-box.exe, config.json и базы раздельного туннелирования
+  vpn\amneziawg\    amneziawg.exe и конфиг туннеля
+  logs\             bypasshub.log, winws.log, vpn.log
 ```
 
 Папку можно сменить параметром `--data-dir` или переменной окружения `BYPASSHUB_DATA`.
@@ -219,9 +277,12 @@ C:\ProgramData\BypassHub\
 - BypassHub скачивает только **официальные релизы** с GitHub и сверяет их SHA-256 с тем, что публикует GitHub.
 - Сам `BypassHub.exe` собирается **GitHub Actions** из исходников этого репозитория — сборку любого релиза можно
   проследить во вкладке [Actions](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml).
-- Программа не собирает и не отправляет никаких данных. В сеть она обращается только к GitHub (обновления)
-  и к проверяемым сайтам — Discord, YouTube, Telegram и т. п. (индикаторы доступности и подбор стратегии).
-- Права администратора нужны только для zapret (драйвер WinDivert), служб Windows, файла `hosts` и правила брандмауэра.
+- Программа не собирает и не отправляет никаких данных. В сеть она обращается только к GitHub (обновления),
+  к проверяемым сайтам — Discord, YouTube, Telegram и т. п. (индикаторы доступности и подбор стратегии) — и к вашим
+  VPN-серверам и подпискам.
+- Ключи VPN хранятся только у вас, в `C:\ProgramData\BypassHub\settings.json`.
+- Права администратора нужны только для zapret (драйвер WinDivert), служб Windows, файла `hosts`, правила брандмауэра
+  и сетевого адаптера VPN.
 
 ## Сборка из исходников
 
@@ -241,9 +302,12 @@ build.bat
 - [zapret](https://github.com/bol-van/zapret) — **bol-van**, и сборка [zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — **Flowseal** (MIT);
 - [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) — **Flowseal** (MIT);
 - [WinDivert](https://github.com/basil00/WinDivert) — **basil00**;
+- [sing-box](https://github.com/SagerNet/sing-box) — **SagerNet** (GPL-3.0);
+- [AmneziaWG для Windows](https://github.com/amnezia-vpn/amneziawg-windows-client) — **Amnezia** (MIT);
+- базы раздельного туннелирования [roscomvpn](https://github.com/hydraponique/roscomvpn-routing) — **hydraponique**;
 - интерфейс — [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter).
 
-BypassHub не содержит кода zapret и tg-ws-proxy: при первом запуске и при обновлениях он скачивает их официальные релизы
+BypassHub не содержит кода zapret, tg-ws-proxy, sing-box и AmneziaWG: он скачивает их официальные релизы
 с GitHub авторов. Все права на эти проекты принадлежат их авторам.
 
 > [!NOTE]

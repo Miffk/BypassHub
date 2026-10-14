@@ -18,12 +18,14 @@ IS_WINDOWS = sys.platform == "win32"
 ACTIONS: Dict[str, str] = {
     "toggle_zapret": "Включить / выключить zapret",
     "toggle_tg": "Включить / выключить TG WS Proxy",
+    "toggle_vpn": "Включить / выключить VPN",
     "show_window": "Показать окно BypassHub",
     "check_services": "Проверить доступность Discord / YouTube / Telegram",
 }
 DEFAULT_BINDINGS: Dict[str, str] = {
     "toggle_zapret": "Ctrl+Alt+Z",
     "toggle_tg": "Ctrl+Alt+T",
+    "toggle_vpn": "Ctrl+Alt+V",
     "show_window": "Ctrl+Alt+B",
     "check_services": "",
 }

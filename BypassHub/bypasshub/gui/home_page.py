@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List
 import customtkinter as ctk
 
 from .. import netcheck, tgproxy, winutil
-from ..core import UpdateInfo
+from ..core import UpdateInfo, VpnState
 from ..tgproxy import TgStatus
 from ..zapret import ZapretStatus
 from . import widgets as W
@@ -119,12 +119,25 @@ class HomePage(GradientPage):
         W.add_button(bar, "Скопировать ссылку", self.copy_link, secondary=True, width=170)
         W.add_button(bar, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
 
+        self.vpn_card = ServiceCard(self, "VPN", "Свой сервер: ключ VLESS или AmneziaVPN (AmneziaWG)",
+                                    self.toggle_vpn)
+        self.vpn_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
+        bar = self.vpn_card.extra
+        ctk.CTkLabel(bar, text="Сервер:").pack(side="left", padx=(0, 6))
+        self.vpn_box = ctk.CTkComboBox(bar, values=[], width=300, state="readonly", command=self._vpn_changed)
+        self.vpn_box.pack(side="left")
+        W.add_button(bar, "Настроить", lambda: app.show_page("vpn"), secondary=True, width=110).pack_configure(
+            padx=(10, 8))
+        self._vpn_ids: list = []
+        self._vpn_state = VpnState()
+
         hint = ("Подсказка: перебирайте стратегии, пока Discord/YouTube не заработают. Подобрать стратегию "
                 "автоматически кнопкой «Подобрать». Для автозапуска при включении ПК "
                 "включите режим «Служба Windows» или автозапуск BypassHub в настройках.")
         ctk.CTkLabel(self, text=hint, text_color=W.GRAY, wraplength=680, justify="left",
                      anchor="w").pack(fill="x", padx=(8, 18), pady=(4, 16))
         self.reload_strategies()
+        self.reload_vpn()
 
     # ------------------------------------------------------------------ zapret
     def reload_strategies(self) -> None:
@@ -192,6 +205,97 @@ class HomePage(GradientPage):
         self.check_services(delay_ms=2500)
         if error and self.app.winfo_viewable():
             self.app.error(str(error), "TG WS Proxy")
+
+    # ------------------------------------------------------------------ VPN
+    def reload_vpn(self) -> None:
+        from .vpn_page import profile_names
+        core = self.app.core
+        profiles = core.vpn_profiles()
+        self._vpn_ids = [p.id for p in profiles]
+        names = profile_names(profiles)
+        self.vpn_box.configure(values=names or ["— добавьте ключ во вкладке VPN —"])
+        active = core.vpn_active()
+        if active is not None and active.id in self._vpn_ids:
+            self.vpn_box.set(names[self._vpn_ids.index(active.id)])
+        else:
+            self.vpn_box.set(names[0] if names else "— добавьте ключ во вкладке VPN —")
+        self._render_vpn()
+
+    def _vpn_changed(self, label: str) -> None:
+        values = self.vpn_box.cget("values")
+        if label not in values or not self._vpn_ids:
+            return
+        pid = self._vpn_ids[list(values).index(label)]
+        if pid == self.app.core.settings.get("vpn", "active"):
+            return
+        self.app.core.vpn_select(pid)
+        vp = self.app.pages.get("vpn")
+        if vp:
+            vp[1].render()
+        self.apply_vpn("Переключение сервера…")
+
+    def apply_vpn(self, busy_text: str) -> None:
+        """Перезапустить VPN с новыми настройками, если он включён."""
+        if not self._vpn_state.running or self.vpn_card.busy:
+            return
+        self.vpn_card.set_busy(True, busy_text)
+        self.app.run_task(self.app.core.vpn_apply, lambda r, e: self._vpn_done(e), "VPN")
+
+    def toggle_vpn(self, on: bool) -> None:
+        core = self.app.core
+        if on and core.vpn_active() is None:
+            W.set_switch(self.vpn_card.switch, False)
+            self.app.show_page("vpn")
+            self.app.info("Сначала добавьте свой сервер: вставьте ключ vless://… или ключ AmneziaVPN vpn://…",
+                          "VPN")
+            return
+        self.vpn_card.set_busy(True, "Подключение…" if on else "Отключение…")
+
+        def progress(component: str, done: int, total: int) -> None:
+            text = f"Загрузка движка VPN: {done / 1048576:.1f}" + (f" из {total / 1048576:.1f}" if total else "") \
+                + " МБ"
+            self.app.call_ui(lambda: self.vpn_card.status.configure(text=text))
+        fn = (lambda: core.vpn_enable(progress)) if on else core.vpn_disable
+        self.app.run_task(fn, lambda r, e: self._vpn_done(e), "VPN")
+
+    def toggle_vpn_from_tray(self) -> None:
+        if not self.vpn_card.busy:
+            self.toggle_vpn(not self._vpn_state.running)
+
+    def _vpn_done(self, error) -> None:
+        self.vpn_card.set_busy(False)
+        on = self.app.core.settings.get("vpn", "enabled")
+        self.app.notify_if_hidden(f"VPN: ошибка — {error}" if error else ("VPN включён" if on else "VPN выключен"))
+        self.check_services(delay_ms=3000)
+        vp = self.app.pages.get("vpn")
+        if vp:
+            vp[1].render()
+        if error and self.app.winfo_viewable():
+            self.app.error(str(error), "VPN")
+
+    def on_vpn_status(self, vs: VpnState) -> None:
+        self._vpn_state = vs
+        self._render_vpn()
+        self._update_hero(self.app.zapret_status, self.app.tg_status)
+
+    def _render_vpn(self) -> None:
+        vs = self._vpn_state
+        core = self.app.core
+        active = core.vpn_active()
+        if vs.running:
+            how = "весь трафик" if vs.mode == "tun" else "системный прокси"
+            proto = "AmneziaWG" if vs.kind == "awg" else "VLESS"
+            details = f"{proto} · {how}"
+            if vs.singbox and vs.singbox.running and core.settings.get("vpn", "ru_direct"):
+                details += " · российское — напрямую"
+            self.vpn_card.set_state(True, f"● Подключён: {active.name if active else '—'}", W.GREEN, details)
+        elif active is None:
+            self.vpn_card.set_state(False, "○ Нет серверов", W.GRAY,
+                                    "Добавьте ключ VLESS или ключ AmneziaVPN во вкладке VPN.")
+        else:
+            engine = core.awg if active.kind == "awg" else core.singbox
+            details = "" if engine.is_installed() else "При первом включении скачается движок VPN с GitHub."
+            self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details)
 
     def open_in_telegram(self) -> None:
         url = tgproxy.proxy_link(self.app.core.tg.load_config())
@@ -283,14 +387,18 @@ class HomePage(GradientPage):
         self._update_hero(zs, ts)
 
     def _update_hero(self, zs: ZapretStatus, ts: TgStatus) -> None:
-        on = [name for name, flag in (("Zapret", zs.running), ("TG Proxy", ts.running)) if flag]
-        if len(on) == 2:
+        vpn_on = self._vpn_state.running
+        on = [name for name, flag in (("Zapret", zs.running), ("TG Proxy", ts.running), ("VPN", vpn_on)) if flag]
+        if len(on) == 3:
             title = "Всё включено"
+        elif len(on) == 2:
+            title = f"Работают {on[0]} и {on[1]}"
         elif on:
             title = f"Работает {on[0]}"
         else:
             title = "Всё выключено"
-        parts = [f"Zapret: {'вкл' if zs.running else 'выкл'}", f"TG Proxy: {'вкл' if ts.running else 'выкл'}"]
+        parts = [f"Zapret: {'вкл' if zs.running else 'выкл'}", f"TG Proxy: {'вкл' if ts.running else 'выкл'}",
+                 f"VPN: {'вкл' if vpn_on else 'выкл'}"]
         self.hero.set_text(title, "  ·  ".join(parts))
 
     def on_infos(self, infos: List[UpdateInfo]) -> None:

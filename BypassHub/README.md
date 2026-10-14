@@ -74,3 +74,14 @@ build.bat
 Готовый файл: `dist\BypassHub.exe`. В репозитории есть workflow `.github/workflows/bypasshub.yml`: он запускает тесты и собирает exe при каждом пуше (артефакт `BypassHub-windows`), а при теге `bypasshub-v*` публикует релиз.
 
 Запуск без сборки: `pip install -r requirements.txt` и `python main.py`. Тесты: `python -m pytest`.
+
+## VPN
+
+- `bypasshub/vpn.py` — ключи VLESS (`parse_vless`), подписки, профили (`Profile`, `parse_input`), сборка config.json
+  для sing-box (`build_config`) и `VpnManager` (запуск sing-box, системный прокси Windows, базы roscomvpn).
+- `bypasshub/awg.py` — ключи AmneziaVPN `vpn://` (base64url + qCompress + JSON, конфиг в `containers[].awg.last_config`),
+  `.conf`, `AwgManager`: `amneziawg.exe` достаётся из официального .msi (`msiexec /a`), туннель ставится службой
+  `amneziawg.exe /installtunnelservice` (служба `AmneziaWGTunnel$BypassHub`).
+- Раздельное туннелирование для AmneziaWG: туннель с `Table = off` + маршрут через него с метрикой 9000, sing-box
+  (TUN) отправляет «зарубежное» в outbound `direct` с `bind_interface: BypassHub`, адрес сервера AmneziaWG — мимо TUN.
+- sing-box обновляется только в пределах `vpn.MIN_VERSION`…`vpn.MAX_VERSION` — формат конфига проверен на 1.14.

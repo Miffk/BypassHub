@@ -32,6 +32,9 @@ class Paths:
         self.downloads = self.root / "downloads"
         self.zapret = self.root / "zapret"
         self.tgproxy = self.root / "tgwsproxy"
+        self.singbox = self.root / "vpn" / "sing-box"
+        self.amneziawg = self.root / "vpn" / "amneziawg"
+        self.vpn_log = self.logs / "vpn.log"
         self.show_flag = self.root / "show.flag"
 
     def ensure(self) -> None:

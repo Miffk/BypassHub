@@ -13,7 +13,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from .. import APP_NAME, __version__
-from ..core import Core, UpdateInfo
+from ..core import Core, UpdateInfo, VpnState
 from ..log import log
 from ..paths import resource_path
 from ..tgproxy import TgStatus
@@ -26,6 +26,7 @@ NAV = [
     ("home", "Главная", "home"),
     ("zapret", "Zapret", "shield"),
     ("tg", "TG WS Proxy", "send"),
+    ("vpn", "VPN", "vpn"),
     ("updates", "Обновления", "sync"),
     ("settings", "Настройки", "settings"),
     ("log", "Журнал", "list"),
@@ -104,6 +105,7 @@ class App(ctk.CTk):
         self._closing = False
         self.zapret_status = ZapretStatus()
         self.tg_status = TgStatus()
+        self.vpn_state = VpnState()
         self.last_infos: List[UpdateInfo] = []
         self._status_wakeup = threading.Event()
         self.tray = None
@@ -136,6 +138,7 @@ class App(ctk.CTk):
         from .settings_page import SettingsPage
         from .tg_page import TgPage
         from .updates_page import UpdatesPage
+        from .vpn_page import VpnPage
         from .zapret_page import ZapretPage
 
         P = W.P
@@ -148,7 +151,7 @@ class App(ctk.CTk):
         self.nav.grid(row=0, column=0, sticky="ns")
         self.nav.pack_propagate(False)
         W.GradientText(self.nav, APP_NAME, 22).pack(padx=20, pady=(24, 0), anchor="w")
-        ctk.CTkLabel(self.nav, text="Zapret · TG WS Proxy", text_color=P.muted,
+        ctk.CTkLabel(self.nav, text="Zapret · TG WS Proxy · VPN", text_color=P.muted,
                      font=ctk.CTkFont(size=12)).pack(padx=20, pady=(0, 20), anchor="w")
 
         self.content = tk.Frame(self, bd=0, highlightthickness=0, bg=P.bg)
@@ -156,7 +159,7 @@ class App(ctk.CTk):
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
-        classes = {"home": HomePage, "zapret": ZapretPage, "tg": TgPage, "updates": UpdatesPage,
+        classes = {"home": HomePage, "zapret": ZapretPage, "tg": TgPage, "vpn": VpnPage, "updates": UpdatesPage,
                    "settings": SettingsPage, "log": LogPage}
         self.nav_items = {}
         self._page_palette = {}
@@ -289,19 +292,22 @@ class App(ctk.CTk):
             try:
                 zs = self.core.zapret.status()
                 ts = self.core.tg.status()
-                self.call_ui(lambda zs=zs, ts=ts: self._apply_status(zs, ts))
+                vs = self.core.vpn_state()
+                self.call_ui(lambda zs=zs, ts=ts, vs=vs: self._apply_status(zs, ts, vs))
             except Exception as exc:
                 log.debug("status: %r", exc)
             self._status_wakeup.wait(self.STATUS_INTERVAL)
             self._status_wakeup.clear()
 
-    def _apply_status(self, zs: ZapretStatus, ts: TgStatus) -> None:
-        self.zapret_status, self.tg_status = zs, ts
+    def _apply_status(self, zs: ZapretStatus, ts: TgStatus, vs: VpnState) -> None:
+        self.zapret_status, self.tg_status, self.vpn_state = zs, ts, vs
         for _, page in self.pages.values():
             if hasattr(page, "on_status"):
                 page.on_status(zs, ts)
+            if hasattr(page, "on_vpn_status"):
+                page.on_vpn_status(vs)
         if self.tray is not None:
-            self.tray.update(zs.running, ts.running)
+            self.tray.update(zs.running, ts.running, vs.running)
 
     # ------------------------------------------------------------------ запуск и обновления
     def _startup(self) -> None:
@@ -353,6 +359,7 @@ class App(ctk.CTk):
             page.on_infos(infos)
             self.pages["home"][1].on_infos(infos)
             self.pages["zapret"][1].reload()
+            self.pages["vpn"][1].render()
             pending = [i for i in infos if i.available]
             if pending and background and self.tray is not None:
                 self.tray.notify("Доступны обновления: " + ", ".join(f"{i.title} {i.latest}" for i in pending))
@@ -369,6 +376,8 @@ class App(ctk.CTk):
             home.toggle_zapret_from_tray()
         elif action == "toggle_tg":
             home.toggle_tg_from_tray()
+        elif action == "toggle_vpn":
+            home.toggle_vpn_from_tray()
         elif action == "show_window":
             if self.winfo_viewable() and self.focus_displayof() is not None:
                 self.withdraw() if self.tray is not None else self.iconify()
