@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BypassHub</string>
+    <string name="vpn_connecting">Подключение…</string>
+    <string name="vpn_connected">Подключено: %s</string>
+    <string name="channel_vpn">VPN</string>
+    <string name="action_disconnect">Отключить</string>
+</resources>

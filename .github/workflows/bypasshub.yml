@@ -3,22 +3,27 @@ name: BypassHub build
 on:
   push:
     branches: ["**"]
-    paths: ["BypassHub/**", ".github/workflows/bypasshub.yml"]
+    paths: ["BypassHub/**", "Android/**", ".github/workflows/bypasshub.yml"]
     tags: ["bypasshub-v*"]
   pull_request:
-    paths: ["BypassHub/**", ".github/workflows/bypasshub.yml"]
+    paths: ["BypassHub/**", "Android/**", ".github/workflows/bypasshub.yml"]
   workflow_dispatch:
     inputs:
       release:
-        description: "Опубликовать релиз этой версии (например 1.1.0). Пусто — только собрать exe"
+        description: "Опубликовать релиз этой версии (например 1.1.0). Пусто — только собрать exe и apk"
         required: false
         default: ""
 
 permissions:
   contents: write
 
+env:
+  # Ядро Android-версии: та же версия sing-box и те же возможности, что у Windows-версии
+  SINGBOX_VERSION: "1.14.3"
+  CORE_TAGS: "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0"
+
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     defaults:
       run:
@@ -59,14 +64,102 @@ jobs:
             exit 1
           fi
 
+  android:
+    runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: Android/core/go.mod
+          cache-dependency-path: Android/core/go.sum
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Core tests
+        working-directory: Android/core
+        run: go test -tags "$CORE_TAGS" -ldflags "-checklinkname=0" ./bhcore/
+
+      - name: Build core (gomobile)
+        working-directory: Android/core
+        run: |
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13 github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          mkdir -p ../app/libs
+          gomobile bind -v -target android/arm,android/arm64,android/amd64 -androidapi 21 \
+            -javapkg=io.github.miffk.bypasshub -tags "$CORE_TAGS" -trimpath -buildvcs=false \
+            -ldflags "-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=$SINGBOX_VERSION" \
+            -o ../app/libs/bhcore.aar ./bhcore
+
+      - name: Signing key
+        id: sign
+        env:
+          KEYSTORE: ${{ secrets.BH_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/bypasshub.jks"
+            echo "BH_KEYSTORE_FILE=$RUNNER_TEMP/bypasshub.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Нет секрета BH_KEYSTORE_BASE64 — APK подписан временным ключом и в релиз не попадёт (см. Android/README.md)"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build APK
+        working-directory: Android
+        env:
+          BH_KEYSTORE_PASSWORD: ${{ secrets.BH_KEYSTORE_PASSWORD }}
+          BH_KEY_ALIAS: ${{ secrets.BH_KEY_ALIAS }}
+          BH_KEY_PASSWORD: ${{ secrets.BH_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk BypassHub-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BypassHub-android
+          path: Android/BypassHub-android.apk
+
+  release:
+    needs: [windows, android]
+    if: startsWith(github.ref, 'refs/tags/bypasshub-v') || inputs.release != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Files
+        id: files
+        run: |
+          files="dist/BypassHub.exe"
+          if [ "${{ needs.android.outputs.signed }}" = "true" ]; then
+            files="$files"$'\n'"dist/BypassHub-android.apk"
+          else
+            echo "::warning::APK не подписан ключом релизов — в релиз попадёт только BypassHub.exe"
+          fi
+          { echo "list<<EOF"; echo "$files"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/bypasshub-v') || inputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release != '' && format('bypasshub-v{0}', inputs.release) || github.ref_name }}
           name: BypassHub ${{ inputs.release != '' && inputs.release || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          files: BypassHub/dist/BypassHub.exe
+          files: ${{ steps.files.outputs.list }}
           body: |
-            Скачайте **BypassHub.exe** ниже и запустите его (нужны права администратора).
+            **Windows** — скачайте **BypassHub.exe** ниже и запустите его (нужны права администратора).
             При первом запуске программа сама скачает zapret и tg-ws-proxy.
+
+            **Android** (телефоны, планшеты, Android TV) — скачайте **BypassHub-android.apk** и установите
+            (Android попросит разрешить установку из этого источника).
+
+            Установленные копии обновятся сами.

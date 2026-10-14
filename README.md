@@ -7,9 +7,12 @@
 [![Последний релиз](https://img.shields.io/github/v/release/Miffk/BypassHub?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=7f5af0)](https://github.com/Miffk/BypassHub/releases/latest)
 [![Скачивания](https://img.shields.io/github/downloads/Miffk/BypassHub/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F&color=2cb67d)](https://github.com/Miffk/BypassHub/releases)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
+![Android 7+](https://img.shields.io/badge/Android-7%2B%20%C2%B7%20TV-3ddc84)
 [![Сборка](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml/badge.svg)](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml)
 
-**[⬇ Скачать BypassHub.exe](https://github.com/Miffk/BypassHub/releases/latest)**
+**[⬇ Скачать для Windows](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub.exe)** &nbsp;·&nbsp; **[⬇ Скачать для Android](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk)**
+
+<sub>Все версии и история изменений — на странице [Releases](https://github.com/Miffk/BypassHub/releases)</sub>
 
 <img src="docs/screenshots/home.png" width="760" alt="Главное окно BypassHub">
 
@@ -27,12 +30,16 @@ BypassHub — программа для Windows, которая собирает
 в меню слева. Не нужно запускать `.bat`-файлы, искать новые версии на GitHub и переносить свои списки после
 обновления: BypassHub делает это сам.
 
+Есть и **[версия для Android](#android)** — для телефонов, планшетов и Android TV: тот же VPN с раздельным
+туннелированием, root не нужен.
+
 ## Содержание
 
 - [Возможности](#возможности)
 - [Скриншоты](#скриншоты)
 - [Установка и первый запуск](#установка-и-первый-запуск)
 - [VPN и раздельное туннелирование](#vpn-и-раздельное-туннелирование)
+- [Android](#android)
 - [Telegram на телефоне](#telegram-на-телефоне)
 - [Вопросы и проблемы](#вопросы-и-проблемы)
 - [Где хранятся данные](#где-хранятся-данные)
@@ -195,6 +202,23 @@ BypassHub — программа для Windows, которая собирает
 
 <br clear="right">
 
+## Android
+
+BypassHub для Android работает на телефонах, планшетах и Android TV (Android 7.0 и новее), root не нужен.
+
+- **VPN** по ключам VLESS и AmneziaVPN / AmneziaWG — те же ключи, что и в версии для Windows;
+- **раздельное туннелирование** по тем же правилам: зарубежное — через VPN, российское — напрямую;
+- несколько серверов: пинг, выбор сервера и **«Авто»** — подключение к лучшему;
+- плитка в шторке быстрых настроек, ссылки `vless://` и `vpn://` открываются прямо в приложении;
+- на телевизоре — значок в лаунчере Android TV и управление пультом;
+- обновляется само.
+
+**Установка:** скачайте [BypassHub-android.apk](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk),
+откройте и разрешите установку. На вкладке **Серверы** вставьте ключ, на вкладке **VPN** нажмите большую кнопку.
+На телевизор APK удобно передать с телефона через Send Files to TV или флешку.
+
+Обход блокировок без VPN и TG WS Proxy для Android — в разработке. Подробнее — в [Android/README.md](Android/README.md).
+
 ## Telegram на телефоне
 
 Прокси, запущенный на компьютере, может ускорять Telegram и на телефоне в той же Wi-Fi-сети:
@@ -318,18 +342,21 @@ build.bat
 Готовый файл — `dist\BypassHub.exe`. Запуск без сборки: `pip install -r requirements.txt` и `python main.py`.
 Тесты: `python -m pytest`. Подробности для разработчиков — в [BypassHub/README.md](BypassHub/README.md).
 
+Версия для Android (Go + Kotlin) собирается в GitHub Actions; как собрать её самому — в [Android/README.md](Android/README.md).
+
 ## Благодарности и лицензии
 
 - [zapret](https://github.com/bol-van/zapret) — **bol-van**, и сборка [zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — **Flowseal** (MIT);
 - [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) — **Flowseal** (MIT);
 - [WinDivert](https://github.com/basil00/WinDivert) — **basil00**;
 - [sing-box](https://github.com/SagerNet/sing-box) — **SagerNet** (GPL-3.0);
-- [AmneziaWG для Windows](https://github.com/amnezia-vpn/amneziawg-windows-client) — **Amnezia** (MIT);
+- [AmneziaWG для Windows](https://github.com/amnezia-vpn/amneziawg-windows-client) и [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go) — **Amnezia** (MIT);
 - базы раздельного туннелирования [roscomvpn](https://github.com/hydraponique/roscomvpn-routing) — **hydraponique**;
 - интерфейс — [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter).
 
-BypassHub не содержит кода zapret, tg-ws-proxy, sing-box и AmneziaWG: он скачивает их официальные релизы
-с GitHub авторов. Все права на эти проекты принадлежат их авторам.
+BypassHub для Windows не содержит кода zapret, tg-ws-proxy, sing-box и AmneziaWG: он скачивает их официальные
+релизы с GitHub авторов. Версия для Android включает sing-box и amneziawg-go в своё ядро и поэтому распространяется
+по лицензии [GPL-3.0](Android/LICENSE). Все права на эти проекты принадлежат их авторам.
 
 > [!NOTE]
 > Программа предназначена для восстановления доступа к сервисам, которые замедляет или блокирует ваш провайдер.
