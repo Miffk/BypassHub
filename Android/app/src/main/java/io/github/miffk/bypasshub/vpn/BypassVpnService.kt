@@ -133,8 +133,10 @@ class BypassVpnService : VpnService(), Platform {
         Bypass.update(this)
         val (suffix, exact) = Bypass.domains(this, Store.bypassUser)
         val (apiPort, secret) = apiEndpoint()
-        val config = Bypass.config(suffix, exact, Store.bypassAll, Store.bypassMethod, apiPort, secret)
-        LogBuffer.add("Запуск обхода: сайтов в списке ${suffix.size + exact.size}" +
+        val method = Store.bypassMethod
+        val desyncPort = if (Bypass.usesDesync(method)) Bhcore.startDesync(method).toInt() else 0
+        val config = Bypass.config(suffix, exact, Store.bypassAll, method, apiPort, secret, desyncPort)
+        LogBuffer.add("Запуск обхода (${Bypass.methodName(method)}): сайтов в списке ${suffix.size + exact.size}" +
             (if (Store.bypassAll) ", применяется ко всем сайтам" else ""))
         runCore(config, apiPort, secret, getString(R.string.bypass_on))
     }
@@ -172,6 +174,10 @@ class BypassVpnService : VpnService(), Platform {
         }
         try {
             Bhcore.stopAWG()
+        } catch (e: Throwable) {
+        }
+        try {
+            Bhcore.stopDesync()
         } catch (e: Throwable) {
         }
         try {

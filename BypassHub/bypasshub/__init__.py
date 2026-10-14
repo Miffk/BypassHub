@@ -1,4 +1,4 @@
 """BypassHub — единый менеджер для zapret-discord-youtube и tg-ws-proxy."""
 
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 APP_NAME = "BypassHub"

@@ -18,6 +18,19 @@ object Bypass {
 
     const val METHOD_TCP = "tcp"         // разбивать TCP-сегменты (tls_fragment)
     const val METHOD_RECORD = "record"   // разбивать TLS-записи (tls_record_fragment)
+    // disorder (как в ByeDPI): первая часть ClientHello уходит с TTL=1 и доходит до сервера только
+    // повтором — фильтр провайдера видит части не по порядку. Делает ядро (bhcore/desync.go).
+    const val METHOD_DISORDER = "disorder"
+    const val METHOD_RECORD_DISORDER = "record-disorder"
+
+    fun usesDesync(method: String) = method == METHOD_DISORDER || method == METHOD_RECORD_DISORDER
+
+    fun methodName(method: String) = when (method) {
+        METHOD_DISORDER -> "перемешивание пакетов"
+        METHOD_RECORD_DISORDER -> "TLS-записи и перемешивание"
+        METHOD_RECORD -> "разбиение TLS-записей"
+        else -> "разбиение TCP-пакетов"
+    }
 
     /** Встроенный список — если списки ещё не скачались. */
     val BUILTIN = listOf(
@@ -75,14 +88,20 @@ object Bypass {
 
     /** Конфиг sing-box: TUN, всё напрямую, к сайтам из списков — с разбиением TLS. */
     fun config(suffix: Set<String>, exact: Set<String>, allSites: Boolean, method: String,
-               apiPort: Int, apiSecret: String): String {
+               apiPort: Int, apiSecret: String, desyncPort: Int = 0): String {
         fun match(o: JSONObject): JSONObject {
             if (suffix.isNotEmpty()) o.put("domain_suffix", JSONArray(suffix.toList()))
             if (exact.isNotEmpty()) o.put("domain", JSONArray(exact.toList()))
             return o
         }
-        val fragment = JSONObject().put("action", "route-options")
-        if (method == METHOD_RECORD) fragment.put("tls_record_fragment", true) else fragment.put("tls_fragment", true)
+        // что делать с соединением к сайту из списка: отдать ядру с приёмом disorder или разбить TLS в sing-box
+        val fragment = if (usesDesync(method) && desyncPort > 0) {
+            JSONObject().put("outbound", "desync")
+        } else {
+            JSONObject().put("action", "route-options").apply {
+                if (method == METHOD_RECORD) put("tls_record_fragment", true) else put("tls_fragment", true)
+            }
+        }
 
         val rules = JSONArray()
         rules.put(JSONObject().put("action", "sniff"))
@@ -116,7 +135,10 @@ object Bypass {
                 // gvisor: весь TCP/UDP обрабатывается внутри ядра. Стек system/mixed принимает TCP локальным
                 // сокетом, а BypassHub исключён из своего VPN — ответы этого сокета ушли бы мимо TUN
                 .put("stack", "gvisor")))
-            .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
+            .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")).apply {
+                if (usesDesync(method) && desyncPort > 0) put(JSONObject().put("type", "socks").put("tag", "desync")
+                    .put("server", "127.0.0.1").put("server_port", desyncPort).put("version", "5"))
+            })
             .put("route", JSONObject()
                 .put("rules", rules)
                 .put("final", "direct")

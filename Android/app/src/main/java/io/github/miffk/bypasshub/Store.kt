@@ -54,7 +54,7 @@ object Store {
 
     /** Обход: способ разбиения (Bypass.METHOD_*), все сайты или только из списков, свои сайты. */
     var bypassMethod: String
-        get() = prefs.getString("bypass_method", Bypass.METHOD_TCP) ?: Bypass.METHOD_TCP
+        get() = prefs.getString("bypass_method", Bypass.METHOD_DISORDER) ?: Bypass.METHOD_DISORDER
         set(value) = prefs.edit().putString("bypass_method", value).apply()
 
     var bypassAll: Boolean

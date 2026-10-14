@@ -421,8 +421,7 @@ class MainActivity : Activity() {
             }
         })
         val desc = when {
-            m == "bypass" -> "Без VPN и без root · " + (if (Store.bypassMethod == Bypass.METHOD_RECORD) "разбиение TLS-записей"
-                                                       else "разбиение TCP-пакетов")
+            m == "bypass" -> "Без VPN и без root · " + Bypass.methodName(Store.bypassMethod)
             Store.ruDirect -> "Зарубежное — через VPN, российское — напрямую"
             else -> "Весь трафик — через VPN"
         }
@@ -966,8 +965,11 @@ class MainActivity : Activity() {
         val method = Ui.card(this)
         method.addView(Ui.text(this, "Способ", 17f, Ui.TEXT, true))
         for ((key, title, sub) in listOf(
-            Triple(Bypass.METHOD_TCP, "Разбивать TCP-пакеты", "Рекомендуется — работает у большинства провайдеров"),
-            Triple(Bypass.METHOD_RECORD, "Разбивать TLS-записи", "Если первый способ не помог"))) {
+            Triple(Bypass.METHOD_DISORDER, "Перемешивать пакеты",
+                "Рекомендуется. Как disorder в ByeDPI: начало соединения провайдер видит не по порядку"),
+            Triple(Bypass.METHOD_RECORD_DISORDER, "TLS-записи и перемешивание", "Ещё сильнее — если первый способ не помог"),
+            Triple(Bypass.METHOD_TCP, "Разбивать TCP-пакеты", "Простое разбиение — самое быстрое"),
+            Triple(Bypass.METHOD_RECORD, "Разбивать TLS-записи", "Простое разбиение на две TLS-записи"))) {
             method.addView(optionRow("method:$key", title, sub, Store.bypassMethod == key) {
                 if (Store.bypassMethod != key) {
                     Store.bypassMethod = key
