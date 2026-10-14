@@ -71,12 +71,14 @@ Android ставит обновление поверх старой версии
    keytool -genkeypair -v -keystore bypasshub.jks -alias bypasshub -keyalg RSA -keysize 4096 -validity 36500
    ```
 
-   Придумайте пароль и запомните его. Имя и организацию можно указать любые.
+   Если `keytool` не находится — закройте и снова откройте PowerShell (после установки Java). Придумайте
+   пароль и запомните его. Имя, организация и город попадут в сертификат, который виден в APK, — можно указать
+   просто псевдоним, остальное оставить пустым.
 
 2. Превратите файл в текст (PowerShell, результат окажется в буфере обмена):
 
    ```powershell
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("bypasshub.jks")) | Set-Clipboard
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\bypasshub.jks")) | Set-Clipboard
    ```
 
 3. GitHub → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**, четыре секрета:
