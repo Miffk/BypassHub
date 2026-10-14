@@ -157,7 +157,6 @@ class StrategyDialog(ctk.CTkToplevel):
 
         def finished(_, err):
             home.zapret_card.set_busy(False)
-            home.reload_strategies()
             self.app.pages["zapret"][1].reload()
             home.check_services(delay_ms=2500)
             if err:

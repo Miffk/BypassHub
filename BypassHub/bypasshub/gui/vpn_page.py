@@ -25,7 +25,12 @@ class VpnPage(GradientPage):
         self.app = app
         s = app.core.settings
         self._pings: Dict[str, Optional[float]] = {}
-        W.page_title(self, "VPN", "Свой VPN-сервер: ключ VLESS или ключ AmneziaVPN (AmneziaWG)")
+        from .home_page import ServiceCard
+        home = app.pages["home"][1]
+        self.header = ServiceCard(self, "VPN", "Свой сервер: ключ VLESS или ключ AmneziaVPN (AmneziaWG)",
+                                  home.toggle_vpn)
+        self.header.pack(fill="x", padx=W.PAGE_PADX, pady=(6, 12))
+        home.vpn_card.add_header(self.header)
 
         body = W.section(self, "Добавить сервер",
                          "Вставьте ключ vless://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), "

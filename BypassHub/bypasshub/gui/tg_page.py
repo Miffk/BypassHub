@@ -22,7 +22,15 @@ class TgPage(GradientPage):
     def __init__(self, parent, app: "App"):
         super().__init__(parent)
         self.app = app
-        W.page_title(self, "TG WS Proxy", "Все настройки локального MTProto-прокси для Telegram Desktop")
+        from .home_page import ServiceCard
+        home = app.pages["home"][1]
+        self.header = ServiceCard(self, "TG WS Proxy", "Локальный MTProto-прокси, ускоряющий Telegram Desktop",
+                                  home.toggle_tg)
+        self.header.pack(fill="x", padx=W.PAGE_PADX, pady=(6, 12))
+        W.add_button(self.header.extra, "Открыть в Telegram", home.open_in_telegram, width=170)
+        W.add_button(self.header.extra, "Скопировать ссылку", home.copy_link, secondary=True, width=170)
+        W.add_button(self.header.extra, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
+        home.tg_card.add_header(self.header)
 
         body = W.section(self, "Подключение MTProto",
                          "Адрес, на котором прокси принимает подключения Telegram Desktop. "
@@ -80,10 +88,6 @@ class TgPage(GradientPage):
         W.add_button(bar, "Отменить изменения", self.reload, secondary=True, width=170)
         W.add_button(bar, "По умолчанию", self.reset_defaults, secondary=True)
         bar = W.button_bar(self)
-        home = lambda: app.pages["home"][1]  # noqa: E731
-        W.add_button(bar, "Открыть в Telegram", lambda: home().open_in_telegram(), width=170)
-        W.add_button(bar, "Скопировать ссылку", lambda: home().copy_link(), secondary=True, width=170)
-        W.add_button(bar, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
         W.add_button(bar, "Лог прокси", self.open_log, secondary=True)
         W.add_button(bar, "Перезапустить", self.restart, secondary=True)
 

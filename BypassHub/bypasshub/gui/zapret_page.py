@@ -23,7 +23,15 @@ class ZapretPage(GradientPage):
     def __init__(self, parent, app: "App"):
         super().__init__(parent)
         self.app = app
-        W.page_title(self, "Zapret", "Обход блокировок Discord, YouTube и других сервисов")
+        from .home_page import ServiceCard
+        home = app.pages["home"][1]
+        self.header = ServiceCard(self, "Zapret", "Обход блокировок Discord, YouTube и других сервисов "
+                                                  "(winws.exe + WinDivert)", home.toggle_zapret)
+        self.header.pack(fill="x", padx=W.PAGE_PADX, pady=(6, 12))
+        W.add_button(self.header.extra, "Подобрать стратегию", self._auto_pick, width=180)
+        W.add_button(self.header.extra, "Проверить доступность", lambda: home.check_services(),
+                     secondary=True, width=190)
+        home.zapret_card.add_header(self.header)
         self.not_installed = ctk.CTkLabel(self, text="zapret ещё не загружен. Он скачается автоматически, "
                                                      "или нажмите «Проверить сейчас» во вкладке «Обновления».",
                                           text_color=W.YELLOW, anchor="w", wraplength=680, justify="left")
@@ -208,13 +216,11 @@ class ZapretPage(GradientPage):
         if value == "—":
             return
         self.app.core.settings.set("zapret", "strategy", value)
-        self.app.pages["home"][1].reload_strategies()
         self._after_change("стратегия")
 
     def _mode_changed(self, label: str) -> None:
         mode = "service" if label == MODE_LABELS["service"] else "process"
         self.app.core.settings.set("zapret", "mode", mode)
-        self.app.pages["home"][1].mode_btn.set("Служба Windows" if mode == "service" else "Программа")
         self._after_change("режим")
 
     def _save_game_filter(self) -> None:

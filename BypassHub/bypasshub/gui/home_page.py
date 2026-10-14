@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 import customtkinter as ctk
 
@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 
 class ServiceCard(ctk.CTkFrame):
+    """Шапка страницы сервиса: название, переключатель и подробный статус."""
+
     def __init__(self, parent, title: str, subtitle: str, on_toggle):
         super().__init__(parent, fg_color=W.P.surface, corner_radius=18)
         mark_card(self)
@@ -26,7 +28,7 @@ class ServiceCard(ctk.CTkFrame):
         top.pack(fill="x", padx=22, pady=(20, 4))
         left = ctk.CTkFrame(top, fg_color="transparent")
         left.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(left, text=title, font=W.title_font(20), anchor="w").pack(fill="x")
+        ctk.CTkLabel(left, text=title, font=W.title_font(24), anchor="w").pack(fill="x")
         ctk.CTkLabel(left, text=subtitle, text_color=W.GRAY, anchor="w").pack(fill="x")
 
         self.switch = W.GradientSwitch(top, command=self._clicked)
@@ -37,8 +39,8 @@ class ServiceCard(ctk.CTkFrame):
         self.details = ctk.CTkLabel(self, text="", anchor="w", justify="left", text_color=W.GRAY,
                                     wraplength=640)
         self.details.pack(fill="x", padx=22, pady=(2, 8))
-        self.extra = ctk.CTkFrame(self, fg_color="transparent")
-        self.extra.pack(fill="x", padx=22, pady=(0, 20))
+        self.extra = ctk.CTkFrame(self, fg_color="transparent", height=1)
+        self.extra.pack(fill="x", padx=22, pady=(0, 18))
 
     def _clicked(self) -> None:
         if self.busy:
@@ -58,37 +60,68 @@ class ServiceCard(ctk.CTkFrame):
         self.details.configure(text=details)
 
 
+class ServiceControl:
+    """Состояние одного сервиса во всех местах сразу: плитка на главной
+    и переключатель вверху страницы сервиса."""
+
+    def __init__(self, tile: W.PowerTile, on_toggle: Callable[[bool], None]):
+        self.tile = tile
+        self.on_toggle = on_toggle
+        self.headers: List[ServiceCard] = []
+        self.busy = False
+        self._state: Tuple[bool, str, object, str, str, str] = (False, "…", W.GRAY, "", "", "…")
+
+    def add_header(self, header: ServiceCard) -> None:
+        self.headers.append(header)
+        on, status, color, details, _, _ = self._state
+        header.set_state(on, status, color, details)
+
+    @property
+    def on(self) -> bool:
+        return self._state[0]
+
+    def toggle(self) -> None:
+        if not self.busy:
+            self.on_toggle(not self.on)
+
+    def set_busy(self, busy: bool, text: str = "") -> None:
+        self.busy = busy
+        for h in self.headers:
+            h.set_busy(busy, text)
+        if busy:
+            self.tile.set(busy=True, status=text)
+        else:
+            on, _, _, _, tile_details, tile_status = self._state
+            self.tile.set(busy=False, on=on, status=tile_status, details=tile_details)
+
+    def set_state(self, on: bool, status: str, color, details: str, tile_details: Optional[str] = None,
+                  tile_status: Optional[str] = None) -> None:
+        """status/details — для шапки страницы; на плитке места меньше: tile_status/tile_details."""
+        tile_details = details if tile_details is None else tile_details
+        tile_status = status if tile_status is None else tile_status
+        self._state = (on, status, color, details, tile_details, tile_status)
+        for h in self.headers:
+            h.set_state(on, status, color, details)
+        if self.busy:
+            self.tile.set(details=tile_details)
+        else:
+            self.tile.set(on=on, status=tile_status, details=tile_details)
+
+    def set_switch(self, on: bool) -> None:
+        for h in self.headers:
+            W.set_switch(h.switch, on)
+        self.tile.set(on=on)
+
+
 class HomePage(GradientPage):
+    """Главная: три большие кнопки вкл/выкл. Настройки каждого сервиса — в меню слева."""
+
     def __init__(self, parent, app: "App"):
         super().__init__(parent)
         self.app = app
-        core = app.core
 
-        self.hero = W.Hero(self)
-        self.hero.pack(fill="x", padx=W.PAGE_PADX, pady=(8, 14))
-        self.hero.set_text("BypassHub", "Проверяю состояние…")
-
-        # индикаторы доступности сервисов
-        chips = ctk.CTkFrame(self, fg_color="transparent")
-        chips.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
-        self.chips = {}
-        for i, name in enumerate(netcheck.SERVICES):
-            chip = ctk.CTkFrame(chips, fg_color=W.P.surface, corner_radius=14)
-            chip.grid(row=0, column=i, sticky="ew", padx=(0, 10))
-            chips.grid_columnconfigure(i, weight=1)
-            dot = ctk.CTkLabel(chip, text="●", text_color=W.P.muted, font=ctk.CTkFont(size=16), width=20)
-            dot.pack(side="left", padx=(14, 4), pady=10)
-            ctk.CTkLabel(chip, text=name, font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
-            info = ctk.CTkLabel(chip, text="…", text_color=W.P.muted)
-            info.pack(side="right", padx=(4, 14))
-            self.chips[name] = (dot, info, chip)
-        refresh = ctk.CTkButton(chips, text="⟳", width=44, height=44, corner_radius=14, fg_color=W.P.surface,
-                                hover_color=W.P.surface2, text_color=W.P.text, font=ctk.CTkFont(size=18),
-                                command=self.check_services)
-        refresh.grid(row=0, column=len(self.chips), sticky="e")
-        self._checking = False
-        self._check_job = None
-        self.after(1500, self._periodic_check)
+        W.page_title(self, "BypassHub", "Нажмите на сервис, чтобы включить или выключить его. "
+                                        "Настройки — в меню слева.")
 
         self.banner = mark_card(ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=14, border_width=1,
                                              border_color=W.P.accent))
@@ -97,78 +130,29 @@ class HomePage(GradientPage):
         W.GradientButton(self.banner, text="Обновить", width=110,
                          command=lambda: app.run_updates(force_install=True)).pack(side="right", padx=10, pady=8)
 
-        self.zapret_card = ServiceCard(self, "Zapret", "Обход блокировок Discord, YouTube и др. (winws.exe + WinDivert)",
-                                       self.toggle_zapret)
-        self.zapret_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
-        bar = self.zapret_card.extra
-        ctk.CTkLabel(bar, text="Стратегия:").pack(side="left", padx=(0, 6))
-        self.strategy_box = ctk.CTkComboBox(bar, values=[], width=300, state="readonly",
-                                            command=self._strategy_changed)
-        self.strategy_box.pack(side="left")
-        self.mode_btn = ctk.CTkSegmentedButton(bar, values=["Программа", "Служба Windows"],
-                                               command=self._mode_changed)
-        self.mode_btn.pack(side="left", padx=10)
-        W.add_button(bar, "Подобрать", lambda: app.pages["zapret"][1]._auto_pick(), secondary=True, width=110)
-        self.mode_btn.set("Служба Windows" if core.zapret_mode == "service" else "Программа")
+        self.tiles = ctk.CTkFrame(self, fg_color="transparent")
+        self.tiles.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
+        self.zapret_card = self._tile(0, "Zapret", self.toggle_zapret)
+        self.tg_card = self._tile(1, "TG WS Proxy", self.toggle_tg)
+        self.vpn_card = self._tile(2, "VPN", self.toggle_vpn)
 
-        self.tg_card = ServiceCard(self, "TG WS Proxy", "Локальный MTProto-прокси, ускоряющий Telegram Desktop",
-                                   self.toggle_tg)
-        self.tg_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
-        bar = self.tg_card.extra
-        W.add_button(bar, "Открыть в Telegram", self.open_in_telegram, width=170)
-        W.add_button(bar, "Скопировать ссылку", self.copy_link, secondary=True, width=170)
-        W.add_button(bar, "Подключить телефон", app.open_phone_dialog, secondary=True, width=170)
-
-        self.vpn_card = ServiceCard(self, "VPN", "Свой сервер: ключ VLESS или AmneziaVPN (AmneziaWG)",
-                                    self.toggle_vpn)
-        self.vpn_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14))
-        bar = self.vpn_card.extra
-        ctk.CTkLabel(bar, text="Сервер:").pack(side="left", padx=(0, 6))
-        self.vpn_box = ctk.CTkComboBox(bar, values=[], width=300, state="readonly", command=self._vpn_changed)
-        self.vpn_box.pack(side="left")
-        W.add_button(bar, "Настроить", lambda: app.show_page("vpn"), secondary=True, width=110).pack_configure(
-            padx=(10, 8))
-        self._vpn_ids: list = []
+        self._avail: Dict[str, netcheck.ServiceState] = {}
         self._vpn_state = VpnState()
+        self._zs, self._ts = ZapretStatus(), TgStatus()
+        self._checking = False
+        self._check_job = None
+        self.after(1500, self._periodic_check)
 
-        hint = ("Подсказка: перебирайте стратегии, пока Discord/YouTube не заработают. Подобрать стратегию "
-                "автоматически кнопкой «Подобрать». Для автозапуска при включении ПК "
-                "включите режим «Служба Windows» или автозапуск BypassHub в настройках.")
-        ctk.CTkLabel(self, text=hint, text_color=W.GRAY, wraplength=680, justify="left",
-                     anchor="w").pack(fill="x", padx=(8, 18), pady=(4, 16))
-        self.reload_strategies()
-        self.reload_vpn()
+    def _tile(self, column: int, title: str, on_toggle: Callable[[bool], None]) -> ServiceControl:
+        control: ServiceControl
+        tile = W.PowerTile(self.tiles, title, lambda: control.toggle())
+        tile.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0 if column == 2 else 6))
+        self.tiles.grid_columnconfigure(column, weight=1, uniform="tiles")
+        control = ServiceControl(tile, on_toggle)
+        control.set_state(False, "…", W.GRAY, "")
+        return control
 
     # ------------------------------------------------------------------ zapret
-    def reload_strategies(self) -> None:
-        names = self.app.core.zapret.strategies()
-        self.strategy_box.configure(values=names or ["—"])
-        current = self.app.core.strategy
-        self.strategy_box.set(current if current in names else (names[0] if names else "—"))
-
-    def _strategy_changed(self, value: str) -> None:
-        if value == "—":
-            return
-        core = self.app.core
-        core.settings.set("zapret", "strategy", value)
-        self._apply_zapret("Смена стратегии…")
-
-    def _mode_changed(self, value: str) -> None:
-        mode = "service" if value == "Служба Windows" else "process"
-        self.app.core.settings.set("zapret", "mode", mode)
-        zp = self.app.pages.get("zapret")
-        if zp:
-            zp[1].sync_from_settings()
-        self._apply_zapret("Смена режима…")
-
-    def _apply_zapret(self, busy_text: str) -> None:
-        st = self.app.zapret_status
-        if not (st.running or st.service_installed):
-            return
-        self.zapret_card.set_busy(True, busy_text)
-        self.app.run_task(self.app.core.zapret_apply,
-                          lambda r, e: self._zapret_done(e), "Zapret")
-
     def toggle_zapret(self, on: bool) -> None:
         self.zapret_card.set_busy(True, "Включение…" if on else "Выключение…")
         fn = self.app.core.zapret_enable if on else self.app.core.zapret_disable
@@ -206,33 +190,22 @@ class HomePage(GradientPage):
         if error and self.app.winfo_viewable():
             self.app.error(str(error), "TG WS Proxy")
 
+    def open_in_telegram(self) -> None:
+        url = tgproxy.proxy_link(self.app.core.tg.load_config())
+        if not winutil.open_url(url):
+            self.app.copy_to_clipboard(url)
+            self.app.info("Не удалось открыть Telegram. Ссылка скопирована — отправьте её себе в "
+                          "«Избранное» и нажмите на неё.\n\n" + url)
+
+    def copy_link(self) -> None:
+        url = tgproxy.proxy_link(self.app.core.tg.load_config())
+        self.app.copy_to_clipboard(url)
+        self.app.info("Ссылка скопирована:\n" + url)
+
     # ------------------------------------------------------------------ VPN
     def reload_vpn(self) -> None:
-        from .vpn_page import profile_names
-        core = self.app.core
-        profiles = core.vpn_profiles()
-        self._vpn_ids = [p.id for p in profiles]
-        names = profile_names(profiles)
-        self.vpn_box.configure(values=names or ["— добавьте ключ во вкладке VPN —"])
-        active = core.vpn_active()
-        if active is not None and active.id in self._vpn_ids:
-            self.vpn_box.set(names[self._vpn_ids.index(active.id)])
-        else:
-            self.vpn_box.set(names[0] if names else "— добавьте ключ во вкладке VPN —")
+        """Список серверов или выбранный сервер изменились."""
         self._render_vpn()
-
-    def _vpn_changed(self, label: str) -> None:
-        values = self.vpn_box.cget("values")
-        if label not in values or not self._vpn_ids:
-            return
-        pid = self._vpn_ids[list(values).index(label)]
-        if pid == self.app.core.settings.get("vpn", "active"):
-            return
-        self.app.core.vpn_select(pid)
-        vp = self.app.pages.get("vpn")
-        if vp:
-            vp[1].render()
-        self.apply_vpn("Переключение сервера…")
 
     def apply_vpn(self, busy_text: str) -> None:
         """Перезапустить VPN с новыми настройками, если он включён."""
@@ -244,7 +217,7 @@ class HomePage(GradientPage):
     def toggle_vpn(self, on: bool) -> None:
         core = self.app.core
         if on and core.vpn_active() is None:
-            W.set_switch(self.vpn_card.switch, False)
+            self.vpn_card.set_switch(False)
             self.app.show_page("vpn")
             self.app.info("Сначала добавьте свой сервер: вставьте ключ vless://… или ключ AmneziaVPN vpn://…",
                           "VPN")
@@ -252,9 +225,8 @@ class HomePage(GradientPage):
         self.vpn_card.set_busy(True, "Подключение…" if on else "Отключение…")
 
         def progress(component: str, done: int, total: int) -> None:
-            text = f"Загрузка движка VPN: {done / 1048576:.1f}" + (f" из {total / 1048576:.1f}" if total else "") \
-                + " МБ"
-            self.app.call_ui(lambda: self.vpn_card.status.configure(text=text))
+            text = f"Загрузка: {done / 1048576:.1f}" + (f" из {total / 1048576:.1f}" if total else "") + " МБ"
+            self.app.call_ui(lambda: self.vpn_card.set_busy(True, text))
         fn = (lambda: core.vpn_enable(progress)) if on else core.vpn_disable
         self.app.run_task(fn, lambda r, e: self._vpn_done(e), "VPN")
 
@@ -276,7 +248,6 @@ class HomePage(GradientPage):
     def on_vpn_status(self, vs: VpnState) -> None:
         self._vpn_state = vs
         self._render_vpn()
-        self._update_hero(self.app.zapret_status, self.app.tg_status)
 
     def _render_vpn(self) -> None:
         vs = self._vpn_state
@@ -288,26 +259,18 @@ class HomePage(GradientPage):
             details = f"{proto} · {how}"
             if vs.singbox and vs.singbox.running and core.settings.get("vpn", "ru_direct"):
                 details += " · российское — напрямую"
-            self.vpn_card.set_state(True, f"● Подключён: {active.name if active else '—'}", W.GREEN, details)
+            name = active.name if active else "—"
+            self.vpn_card.set_state(True, f"● Подключён: {name}", W.GREEN, details,
+                                    tile_details=f"{name}\n{details}", tile_status="● Подключён")
         elif active is None:
             self.vpn_card.set_state(False, "○ Нет серверов", W.GRAY,
-                                    "Добавьте ключ VLESS или ключ AmneziaVPN во вкладке VPN.")
+                                    "Добавьте ключ VLESS или ключ AmneziaVPN ниже.",
+                                    tile_details="Добавьте свой ключ во вкладке VPN")
         else:
             engine = core.awg if active.kind == "awg" else core.singbox
             details = "" if engine.is_installed() else "При первом включении скачается движок VPN с GitHub."
-            self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details)
-
-    def open_in_telegram(self) -> None:
-        url = tgproxy.proxy_link(self.app.core.tg.load_config())
-        if not winutil.open_url(url):
-            self.app.copy_to_clipboard(url)
-            self.app.info("Не удалось открыть Telegram. Ссылка скопирована — отправьте её себе в "
-                          "«Избранное» и нажмите на неё.\n\n" + url)
-
-    def copy_link(self) -> None:
-        url = tgproxy.proxy_link(self.app.core.tg.load_config())
-        self.app.copy_to_clipboard(url)
-        self.app.info("Ссылка скопирована:\n" + url)
+            self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details,
+                                    tile_details=f"Сервер: {active.name}")
 
     # ------------------------------------------------------------------ доступность сервисов
     CHECK_PERIOD_MS = 180_000
@@ -327,86 +290,87 @@ class HomePage(GradientPage):
         if self._checking:
             return
         self._checking = True
-        for _dot, info, _ in self.chips.values():
-            info.configure(text="проверка…")
         self.app.run_task(netcheck.check_services, self._services_done)
 
     def _services_done(self, states, error) -> None:
         self._checking = False
         if error or not states:
             return
-        for st in states:
-            if st.name not in self.chips:
+        self._avail = {st.name: st for st in states}
+        self.on_status(self._zs, self._ts)
+
+    def availability(self, names) -> str:
+        """«Discord: доступен · YouTube: недоступен» по последней проверке."""
+        parts = []
+        for name in names:
+            st = self._avail.get(name)
+            if st is None:
                 continue
-            dot, info, _ = self.chips[st.name]
             if st.ok:
-                dot.configure(text_color=W.GREEN)
-                info.configure(text=f"доступен · {st.ms:.0f} мс")
+                parts.append(f"{name}: доступен")
             elif st.partial:
-                dot.configure(text_color=W.YELLOW)
-                info.configure(text="частично")
+                parts.append(f"{name}: частично")
             else:
-                dot.configure(text_color=W.RED)
-                info.configure(text="недоступен")
+                parts.append(f"{name}: недоступен")
+        return " · ".join(parts)
 
     # ------------------------------------------------------------------ статус
     def on_status(self, zs: ZapretStatus, ts: TgStatus) -> None:
+        self._zs, self._ts = zs, ts
         core = self.app.core
+        avail_z = self.availability(("Discord", "YouTube"))
+        avail_t = self.availability(("Telegram",))
+
+        def with_avail(text: str, avail: str) -> str:
+            return "\n".join(x for x in (text, avail) if x)
+
         mode = "служба Windows" if zs.service_installed else "программа"
         if not zs.installed:
-            self.zapret_card.set_state(False, "Не установлен — загрузка начнётся автоматически", W.GRAY, "")
+            self.zapret_card.set_state(False, "Не установлен", W.GRAY,
+                                       "Загрузка начнётся автоматически.", tile_details="Скачивается…")
         elif zs.running:
             strategy = (zs.service_strategy + ".bat") if zs.service_strategy else core.strategy
             details = f"Стратегия: {strategy} · режим: {mode} · версия {zs.version}"
             if zs.foreign_processes:
                 details += "\nВнимание: запущен winws.exe из другой папки: " + ", ".join(zs.foreign_processes)
-            self.zapret_card.set_state(True, "● Работает", W.GREEN, details)
+            self.zapret_card.set_state(True, "● Работает", W.GREEN, with_avail(details, avail_z),
+                                       tile_details=with_avail(strategy.removesuffix(".bat"), avail_z))
         elif zs.service_installed:
-            self.zapret_card.set_state(True, f"⚠ Служба установлена, но не работает ({zs.service_state})",
-                                       W.YELLOW, "Попробуйте другую стратегию или запустите диагностику.")
+            self.zapret_card.set_state(True, "⚠ Служба не работает", W.YELLOW,
+                                       f"Служба установлена, но не работает ({zs.service_state}). "
+                                       "Попробуйте другую стратегию или запустите диагностику.",
+                                       tile_details="Выберите другую стратегию во вкладке Zapret")
         else:
-            self.zapret_card.set_state(False, "○ Выключен", W.GRAY, f"Версия {zs.version}")
+            self.zapret_card.set_state(False, "○ Выключен", W.GRAY, with_avail(f"Версия {zs.version}", avail_z),
+                                       tile_details=avail_z)
 
-        cfg_port = None
         if not ts.installed:
-            self.tg_card.set_state(False, "Не установлен — загрузка начнётся автоматически", W.GRAY, "")
+            self.tg_card.set_state(False, "Не установлен", W.GRAY, "Загрузка начнётся автоматически.",
+                                   tile_details="Скачивается…")
         elif ts.running:
             cfg = core.tg.load_config()
-            cfg_port = f"{cfg.get('host')}:{cfg.get('port')}"
+            addr = f"{cfg.get('host')}:{cfg.get('port')}"
             if ts.listening:
-                self.tg_card.set_state(True, f"● Работает на {cfg_port}", W.GREEN, f"Версия {ts.version}")
+                self.tg_card.set_state(True, f"● Работает на {addr}", W.GREEN,
+                                       with_avail(f"Версия {ts.version}", avail_t),
+                                       tile_details=with_avail(addr, avail_t), tile_status="● Работает")
             else:
-                self.tg_card.set_state(True, "⚠ Процесс запущен, но порт не отвечает", W.YELLOW,
-                                       "Проверьте лог прокси во вкладке TG WS Proxy.")
+                self.tg_card.set_state(True, "⚠ Порт не отвечает", W.YELLOW,
+                                       "Процесс запущен, но порт не отвечает. Проверьте лог прокси ниже.",
+                                       tile_details="Проверьте лог прокси во вкладке TG WS Proxy")
         else:
             details = f"Версия {ts.version}"
             if ts.foreign:
                 details += "\nЗапущена другая копия TgWsProxy — закройте её перед включением: " + \
                            ", ".join(ts.foreign)
-            self.tg_card.set_state(False, "○ Выключен", W.GRAY, details)
-        self._update_hero(zs, ts)
-
-    def _update_hero(self, zs: ZapretStatus, ts: TgStatus) -> None:
-        vpn_on = self._vpn_state.running
-        on = [name for name, flag in (("Zapret", zs.running), ("TG Proxy", ts.running), ("VPN", vpn_on)) if flag]
-        if len(on) == 3:
-            title = "Всё включено"
-        elif len(on) == 2:
-            title = f"Работают {on[0]} и {on[1]}"
-        elif on:
-            title = f"Работает {on[0]}"
-        else:
-            title = "Всё выключено"
-        parts = [f"Zapret: {'вкл' if zs.running else 'выкл'}", f"TG Proxy: {'вкл' if ts.running else 'выкл'}",
-                 f"VPN: {'вкл' if vpn_on else 'выкл'}"]
-        self.hero.set_text(title, "  ·  ".join(parts))
+            self.tg_card.set_state(False, "○ Выключен", W.GRAY, with_avail(details, avail_t),
+                                   tile_details=avail_t)
 
     def on_infos(self, infos: List[UpdateInfo]) -> None:
         pending = [i for i in infos if i.available and i.installed]
         if pending:
             text = "Доступны обновления: " + ", ".join(f"{i.title} {i.installed} → {i.latest}" for i in pending)
             self.banner_label.configure(text=text)
-            self.banner.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14), before=self.zapret_card)
+            self.banner.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14), before=self.tiles)
         else:
             self.banner.pack_forget()
-        self.reload_strategies()

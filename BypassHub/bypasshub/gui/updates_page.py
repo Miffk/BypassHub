@@ -206,7 +206,6 @@ class UpdatesPage(GradientPage):
                 self.app.quit_app()
                 return
             self.render()
-            self.app.pages["home"][1].reload_strategies()
             self.app.pages["zapret"][1].reload()
             self.status.configure(text=f"{info.title} {info.latest} установлен", text_color=W.GREEN)
         self.app.run_task(work, done)

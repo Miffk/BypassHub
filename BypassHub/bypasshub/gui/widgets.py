@@ -288,6 +288,106 @@ class NavItem(_ImageWidget):
         self._show(img)
 
 
+def wrap_text(text: str, width: float, size: int, max_lines: int = 3) -> list:
+    """Перенос по словам под ширину (в логических единицах)."""
+    lines: list = []
+    for para in text.splitlines():
+        cur = ""
+        for word in para.split():
+            test = f"{cur} {word}".strip()
+            if cur and T.text_width(test, size) > width:
+                lines.append(cur)
+                cur = word
+            else:
+                cur = test
+        if cur:
+            lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip(" .,") + "…"
+    return lines
+
+
+class PowerTile(_ImageWidget):
+    """Большая кнопка-плитка вкл/выкл на главной. Включённая залита градиентом темы,
+    выключенная — цвета карточки. Нажатие на плитку переключает сервис."""
+
+    def __init__(self, parent, title: str, command: Callable[[], None], height: int = 210):
+        self._title, self._gcommand = title, command
+        self._status, self._details = "", ""
+        self._on = self._busy = self._ghover = False
+        self._width = 0
+        super().__init__(parent, 220, height, cursor="hand2")
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", self._click)
+        self.bind("<Configure>", self._on_resize)
+        self._render()
+
+    def set(self, on: Optional[bool] = None, status: Optional[str] = None, details: Optional[str] = None,
+            busy: Optional[bool] = None) -> None:
+        new = (self._on if on is None else on, self._status if status is None else status,
+               self._details if details is None else details, self._busy if busy is None else busy)
+        if new != (self._on, self._status, self._details, self._busy):
+            self._on, self._status, self._details, self._busy = new
+            self._render()
+
+    @property
+    def on(self) -> bool:
+        return self._on
+
+    def _set_hover(self, on: bool) -> None:
+        self._ghover = on
+        self._render()
+
+    def _click(self, _e=None) -> None:
+        if not self._busy and self._gcommand:
+            self._gcommand()
+
+    def _on_resize(self, event) -> None:
+        width = int(event.width / max(self._get_widget_scaling(), 0.01))
+        if abs(width - self._width) > 4:
+            self._width = width
+            self._render()
+
+    def _render(self) -> None:
+        w, h = max(self._width, 160), self._ih
+        s = T.SCALE
+        if self._on:
+            img = T.rounded(T.gradient((T.px(w), T.px(h)), P.accents, "diag"), 20 * s)
+            fg = T.readable_on(P.accents)
+            sub = fg
+        else:
+            img = T.pill((w, h), [P.surface], 20)
+            fg, sub = P.text, P.muted
+        if self._ghover and not self._busy:
+            overlay = Image.new("RGBA", img.size, (255, 255, 255, 26 if self._on else 14))
+            img = Image.composite(Image.alpha_composite(img, overlay), img, img.getchannel("A"))
+        pad = 22
+        # переключатель в правом верхнем углу
+        tw, th = 50, 28
+        tx, ty = w - pad - tw, pad
+        if self._on:
+            track = Image.new("RGBA", (T.px(tw), T.px(th)), (255, 255, 255, 80))
+        else:
+            track = T.pill((tw, th), [P.border], th / 2)
+        track.putalpha(Image.composite(track.getchannel("A"), Image.new("L", track.size, 0),
+                                       T.aa_mask(track.size, "rrect", th / 2 * s)))
+        img.alpha_composite(track, (T.px(tx), T.px(ty)))
+        knob = th - 8
+        kx = tx + (tw - 4 - knob if self._on else 4)
+        img.paste((255, 255, 255, 255), (T.px(kx), T.px(ty + 4)), T.aa_mask((T.px(knob), T.px(knob)), "ellipse"))
+        size = 22  # название уменьшается, если плитка узкая и оно наезжает на переключатель
+        while size > 15 and T.text_width(self._title, size, True) > tx - pad - 10:
+            size -= 1
+        T.draw_text(img, (pad, pad + th / 2), self._title, size, fg, bold=True)
+        status_color = fg if self._on else (P.muted if not self._busy else fg)
+        T.draw_text(img, (pad, 96), self._status, 15, status_color, bold=True)
+        for i, line in enumerate(wrap_text(self._details, w - 2 * pad, 12, max_lines=4)):
+            T.draw_text(img, (pad, 124 + i * 18), line, 12, sub)
+        self._show(img)
+
+
 class GradientText(_ImageWidget):
     """Надпись, залитая градиентом акцентных цветов (логотип)."""
 
