@@ -144,6 +144,24 @@ class HomePage(GradientPage):
         self.tg_card = self._tile(1, "TG WS Proxy", self.toggle_tg)
         self.vpn_card = self._tile(2, "VPN", self.toggle_vpn)
 
+        # серверы VPN: выбор, пинг, «авто» (показывается, когда серверов больше одного)
+        from .server_list import ServerPicker
+        self.vpn_pings: Dict[str, Optional[float]] = {}
+        self.vpn_pings_real = False
+        self._ping_at = 0.0
+        self._pinging = False
+        self.servers_card = mark_card(ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=18))
+        head = ctk.CTkFrame(self.servers_card, fg_color="transparent")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        ctk.CTkLabel(head, text="Серверы VPN", font=W.title_font(16), anchor="w").pack(side="left")
+        self.ping_note = ctk.CTkLabel(head, text="", text_color=W.GRAY, font=ctk.CTkFont(size=11))
+        self.ping_note.pack(side="left", padx=(10, 0))
+        self.ping_btn = W.add_button(head, "Проверить пинг", self.ping_servers, secondary=True, width=150)
+        self.ping_btn.pack_configure(side="right", padx=0)
+        self.servers = ServerPicker(self.servers_card, app, compact=True)
+        self.servers.pack(fill="x", padx=18, pady=(0, 14))
+        self.pickers = [self.servers]
+
         self._avail: Dict[str, netcheck.ServiceState] = {}
         self._vpn_state = VpnState()
         self._zs, self._ts = ZapretStatus(), TgStatus()
@@ -224,7 +242,7 @@ class HomePage(GradientPage):
 
     def toggle_vpn(self, on: bool) -> None:
         core = self.app.core
-        if on and core.vpn_active() is None:
+        if on and not core.vpn_profiles():
             self.vpn_card.set_switch(False)
             self.app.show_page("vpn")
             self.app.info("Сначала добавьте свой сервер: вставьте ключ vless://… или ключ AmneziaVPN vpn://…",
@@ -255,21 +273,48 @@ class HomePage(GradientPage):
 
     def on_vpn_status(self, vs: VpnState) -> None:
         self._vpn_state = vs
+        if vs.running and vs.kind == "vless" and vs.delays:
+            # задержки из проверок самого sing-box (в режиме «авто» — раз в минуту)
+            self.vpn_pings.update({k: float(v) for k, v in vs.delays.items()})
+            self.vpn_pings_real = True
         self._render_vpn()
+
+    def _server_name(self, pid: str) -> str:
+        return next((p.name for p in self.app.core.vpn_profiles() if p.id == pid), pid)
 
     def _render_vpn(self) -> None:
         vs = self._vpn_state
         core = self.app.core
         active = core.vpn_active()
+        auto = core.vpn_is_auto()
+        profiles = core.vpn_profiles()
+        if len(profiles) >= 2:
+            if not self.servers_card.winfo_manager():
+                self.servers_card.pack(fill="x", padx=W.PAGE_PADX, pady=(0, 14), after=self.tiles)
+        elif self.servers_card.winfo_manager():
+            self.servers_card.pack_forget()
+        for picker in self.pickers:
+            picker.render()
         if vs.running:
             how = "весь трафик" if vs.mode == "tun" else "системный прокси"
             proto = "AmneziaWG" if vs.kind == "awg" else "VLESS"
             details = f"{proto} · {how}"
             if vs.singbox and vs.singbox.running and core.settings.get("vpn", "ru_direct"):
                 details += " · российское — напрямую"
-            name = active.name if active else "—"
-            self.vpn_card.set_state(True, f"● Подключён: {name}", W.GREEN, details,
-                                    tile_details=f"{name}\n{details}", tile_status="● Подключён")
+            if vs.kind == "vless" and vs.current:
+                name = self._server_name(vs.current)
+                ms = self.vpn_pings.get(vs.current)
+                name_ping = name + (f" · {ms:.0f} мс" if ms else "")
+                title = ("Авто: " if vs.selected == "auto" else "") + name_ping
+            else:
+                name = active.name if active else "—"
+                title = name
+            self.vpn_card.set_state(True, f"● Подключён: {title}", W.GREEN, details,
+                                    tile_details=f"{title}\n{details}", tile_status="● Подключён")
+        elif auto:
+            details = "" if core.singbox.is_installed() else "При первом включении скачается движок VPN с GitHub."
+            self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details,
+                                    tile_details="Авто — лучший сервер")
         elif active is None:
             self.vpn_card.set_state(False, "○ Нет серверов", W.GRAY,
                                     "Добавьте ключ VLESS или ключ AmneziaVPN ниже.",
@@ -279,6 +324,53 @@ class HomePage(GradientPage):
             details = "" if engine.is_installed() else "При первом включении скачается движок VPN с GitHub."
             self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details,
                                     tile_details=f"Сервер: {active.name}")
+
+    def select_server(self, pid: str) -> None:
+        """Выбор сервера (или «auto») на главной или во вкладке VPN."""
+        core = self.app.core
+        if core.settings.get("vpn", "active") == pid:
+            return
+        core.vpn_select(pid)
+        self._render_vpn()
+        vp = self.app.pages.get("vpn")
+        if vp:
+            vp[1].render()
+        if self._vpn_state.running and not self.vpn_card.busy:
+            self.vpn_card.set_busy(True, "Переключение…")
+            self.app.run_task(core.vpn_switch, lambda r, e: self._vpn_done(e), "VPN")
+
+    PING_MAX_AGE = 300  # с: при открытии главной/вкладки VPN пинг обновляется, если старше
+
+    def ping_servers(self, max_age: float = 0) -> None:
+        import time
+        core = self.app.core
+        if self._pinging or not core.vpn_vless() or time.time() - self._ping_at < max_age:
+            return
+        self._pinging = True
+        for btn in self._ping_buttons():
+            btn.configure(text="Проверка…", state="disabled")
+
+        def done(result, err):
+            self._pinging = False
+            self._ping_at = time.time()
+            for btn in self._ping_buttons():
+                btn.configure(text="Проверить пинг", state="normal")
+            if not err and result:
+                self.vpn_pings, self.vpn_pings_real = dict(result[0]), result[1]
+            self.ping_note.configure(text=("через VPN" if self.vpn_pings_real else "до сервера")
+                                     if self.vpn_pings else "")
+            self._render_vpn()
+        self.app.run_task(core.vpn_ping, done)
+
+    def _ping_buttons(self) -> list:
+        btns = [self.ping_btn]
+        vp = self.app.pages.get("vpn")
+        if vp and hasattr(vp[1], "ping_btn"):
+            btns.append(vp[1].ping_btn)
+        return btns
+
+    def on_show(self) -> None:
+        self.ping_servers(max_age=self.PING_MAX_AGE)
 
     # ------------------------------------------------------------------ доступность сервисов
     CHECK_PERIOD_MS = 180_000

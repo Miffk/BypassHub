@@ -220,3 +220,26 @@ def test_service_state_on_localized_windows():
     assert parse_service_state(ru) == "RUNNING"
     assert parse_service_state(en) == "STOPPED"
     assert parse_service_state("мусор") == "UNKNOWN"
+
+
+def test_server_group_config():
+    servers = [vpn.outbound(vpn.parse_vless(REALITY), tag="vless:a"), vpn.outbound(vpn.parse_vless(WS), tag="vless:b")]
+    group = vpn.server_group(servers, "vless:b")
+    cfg = vpn.build_config(group, "tun", False, api=(9999, "s3cret"))
+    tags = [ob["tag"] for ob in cfg["outbounds"]]
+    assert tags == ["vless:a", "vless:b", "auto", "proxy", "direct"]
+    auto, sel = cfg["outbounds"][2], cfg["outbounds"][3]
+    assert auto["type"] == "urltest" and auto["outbounds"] == ["vless:a", "vless:b"]
+    assert sel["type"] == "selector" and sel["default"] == "vless:b" and sel["outbounds"][0] == "auto"
+    assert cfg["experimental"]["clash_api"] == {"external_controller": "127.0.0.1:9999", "secret": "s3cret"}
+    assert vpn.server_group(servers, "нет такого")[-1]["default"] == "vless:a"
+
+
+def test_core_auto_mode(tmp_path):
+    core = Core(Paths(tmp_path))
+    core.vpn_add(f"{REALITY}\n{WS}\n{amnezia_key()}")
+    assert len(core.vpn_vless()) == 2
+    core.vpn_select(vpn.AUTO_TAG)
+    assert core.vpn_is_auto() and core.vpn_active() is None
+    core.vpn_remove(core.vpn_vless()[0].id)       # остался один сервер VLESS — «авто» не имеет смысла
+    assert not core.vpn_is_auto() and core.vpn_active().kind == "vless"

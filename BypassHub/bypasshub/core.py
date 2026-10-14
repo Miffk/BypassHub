@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import awg, github, selfupdate, tgproxy, vpn, zapret
 from .applearn import AppLearner
@@ -40,6 +40,9 @@ class VpnState:
     mode: str = ""          # tun | proxy
     singbox: Optional[vpn.VpnStatus] = None
     awg: Optional[awg.AwgStatus] = None
+    selected: str = ""      # VLESS: «auto» или id выбранного сервера
+    current: str = ""       # VLESS: id сервера, через который идёт трафик сейчас
+    delays: Dict[str, int] = field(default_factory=dict)  # задержки по проверкам sing-box, мс
 
 
 class Core:
@@ -113,10 +116,30 @@ class Core:
     def _save_profiles(self, profiles: List[Profile]) -> None:
         self.settings.set("vpn", "profiles", [p.to_dict() for p in profiles])
 
+    def vpn_vless(self) -> List[Profile]:
+        """Серверы VLESS с правильными ключами — из них собирается группа и «авто»."""
+        out = []
+        for p in self.vpn_profiles():
+            if p.kind == "vless":
+                try:
+                    vpn.parse_vless(p.data)
+                    out.append(p)
+                except ValueError:
+                    pass
+        return out
+
+    def vpn_is_auto(self) -> bool:
+        """Выбран режим «Авто — лучший сервер» (имеет смысл от двух серверов VLESS)."""
+        return self.settings.get("vpn", "active") == vpn.AUTO_TAG and len(self.vpn_vless()) >= 2
+
     def vpn_active(self) -> Optional[Profile]:
+        """Выбранный сервер; None — серверов нет или выбран режим «авто»."""
         profiles = self.vpn_profiles()
+        if self.vpn_is_auto():
+            return None
         active = self.settings.get("vpn", "active")
-        return next((p for p in profiles if p.id == active), profiles[0] if profiles else None)
+        fallback = next((p for p in profiles if p.kind == "vless"), profiles[0] if profiles else None)
+        return next((p for p in profiles if p.id == active), fallback)
 
     def vpn_select(self, profile_id: str) -> None:
         self.settings.set("vpn", "active", profile_id)
@@ -201,7 +224,13 @@ class Core:
             kind, mode = "vless", sb.mode
         else:
             kind, mode = "", ""
-        return VpnState(running=sb.running or aw.running, kind=kind, mode=mode, singbox=sb, awg=aw)
+        state = VpnState(running=sb.running or aw.running, kind=kind, mode=mode, singbox=sb, awg=aw)
+        if kind == "vless" and self.singbox.has_group():
+            try:
+                state.selected, state.current, state.delays = self.singbox.group_state()
+            except Exception as exc:
+                log.debug("VPN: состояние группы: %r", exc)
+        return state
 
     def _ensure_engines(self, need_singbox: bool, need_awg: bool, progress: Optional[ProgressCb]) -> None:
         if need_awg and not self.awg.is_installed():
@@ -211,13 +240,14 @@ class Core:
 
     def _vpn_start(self, progress: Optional[ProgressCb] = None) -> None:
         profile = self.vpn_active()
-        if profile is None:
+        auto = self.vpn_is_auto()
+        if profile is None and not auto:
             raise RuntimeError("Сначала добавьте сервер: вкладка VPN → вставьте ключ vless://… или vpn://…")
         s = self.settings
         mode = s.get("vpn", "mode")
         ru_direct = bool(s.get("vpn", "ru_direct"))
         port = int(s.get("vpn", "proxy_port"))
-        if profile.kind == "awg":
+        if profile is not None and profile.kind == "awg":
             conf = awg.parse_conf(profile.data, profile.name)
             # раздельное туннелирование и режим прокси — через sing-box поверх туннеля
             split = ru_direct or mode == "proxy"
@@ -234,9 +264,13 @@ class Core:
                 self.awg.stop()
                 raise
         else:
+            # все серверы VLESS — одной группой: можно переключаться на лету и выбрать «авто»
             self._ensure_engines(True, False, progress)
             self.awg.stop()
-            self.singbox.start(vpn.outbound(vpn.parse_vless(profile.data)), profile.name, mode, ru_direct, port)
+            servers = [vpn.outbound(vpn.parse_vless(p.data), tag=p.id) for p in self.vpn_vless()]
+            selected = vpn.AUTO_TAG if auto or profile is None else profile.id
+            name = "Авто — лучший сервер" if selected == vpn.AUTO_TAG else profile.name
+            self.singbox.start(vpn.server_group(servers, selected), name, mode, ru_direct, port)
 
     def vpn_enable(self, progress: Optional[ProgressCb] = None) -> None:
         with self.lock:
@@ -252,6 +286,50 @@ class Core:
             self.settings.set("vpn", "enabled", False)
             self.singbox.stop()
             self.awg.stop()
+
+    def vpn_switch(self) -> bool:
+        """Включённый VPN — на выбранный сервер. Между серверами VLESS (и «авто») —
+        на лету, без переподключения; иначе — перезапуск. True — если VPN был включён."""
+        with self.lock:
+            if not self.vpn_running():
+                return False
+            target = vpn.AUTO_TAG if self.vpn_is_auto() else (self.vpn_active().id if self.vpn_active() else "")
+            target_vless = target == vpn.AUTO_TAG or any(p.id == target for p in self.vpn_vless())
+            if target_vless and not self.awg.status().running and self.singbox.has_group():
+                try:
+                    if target not in self.singbox.group_tags() + [vpn.AUTO_TAG]:
+                        raise RuntimeError("сервера нет в запущенном конфиге")
+                    self.singbox.select_server(target)
+                    log.info("VPN: переключение на %s", target)
+                    return True
+                except Exception as exc:  # например, сервер добавлен после запуска — перезапуск
+                    log.debug("VPN: переключение через API не удалось: %r", exc)
+            self._vpn_start()
+            return True
+
+    def vpn_ping(self) -> Tuple[Dict[str, Optional[float]], bool]:
+        """Задержка до серверов VLESS: {id: мс или None}. Если VPN включён — реальная, через
+        сами серверы (второе значение True); иначе — время подключения к серверу."""
+        vless = self.vpn_vless()
+        result: Dict[str, Optional[float]] = {}
+        real = False
+        if self.singbox.status().running and self.singbox.has_group() and not self.awg.status().running:
+            try:
+                delays = self.singbox.test_delays()
+                in_group = set(self.singbox.group_tags())
+                for p in vless:
+                    if p.id in in_group:
+                        result[p.id] = float(delays[p.id]) if p.id in delays else None
+                real = True
+            except Exception as exc:
+                log.debug("VPN: проверка задержек через sing-box: %r", exc)
+        rest = [p for p in vless if p.id not in result]
+        if rest:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(8) as ex:
+                for p, ms in zip(rest, ex.map(lambda p: vpn.ping(vpn.parse_vless(p.data)), rest)):
+                    result[p.id] = ms
+        return result, real
 
     def vpn_apply(self) -> bool:
         """Перезапуск VPN с новыми настройками или другим сервером, если он включён."""

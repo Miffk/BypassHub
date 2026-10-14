@@ -131,10 +131,11 @@ class SettingsPage(GradientPage):
         W.add_button(bar, "Импорт", self._import, secondary=True)
 
         body = W.section(self, "О программе")
-        ctk.CTkLabel(body, text=f"{APP_NAME} {__version__} — управление zapret-discord-youtube и tg-ws-proxy "
-                                "в одном окне.", anchor="w", justify="left", wraplength=640).pack(fill="x")
-        ctk.CTkLabel(body, text="Сами проекты принадлежат их авторам (Flowseal, bol-van). BypassHub скачивает "
-                                "только официальные релизы с GitHub.", anchor="w", justify="left",
+        ctk.CTkLabel(body, text=f"{APP_NAME} {__version__} — zapret-discord-youtube, tg-ws-proxy и свой VPN "
+                                "(VLESS, AmneziaWG) в одном окне.", anchor="w", justify="left",
+                     wraplength=640).pack(fill="x")
+        ctk.CTkLabel(body, text="Сами проекты принадлежат их авторам (Flowseal, bol-van, SagerNet, Amnezia). "
+                                "BypassHub скачивает только официальные релизы с GitHub.", anchor="w", justify="left",
                      wraplength=640, text_color=W.P.muted).pack(fill="x", pady=(4, 0))
         bar = W.button_bar(body)
         W.add_button(bar, "zapret-discord-youtube", lambda: winutil.open_url(

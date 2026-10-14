@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tkinter import filedialog
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from ..core import VpnState
     from .app import App
 
-KIND_LABELS = {"vless": "VLESS", "awg": "AmneziaWG"}
 
 
 class VpnPage(GradientPage):
@@ -24,7 +23,6 @@ class VpnPage(GradientPage):
         super().__init__(parent)
         self.app = app
         s = app.core.settings
-        self._pings: Dict[str, Optional[float]] = {}
         from .home_page import ServiceCard
         home = app.pages["home"][1]
         self.header = ServiceCard(self, "VPN", "Свой сервер: ключ VLESS или ключ AmneziaVPN (AmneziaWG)",
@@ -47,16 +45,18 @@ class VpnPage(GradientPage):
                                 "посторонним.", text_color=W.GRAY, anchor="w", justify="left", wraplength=640,
                      font=ctk.CTkFont(size=11)).pack(fill="x", pady=(6, 0))
 
-        body = W.section(self, "Серверы", "Нажмите на сервер, чтобы выбрать его. Если VPN включён, "
-                                          "он сразу переключится.")
-        # height=1: пустой CTkFrame иначе занимает 200 px
-        self.list_frame = ctk.CTkFrame(body, fg_color="transparent", height=1)
-        self.list_frame.pack(fill="x")
+        body = W.section(self, "Серверы", "Нажмите на сервер, чтобы выбрать его. Если VPN включён, он "
+                                          "переключится сразу. «Авто» сам выбирает самый быстрый сервер VLESS.")
+        from .server_list import ServerPicker
+        self.picker = ServerPicker(body, app, compact=False, on_rename=self.rename, on_remove=self.remove)
+        self.picker.pack(fill="x")
+        home.pickers.append(self.picker)
         self.subs_frame = ctk.CTkFrame(body, fg_color="transparent", height=1)
         self.subs_frame.pack(fill="x")
         bar = ctk.CTkFrame(body, fg_color="transparent")
         bar.pack(fill="x", pady=(8, 0))
-        self.ping_btn = W.add_button(bar, "Проверить серверы", self.ping_all, secondary=True, width=170)
+        self.ping_btn = W.add_button(bar, "Проверить пинг", lambda: home.ping_servers(), secondary=True,
+                                     width=170)
         self.subs_btn = W.add_button(bar, "Обновить подписки", self.refresh_subs, secondary=True, width=170)
 
         body = W.section(self, "Режим",
@@ -111,18 +111,13 @@ class VpnPage(GradientPage):
     # ------------------------------------------------------------------ список серверов
     def on_show(self) -> None:
         self.render()
+        self.app.pages["home"][1].ping_servers(max_age=self.app.pages["home"][1].PING_MAX_AGE)
 
     def render(self) -> None:
         core = self.app.core
-        for w in self.list_frame.winfo_children() + self.subs_frame.winfo_children():
+        for w in self.subs_frame.winfo_children():
             w.destroy()
-        profiles = core.vpn_profiles()
-        active = core.vpn_active()
-        if not profiles:
-            ctk.CTkLabel(self.list_frame, text="Серверов пока нет — добавьте ключ выше.", text_color=W.GRAY,
-                         anchor="w").pack(fill="x", pady=4)
-        for p in profiles:
-            self._server_row(p, active is not None and p.id == active.id)
+        self.picker.render()
         subs = core.settings.get("vpn", "subscriptions") or []
         if subs:
             ctk.CTkLabel(self.subs_frame, text="Подписки", anchor="w",
@@ -135,7 +130,8 @@ class VpnPage(GradientPage):
             ctk.CTkButton(fr, text="✕", width=30, height=26, fg_color="transparent", text_color=W.P.muted,
                           hover_color=W.P.surface2, command=lambda u=url: self.remove_sub(u)).pack(side="right")
         self.subs_btn.configure(state="normal" if subs else "disabled")
-        self.ping_btn.configure(state="normal" if profiles else "disabled")
+        if not self.app.pages["home"][1]._pinging:
+            self.ping_btn.configure(state="normal" if core.vpn_vless() else "disabled")
         sb, aw = core.singbox, core.awg
         lines = [
             "VLESS — sing-box " + (sb.local_version() if sb.is_installed() else
@@ -145,42 +141,6 @@ class VpnPage(GradientPage):
             "Раздельное туннелирование — базы roscomvpn " + (_rules_age(sb) or "(скачаются при включении)"),
         ]
         self.engines.configure(text="\n".join(lines))
-
-    def _server_row(self, p: Profile, active: bool) -> None:
-        P = W.P
-        fr = ctk.CTkFrame(self.list_frame, fg_color=P.surface2, corner_radius=12,
-                          border_width=2 if active else 0, border_color=P.accent if active else P.surface2)
-        fr.pack(fill="x", pady=3)
-        left = ctk.CTkFrame(fr, fg_color="transparent")
-        left.pack(side="left", fill="x", expand=True, padx=14, pady=8)
-        head = ctk.CTkFrame(left, fg_color="transparent")
-        head.pack(fill="x")
-        ctk.CTkLabel(head, text=("● " if active else "") + p.name, anchor="w",
-                     text_color=P.accent if active else P.text,
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
-        ctk.CTkLabel(head, text=KIND_LABELS.get(p.kind, p.kind) + (" · из подписки" if p.sub else ""),
-                     text_color=P.muted, font=ctk.CTkFont(size=11)).pack(side="left", padx=(10, 0))
-        info = p.summary
-        if p.id in self._pings:
-            ms = self._pings[p.id]
-            info += f" · {ms:.0f} мс" if ms is not None else " · не отвечает"
-        ctk.CTkLabel(left, text=info, anchor="w", text_color=P.muted).pack(fill="x")
-        ctk.CTkButton(fr, text="✕", width=34, height=30, fg_color="transparent", text_color=P.muted,
-                      hover_color=P.border, command=lambda: self.remove(p)).pack(side="right", padx=(0, 10))
-        ctk.CTkButton(fr, text="✎", width=34, height=30, fg_color="transparent", text_color=P.muted,
-                      hover_color=P.border, command=lambda: self.rename(p)).pack(side="right")
-        for w in (fr, left, head) + tuple(left.winfo_children()) + tuple(head.winfo_children()):
-            if not isinstance(w, ctk.CTkButton):
-                w.bind("<Button-1>", lambda _e, pid=p.id: self.select(pid), add="+")
-
-    def select(self, profile_id: str) -> None:
-        core = self.app.core
-        if core.settings.get("vpn", "active") == profile_id:
-            return
-        core.vpn_select(profile_id)
-        self.render()
-        self.app.pages["home"][1].reload_vpn()
-        self.app.pages["home"][1].apply_vpn("Переключение сервера…")
 
     def rename(self, p: Profile) -> None:
         dlg = ctk.CTkInputDialog(text="Новое название сервера:", title="Переименовать")
@@ -199,11 +159,11 @@ class VpnPage(GradientPage):
         self.render()
         home = self.app.pages["home"][1]
         home.reload_vpn()
-        if was_active is not None and was_active.id == p.id and self.app.vpn_state.running:
-            if core.vpn_active() is not None:
-                home.apply_vpn("Переключение сервера…")
-            else:
+        if self.app.vpn_state.running:
+            if not core.vpn_profiles():
                 home.toggle_vpn(False)
+            elif (was_active is not None and was_active.id == p.id) or p.kind == "vless":
+                home.apply_vpn("Переключение сервера…")  # серверы VLESS собраны в одну группу
 
     def remove_sub(self, url: str) -> None:
         if not self.app.ask("Удалить подписку и все её серверы?\n" + url):
@@ -289,29 +249,6 @@ class VpnPage(GradientPage):
             self.app.info(text, "Подписки")
         self.app.run_task(self.app.core.vpn_refresh_subscriptions, done)
 
-    def ping_all(self) -> None:
-        profiles = self.app.core.vpn_profiles()
-        self.ping_btn.configure(state="disabled")
-
-        def work():
-            from concurrent.futures import ThreadPoolExecutor
-
-            def one(p: Profile) -> Optional[float]:
-                try:
-                    return vpn.ping(vpn.parse_vless(p.data))
-                except Exception:
-                    return None
-            # у AmneziaWG (UDP) сервер не отвечает посторонним — время не измерить
-            vless = [p for p in profiles if p.kind == "vless"]
-            with ThreadPoolExecutor(8) as ex:
-                return dict(zip([p.id for p in vless], ex.map(one, vless)))
-
-        def done(result, err):
-            if not err:
-                self._pings = result
-            self.render()
-        self.app.run_task(work, done)
-
     # ------------------------------------------------------------------ режимы
     def _mode_changed(self, label: str) -> None:
         mode = next((k for k, v in vpn.MODES.items() if v == label), "tun")
@@ -365,14 +302,3 @@ def _rules_age(manager) -> str:
         return ""
     newest = max(p.stat().st_mtime for p in files)
     return "от " + time.strftime("%d.%m.%Y", time.localtime(newest))
-
-
-def profile_names(profiles: List[Profile]) -> List[str]:
-    """Подписи для выпадающего списка на главной (имена могут повторяться)."""
-    seen: Dict[str, int] = {}
-    out = []
-    for p in profiles:
-        n = seen.get(p.name, 0) + 1
-        seen[p.name] = n
-        out.append(p.name if n == 1 else f"{p.name} ({n})")
-    return out

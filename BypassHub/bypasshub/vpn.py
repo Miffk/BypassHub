@@ -39,6 +39,8 @@ MAX_VERSION = (1, 16)  # не включая
 PINNED_VERSION = "1.14.3"  # если GitHub API недоступен
 
 INTERFACE_NAME = "BypassHub VPN"
+AUTO_TAG = "auto"                     # группа «лучший сервер»
+URLTEST_URL = "https://www.gstatic.com/generate_204"
 TUN_ADDRESS = "172.19.0.1/30"
 DEFAULT_PROXY_PORT = 2080
 
@@ -355,12 +357,30 @@ def awg_outbound(interface: str, tag: str = "proxy") -> Dict[str, Any]:
     return {"type": "direct", "tag": tag, "bind_interface": interface}
 
 
-def build_config(proxy: Dict[str, Any], mode: str = "tun", ru_direct: bool = True,
+def server_group(servers: List[Dict[str, Any]], selected: str) -> List[Dict[str, Any]]:
+    """Несколько серверов в одном конфиге: каждый со своим тегом (id профиля),
+    «auto» — лучший по задержке (sing-box сам проверяет их и переключается),
+    «proxy» — переключатель между «auto» и серверами (можно менять на лету через API)."""
+    tags = [ob["tag"] for ob in servers]
+    if selected not in tags and selected != AUTO_TAG:
+        selected = tags[0]
+    return servers + [
+        {"type": "urltest", "tag": AUTO_TAG, "outbounds": tags, "url": URLTEST_URL, "interval": "1m",
+         "tolerance": 50, "idle_timeout": "30m"},
+        {"type": "selector", "tag": "proxy", "outbounds": [AUTO_TAG] + tags, "default": selected,
+         "interrupt_exist_connections": True},
+    ]
+
+
+def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
                  proxy_port: int = DEFAULT_PROXY_PORT, rule_sets: Optional[Dict[str, Path]] = None,
-                 bypass: Optional[List[str]] = None, log_level: str = "info") -> Dict[str, Any]:
+                 bypass: Optional[List[str]] = None, log_level: str = "info",
+                 api: Optional[Tuple[int, str]] = None) -> Dict[str, Any]:
     """config.json для sing-box.
 
-    proxy — исходящее «через VPN» (VLESS-сервер или туннель AmneziaWG);
+    proxy — исходящее «через VPN»: один outbound (VLESS-сервер или туннель AmneziaWG)
+    или готовый список из server_group();
+    api — (порт, secret) встроенного API для задержек и переключения серверов;
     ru_direct — российское напрямую: .ru/.su/.рф и базы roscomvpn (если скачаны);
     bypass — адреса, которые всегда идут мимо (сервер AmneziaWG — иначе петля)."""
     rule_sets = {tag: p for tag, p in (rule_sets or {}).items() if p and Path(p).exists()} if ru_direct else {}
@@ -413,7 +433,8 @@ def build_config(proxy: Dict[str, Any], mode: str = "tun", ru_direct: bool = Tru
     if has:
         route["rule_set"] = [{"type": "local", "tag": tag, "format": "binary", "path": str(rule_sets[tag])}
                              for tag in has]
-    return {
+    outbounds = list(proxy) if isinstance(proxy, list) else [dict(proxy, tag="proxy")]
+    cfg = {
         "log": {"level": log_level, "timestamp": True},
         "dns": {
             "servers": [
@@ -425,9 +446,12 @@ def build_config(proxy: Dict[str, Any], mode: str = "tun", ru_direct: bool = Tru
             "strategy": "ipv4_only",
         },
         "inbounds": [inbound],
-        "outbounds": [dict(proxy, tag="proxy"), {"type": "direct", "tag": "direct"}],
+        "outbounds": outbounds + [{"type": "direct", "tag": "direct"}],
         "route": route,
     }
+    if api:
+        cfg["experimental"] = {"clash_api": {"external_controller": f"127.0.0.1:{api[0]}", "secret": api[1]}}
+    return cfg
 
 
 # ====================================================================== релизы sing-box
@@ -568,15 +592,17 @@ class VpnManager:
             text = _clean_log((res.stdout + res.stderr).strip())
             raise RuntimeError(f"sing-box не принял настройки:\n{text}")
 
-    def start(self, proxy: Dict[str, Any], name: str, mode: str, ru_direct: bool, proxy_port: int,
+    def start(self, proxy: Any, name: str, mode: str, ru_direct: bool, proxy_port: int,
               bypass: Optional[List[str]] = None) -> None:
-        """proxy — исходящее «через VPN»: outbound(VlessKey) или awg_outbound(…)."""
+        """proxy — исходящее «через VPN»: outbound(VlessKey), awg_outbound(…) или server_group(…)."""
         if not self.is_installed():
             raise RuntimeError("Движок VPN (sing-box) ещё не скачан")
         self.stop()
         if ru_direct:
             self.update_rule_sets(only_missing=True)
-        cfg = build_config(proxy, mode, ru_direct, proxy_port, self.rule_set_paths(), bypass)
+        import secrets
+        api = (_free_port(), secrets.token_hex(16))
+        cfg = build_config(proxy, mode, ru_direct, proxy_port, self.rule_set_paths(), bypass, api=api)
         self.write_config(cfg)
         self.check_config()
         if mode == "proxy" and winutil.port_listening(proxy_port):
@@ -617,6 +643,68 @@ class VpnManager:
             return "\n".join(lines[-n:])
         except OSError:
             return ""
+
+    # ---------------------------------------------------------- встроенный API (задержки, выбор сервера)
+    def _api(self) -> Optional[Tuple[str, str]]:
+        try:
+            cfg = json.loads(self.config_file.read_text(encoding="utf-8"))
+            c = cfg["experimental"]["clash_api"]
+            return c["external_controller"], c.get("secret", "")
+        except Exception:
+            return None
+
+    def api_request(self, path: str, method: str = "GET", body: Optional[dict] = None,
+                    timeout: float = 3.0) -> Any:
+        from urllib.request import ProxyHandler, Request, build_opener
+        api = self._api()
+        if api is None:
+            raise RuntimeError("API sing-box недоступно")
+        data = json.dumps(body).encode() if body is not None else None
+        req = Request(f"http://{api[0]}{path}", data=data, method=method,
+                      headers={"Authorization": f"Bearer {api[1]}", "Content-Type": "application/json"})
+        opener = build_opener(ProxyHandler({}))  # к 127.0.0.1 — без системного прокси
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+        return json.loads(raw) if raw else None
+
+    def has_group(self) -> bool:
+        """Запущен ли конфиг с группой серверов (VLESS, ручной выбор или «авто»)."""
+        try:
+            cfg = json.loads(self.config_file.read_text(encoding="utf-8"))
+            return any(ob.get("tag") == AUTO_TAG for ob in cfg.get("outbounds", []))
+        except Exception:
+            return False
+
+    def group_tags(self) -> List[str]:
+        """id серверов в запущенном конфиге."""
+        try:
+            cfg = json.loads(self.config_file.read_text(encoding="utf-8"))
+            return next((ob["outbounds"] for ob in cfg.get("outbounds", []) if ob.get("tag") == AUTO_TAG), [])
+        except Exception:
+            return []
+
+    def group_state(self) -> Tuple[str, str, Dict[str, int]]:
+        """(выбрано: «auto» или id сервера, используется сейчас: id сервера,
+        последние задержки серверов в мс по проверкам sing-box)."""
+        data = self.api_request("/proxies")["proxies"]
+        selected = data.get("proxy", {}).get("now", "")
+        actual = data.get(AUTO_TAG, {}).get("now", "") if selected == AUTO_TAG else selected
+        delays: Dict[str, int] = {}
+        for tag in data.get(AUTO_TAG, {}).get("all", []):
+            hist = data.get(tag, {}).get("history") or []
+            if hist and hist[-1].get("delay"):
+                delays[tag] = int(hist[-1]["delay"])
+        return selected, actual, delays
+
+    def test_delays(self, timeout_ms: int = 5000) -> Dict[str, int]:
+        """Проверить задержку всех серверов группы через сами серверы (реальная задержка)."""
+        res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
+                               timeout=timeout_ms / 1000 + 3)
+        return {k: int(v) for k, v in (res or {}).items() if v}
+
+    def select_server(self, tag: str) -> None:
+        """Переключить сервер на лету, без перезапуска."""
+        self.api_request("/proxies/proxy", method="PUT", body={"name": tag})
 
     # ---------------------------------------------------------- системный прокси
     def enable_system_proxy(self, port: int) -> None:
@@ -701,6 +789,13 @@ class VpnManager:
                                                   detached=True)
             finally:
                 logf.close()
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
