@@ -33,7 +33,7 @@ object Config {
         .put("server", "127.0.0.1").put("server_port", socksPort).put("version", "5")
 
     fun build(proxy: List<JSONObject>, ruDirect: Boolean, rules: Map<String, File>, apiPort: Int, apiSecret: String,
-              bypass: List<String> = emptyList()): String {
+              bypass: List<String> = emptyList(), localProxyPort: Int = 0): String {
         val sets = if (ruDirect) rules.filterValues { it.exists() && it.length() > 0 } else emptyMap()
         val has = Rules.SETS.keys.filter { it in sets }
         val bypassCidr = bypass.map { if (it.contains("/")) it else if (it.contains(":")) "$it/128" else "$it/32" }
@@ -94,6 +94,11 @@ object Config {
             .put("route", route)
             .put("experimental", JSONObject().put("clash_api", JSONObject()
                 .put("external_controller", "127.0.0.1:$apiPort").put("secret", apiSecret)))
+        if (localProxyPort > 0) {
+            // для самого приложения (обновления, подписки): оно исключено из VPN и иначе ходит напрямую
+            cfg.getJSONArray("inbounds").put(JSONObject().put("type", "mixed").put("tag", "local-in")
+                .put("listen", "127.0.0.1").put("listen_port", localProxyPort))
+        }
         return cfg.toString(2)
     }
 }

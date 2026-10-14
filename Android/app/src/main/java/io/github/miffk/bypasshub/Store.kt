@@ -152,7 +152,7 @@ object Store {
         val subs = subscriptions.toMutableList()
         for (url in parsed.subscriptions) {
             try {
-                val (keys, extra) = Keys.parseVlessList(Net.get(url))
+                val (keys, extra) = Keys.parseVlessList(Net.getAny(url))
                 if (keys.isEmpty()) problems.add("в подписке нет ключей VLESS")
                 found.addAll(keys.map { Keys.vlessProfile(it, url) })
                 problems.addAll(extra)
@@ -178,7 +178,7 @@ object Store {
         var total = 0
         for (url in subscriptions) {
             try {
-                val (keys, extra) = Keys.parseVlessList(Net.get(url))
+                val (keys, extra) = Keys.parseVlessList(Net.getAny(url))
                 problems.addAll(extra)
                 val names = list.filter { it.sub == url }.associate { it.id to it.name }
                 val fresh = keys.map { Keys.vlessProfile(it, url) }.map { p -> names[p.id]?.let { p.copy(name = it) } ?: p }

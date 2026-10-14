@@ -18,6 +18,8 @@ object Vpn {
     @Volatile var serverName = ""
     @Volatile var kind = ""                 // vless | awg | bypass
     @Volatile var api: ClashApi? = null      // есть, когда запущен sing-box
+    /** Локальный HTTP-прокси sing-box (127.0.0.1) — через него само приложение ходит по VPN. 0 — нет. */
+    @Volatile var localProxy = 0
     @Volatile var groupTags: List<String> = emptyList()   // id серверов VLESS в запущенном конфиге
     @Volatile var group: ClashApi.GroupState? = null      // выбранный/текущий сервер и задержки
 
@@ -40,6 +42,7 @@ object Vpn {
         if (err != null) error = err
         if (s == Status.STOPPED) {
             api = null
+            localProxy = 0
             group = null
             groupTags = emptyList()
         }

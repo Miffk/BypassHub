@@ -12,20 +12,26 @@ import java.net.URL
 object Net {
     private const val UA = "BypassHub-Android/${BuildConfig.VERSION_NAME}"
 
+    /** proxyPort > 0 — через локальный HTTP-прокси sing-box, то есть через включённый VPN
+     *  (само приложение исключено из своего VPN и без этого ходит напрямую). */
     private fun open(url: String, method: String = "GET", timeoutMs: Int = 20000,
-                     headers: Map<String, String> = emptyMap()): HttpURLConnection {
-        val c = URL(url).openConnection() as HttpURLConnection
+                     headers: Map<String, String> = emptyMap(), proxyPort: Int = 0,
+                     follow: Boolean = true): HttpURLConnection {
+        val u = URL(url)
+        val c = (if (proxyPort > 0) u.openConnection(java.net.Proxy(java.net.Proxy.Type.HTTP,
+                    InetSocketAddress("127.0.0.1", proxyPort)))
+                 else u.openConnection()) as HttpURLConnection
         c.requestMethod = method
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
-        c.instanceFollowRedirects = true
+        c.instanceFollowRedirects = follow
         c.setRequestProperty("User-Agent", UA)
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         return c
     }
 
-    fun get(url: String, timeoutMs: Int = 20000, headers: Map<String, String> = emptyMap()): String {
-        val c = open(url, timeoutMs = timeoutMs, headers = headers)
+    fun get(url: String, timeoutMs: Int = 20000, headers: Map<String, String> = emptyMap(), proxyPort: Int = 0): String {
+        val c = open(url, timeoutMs = timeoutMs, headers = headers, proxyPort = proxyPort)
         try {
             if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
             return c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
@@ -53,8 +59,8 @@ object Net {
     }
 
     /** Скачать файл; progress(готово, всего) — всего может быть -1. */
-    fun download(url: String, dest: File, progress: ((Long, Long) -> Unit)? = null) {
-        val c = open(url, timeoutMs = 30000)
+    fun download(url: String, dest: File, progress: ((Long, Long) -> Unit)? = null, proxyPort: Int = 0) {
+        val c = open(url, timeoutMs = 30000, proxyPort = proxyPort)
         try {
             if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
             val total = c.contentLengthLong
@@ -83,6 +89,33 @@ object Net {
     }
 
     fun getJson(url: String): JSONObject = JSONObject(get(url))
+
+    /** Куда перенаправляет адрес (заголовок Location) — без перехода. */
+    fun redirect(url: String, proxyPort: Int = 0, timeoutMs: Int = 15000): String? {
+        val c = open(url, timeoutMs = timeoutMs, proxyPort = proxyPort, follow = false)
+        try {
+            c.responseCode
+            return c.getHeaderField("Location")
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** Порты для запроса: сначала через VPN (если он включён), потом напрямую. */
+    fun routes(): List<Int> = listOfNotNull(Vpn.localProxy.takeIf { it > 0 }, 0)
+
+    /** GET с запасным путём: через VPN, затем напрямую. */
+    fun getAny(url: String, timeoutMs: Int = 20000, headers: Map<String, String> = emptyMap()): String {
+        var last: Exception? = null
+        for (port in routes()) {
+            try {
+                return get(url, timeoutMs, headers, port)
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: IOException("нет сети")
+    }
 
     /** Время TCP-подключения к серверу, мс (null — не отвечает). */
     fun tcpPing(host: String, port: Int, timeoutMs: Int = 4000): Long? = try {

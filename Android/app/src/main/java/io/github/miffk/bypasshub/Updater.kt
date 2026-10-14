@@ -20,7 +20,8 @@ object Updater {
     const val ASSET = "BypassHub-android.apk"
     private const val CHECK_EVERY_MS = 12 * 60 * 60 * 1000L
 
-    data class Release(val version: String, val url: String, val sha256: String?, val page: String)
+    /** proxyPort — каким путём удалось достучаться до GitHub (0 — напрямую); тем же путём и скачиваем. */
+    data class Release(val version: String, val url: String, val sha256: String?, val page: String, val proxyPort: Int = 0)
 
     @Volatile private var busy = false
 
@@ -38,10 +39,28 @@ object Updater {
         return false
     }
 
-    /** Последний релиз BypassHub, в котором есть APK (вызывать не в UI-потоке). */
+    /** Последний релиз BypassHub с APK (вызывать не в UI-потоке). GitHub бывает недоступен напрямую,
+     *  поэтому пробуем по очереди: через включённый VPN, напрямую через API, напрямую через github.com. */
     fun latest(): Release? {
+        var last: Exception? = null
+        for (port in Net.routes()) {
+            try {
+                return latestApi(port)
+            } catch (e: Exception) {
+                last = e
+            }
+            try {
+                return latestWeb(port)
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: java.io.IOException("GitHub недоступен")
+    }
+
+    private fun latestApi(port: Int): Release? {
         val data = JSONArray(Net.get("https://api.github.com/repos/$REPO/releases?per_page=30",
-            headers = mapOf("Accept" to "application/vnd.github+json")))
+            timeoutMs = 12000, headers = mapOf("Accept" to "application/vnd.github+json"), proxyPort = port))
         var best: Release? = null
         for (i in 0 until data.length()) {
             val rel = data.getJSONObject(i)
@@ -53,11 +72,22 @@ object Updater {
                 if (a.optString("name") != ASSET) continue
                 val digest = a.optString("digest")
                 val r = Release(tag.removePrefix(TAG_PREFIX), a.getString("browser_download_url"),
-                    if (digest.startsWith("sha256:")) digest.substringAfter(":") else null, rel.optString("html_url"))
+                    if (digest.startsWith("sha256:")) digest.substringAfter(":") else null, rel.optString("html_url"), port)
                 if (best == null || isNewer(r.version, best.version)) best = r
             }
         }
         return best
+    }
+
+    /** Без API: github.com/…/releases/latest перенаправляет на страницу последнего релиза. */
+    private fun latestWeb(port: Int): Release? {
+        val location = Net.redirect("https://github.com/$REPO/releases/latest", port)
+            ?: throw java.io.IOException("github.com не ответил")
+        val tag = Regex("/releases/tag/([^/?#]+)").find(location)?.groupValues?.get(1)
+            ?: throw java.io.IOException("не удалось узнать последнюю версию")
+        if (!tag.startsWith(TAG_PREFIX)) return null
+        return Release(tag.removePrefix(TAG_PREFIX), "https://github.com/$REPO/releases/download/$tag/$ASSET", null,
+            "https://github.com/$REPO/releases/tag/$tag", port)
     }
 
     /** Тихая проверка при запуске — не чаще раза в 12 часов. */
@@ -84,7 +114,8 @@ object Updater {
                 if (activity.isFinishing) return@runOnUiThread
                 val rel = result.getOrNull()
                 when {
-                    result.isFailure -> if (manual) toast(activity, "Не удалось проверить: ${result.exceptionOrNull()?.message}")
+                    result.isFailure -> if (manual) toast(activity, "GitHub недоступен: ${result.exceptionOrNull()?.message}." +
+                        (if (Vpn.localProxy == 0) " Включите VPN в BypassHub и проверьте ещё раз — обновление пойдёт через него." else ""))
                     rel == null || !isNewer(rel.version, BuildConfig.VERSION_NAME) ->
                         if (manual) toast(activity, "У вас последняя версия (${BuildConfig.VERSION_NAME})")
                     else -> offer(activity, rel)
@@ -115,7 +146,7 @@ object Updater {
             val apk = File(dir, "BypassHub-${rel.version}.apk")
             val error = try {
                 var lastPct = -1
-                Net.download(rel.url, apk) { done, total ->
+                Net.download(rel.url, apk, { done, total ->
                     val pct = if (total > 0) (done * 100 / total).toInt() else -1
                     if (pct != lastPct) {
                         lastPct = pct
@@ -123,7 +154,7 @@ object Updater {
                             dialog.setMessage(if (pct >= 0) "Скачивание… $pct%" else "Скачивание… ${done / 1024 / 1024} МБ")
                         }
                     }
-                }
+                }, rel.proxyPort)
                 if (rel.sha256 != null && sha256(apk) != rel.sha256.lowercase()) {
                     apk.delete()
                     "файл повреждён (контрольная сумма не совпала)"

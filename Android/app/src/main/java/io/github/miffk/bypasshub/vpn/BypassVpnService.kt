@@ -111,9 +111,11 @@ class BypassVpnService : VpnService(), Platform {
             }
             if (Store.ruDirect) Rules.update(this, onlyMissing = true)
             val (apiPort, secret) = apiEndpoint()
-            val config = Config.build(proxy, Store.ruDirect, Rules.files(this), apiPort, secret, bypass)
+            val localProxy = apiEndpoint().first
+            val config = Config.build(proxy, Store.ruDirect, Rules.files(this), apiPort, secret, bypass, localProxy)
             LogBuffer.add("Запуск VPN: ${Vpn.serverName}")
             runCore(config, apiPort, secret, getString(R.string.vpn_connected, Vpn.serverName))
+            Vpn.localProxy = localProxy
             Thread.sleep(1500)
             Vpn.refreshGroup()
         } catch (e: Exception) {
