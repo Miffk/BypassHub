@@ -24,6 +24,7 @@ import android.widget.TextView
 import android.widget.Toast
 import io.github.miffk.bypasshub.AUTO
 import io.github.miffk.bypasshub.BuildConfig
+import io.github.miffk.bypasshub.Bypass
 import io.github.miffk.bypasshub.LogBuffer
 import io.github.miffk.bypasshub.Profile
 import io.github.miffk.bypasshub.Rules
@@ -46,17 +47,17 @@ class MainActivity : Activity() {
 
     private lateinit var content: FrameLayout
     private val tabs = linkedMapOf<String, TextView>()
-    private var page = "vpn"
+    private var page = "home"
     private val main = Handler(Looper.getMainLooper())
     private var lastPing = 0L
     // живые данные (состояние, текущий сервер, пинг) есть только на вкладке VPN; остальные вкладки
     // перестраиваются по действиям — иначе стирался бы вводимый ключ и сбивалась прокрутка
-    private val renderer = { if (page == "vpn") render() }
+    private val renderer = { if (page == "home") render() }
     private val logRenderer = { if (page == "log") renderLogText() }
     private var logView: TextView? = null
     private val poll = object : Runnable {
         override fun run() {
-            if (Vpn.running) Vpn.io.execute { Vpn.refreshGroup() }
+            if (Vpn.running && Vpn.kind != "bypass") Vpn.io.execute { Vpn.refreshGroup() }
             main.postDelayed(this, 3000)
         }
     }
@@ -75,21 +76,27 @@ class MainActivity : Activity() {
         })
         root.addView(header)
 
+        // на узких экранах вкладки прокручиваются, на широких — растягиваются на всю ширину
+        val tabScroll = android.widget.HorizontalScrollView(this).apply {
+            isFillViewport = true
+            isHorizontalScrollBarEnabled = false
+        }
         val tabRow = Ui.hbox(this).apply { setPadding(dp(14), 0, dp(14), dp(8)) }
-        for ((key, label) in listOf("vpn" to "VPN", "servers" to "Серверы", "settings" to "Настройки", "log" to "Журнал")) {
+        tabScroll.addView(tabRow)
+        for ((key, label) in listOf("home" to "Главная", "vpn" to "VPN", "bypass" to "Обход",
+                                    "settings" to "Настройки", "log" to "Журнал")) {
             val t = Ui.text(this, label, 15f, Ui.MUTED, true).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(14), dp(10), dp(14), dp(10))
+                setPadding(dp(12), dp(10), dp(12), dp(10))
                 isFocusable = true
                 isClickable = true
                 setOnClickListener { show(key) }
             }
             tabs[key] = t
-            tabRow.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = dp(6)
-            })
+            tabRow.addView(t, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
         }
-        root.addView(tabRow)
+        root.addView(tabScroll)
 
         content = FrameLayout(this)
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -99,7 +106,7 @@ class MainActivity : Activity() {
             PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
         }
-        show("vpn")
+        show("home")
         handleIntent(intent)
         Updater.checkInBackground(this)
     }
@@ -155,7 +162,7 @@ class MainActivity : Activity() {
             t.background = Ui.stateful(this, if (k == key) Ui.gradient(this, 12) else Ui.rounded(this, Color.TRANSPARENT, 12), 12)
         }
         render()
-        if (key == "vpn") maybePing()
+        if (key == "home") maybePing()
     }
 
     private var renderedPage = ""
@@ -172,8 +179,9 @@ class MainActivity : Activity() {
             minOf(resources.displayMetrics.widthPixels, dp(760)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
         scroll.addView(holder)
         when (page) {
-            "vpn" -> buildVpn(column)
-            "servers" -> buildServers(column)
+            "home" -> buildHome(column)
+            "vpn" -> buildServers(column)
+            "bypass" -> buildBypass(column)
             "settings" -> buildSettings(column)
             "log" -> buildLog(column)
         }
@@ -184,54 +192,34 @@ class MainActivity : Activity() {
         if (oldScroll > 0) scroll.post { scroll.scrollTo(0, oldScroll) }
     }
 
-    // ---------------------------------------------------------------- VPN
-    private fun toggle() {
-        when (Vpn.status) {
-            Vpn.Status.RUNNING, Vpn.Status.STARTING -> Vpn.stop(this)
-            Vpn.Status.STOPPING -> {}
-            Vpn.Status.STOPPED -> {
-                if (Store.profiles().isEmpty()) {
-                    toast("Сначала добавьте свой сервер")
-                    show("servers")
-                    return
-                }
-                val prepare = vpnPrepareIntent(this)
-                @Suppress("DEPRECATION")
-                if (prepare != null) startActivityForResult(prepare, REQ_VPN) else Vpn.start(this)
-            }
+    // ---------------------------------------------------------------- главная
+    /** Включить или выключить режим. VPN и обход — оба через VpnService, поэтому работает что-то одно. */
+    private fun toggle(m: String) {
+        val current = Vpn.mode
+        if (current == m) {
+            if (Vpn.status != Vpn.Status.STOPPING) Vpn.stop(this)
+            return
         }
+        if (m == "vpn" && Store.profiles().isEmpty()) {
+            toast("Сначала добавьте свой сервер")
+            show("vpn")
+            return
+        }
+        if (current.isNotEmpty()) {
+            toast(if (m == "vpn") "Обход выключен: на Android одновременно работает только одно VPN-подключение"
+                  else "VPN выключен: на Android одновременно работает только одно VPN-подключение")
+        }
+        Store.mode = m
+        val prepare = vpnPrepareIntent(this)
+        @Suppress("DEPRECATION")
+        if (prepare != null) startActivityForResult(prepare, REQ_VPN) else Vpn.start(this)
     }
 
-    private fun buildVpn(col: LinearLayout) {
-        val on = Vpn.running
-        val busy = Vpn.status == Vpn.Status.STARTING || Vpn.status == Vpn.Status.STOPPING
-        // большая круглая кнопка
-        val size = dp(190)
-        val power = TextView(this).apply {
-            tag = "power"
-            text = if (on) "ВКЛ" else if (busy) "…" else "ВЫКЛ"
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            textSize = 30f
-            typeface = Typeface.DEFAULT_BOLD
-            val bg = if (on) Ui.gradient(context, 0, shape = GradientDrawable.OVAL)
-                     else GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Ui.SURFACE2) }
-            val ring = GradientDrawable().apply { shape = GradientDrawable.OVAL; setStroke(dp(4), Ui.FOCUS) }
-            background = android.graphics.drawable.StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.LayerDrawable(arrayOf(bg, ring)))
-                addState(intArrayOf(), bg)
-            }
-            isFocusable = true
-            isClickable = true
-            setOnClickListener { toggle() }
-        }
-        col.addView(power, LinearLayout.LayoutParams(size, size).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = dp(16)
-        })
-
-        val (status, color) = when (Vpn.status) {
-            Vpn.Status.RUNNING -> {
+    /** (текст, цвет) состояния режима для плитки. */
+    private fun modeStatus(m: String): Pair<String, Int> {
+        val active = Vpn.mode == m
+        return when {
+            active && Vpn.status == Vpn.Status.RUNNING -> if (m == "bypass") "Включён" to Ui.GREEN else {
                 val g = Vpn.group
                 val cur = g?.current?.takeIf { it.isNotEmpty() }
                 val name = if (Vpn.kind == "vless" && cur != null) Vpn.nameOf(cur) else Vpn.serverName
@@ -239,24 +227,59 @@ class MainActivity : Activity() {
                 val prefix = if (g?.selected == AUTO) "Авто: " else ""
                 "Подключён: $prefix$name" + (if (ms != null) " · $ms мс" else "") to Ui.GREEN
             }
-            Vpn.Status.STARTING -> "Подключение…" to Ui.YELLOW
-            Vpn.Status.STOPPING -> "Отключение…" to Ui.YELLOW
-            Vpn.Status.STOPPED -> (Vpn.error?.let { "Ошибка: $it" } ?: "Выключен") to (if (Vpn.error != null) Ui.RED else Ui.MUTED)
+            active && Vpn.status == Vpn.Status.STARTING -> "Подключение…" to Ui.YELLOW
+            active && Vpn.status == Vpn.Status.STOPPING -> "Отключение…" to Ui.YELLOW
+            Vpn.status == Vpn.Status.STOPPED && Vpn.error != null && Store.mode == m -> "Ошибка: ${Vpn.error}" to Ui.RED
+            else -> "Выключен" to Ui.MUTED
         }
-        col.addView(Ui.text(this, status, 16f, color, true).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(14)))
-        val mode = if (Store.ruDirect) "Зарубежное — через VPN, российское — напрямую" else "Весь трафик — через VPN"
-        col.addView(Ui.text(this, mode, 13f, Ui.MUTED).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(4), bottom = dp(16)))
+    }
 
-        val profiles = Store.profiles()
-        if (profiles.isEmpty()) {
-            val c = Ui.card(this)
-            c.addView(Ui.text(this, "Серверов пока нет", 17f, Ui.TEXT, true))
-            c.addView(Ui.text(this, "Добавьте ключ vless://… от вашего VPN-сервиса или ключ AmneziaVPN vpn://… " +
-                "(AmneziaVPN → «Поделиться»).", 14f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(12)))
-            c.addView(Ui.button(this, "Добавить сервер") { show("servers") })
-            col.addView(c)
-            return
+    /** Плитка режима: вся карточка — кнопка (удобно и пальцем, и пультом). */
+    private fun tile(m: String, title: String, description: String): View {
+        val on = Vpn.mode == m && Vpn.status == Vpn.Status.RUNNING
+        val busy = Vpn.mode == m && (Vpn.status == Vpn.Status.STARTING || Vpn.status == Vpn.Status.STOPPING)
+        val row = Ui.hbox(this).apply {
+            tag = "tile:$m"
+            val p = dp(18)
+            setPadding(p, p, p, p)
+            background = Ui.stateful(context, Ui.rounded(context, Ui.SURFACE, 18, if (on) Ui.ACCENT2 else Ui.SURFACE,
+                if (on) 2 else 0), 18, Ui.SURFACE2)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { toggle(m) }
         }
+        val left = Ui.vbox(this)
+        left.addView(Ui.text(this, title, 19f, Ui.TEXT, true))
+        val (status, color) = modeStatus(m)
+        left.addView(Ui.text(this, status, 14f, color, true), Ui.lp(top = dp(4)))
+        left.addView(Ui.text(this, description, 13f, Ui.MUTED), Ui.lp(top = dp(4)))
+        row.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val size = dp(64)
+        val power = TextView(this).apply {
+            text = if (busy) "…" else "⏻"
+            gravity = Gravity.CENTER
+            setTextColor(if (on) Color.WHITE else Ui.MUTED)
+            textSize = 26f
+            background = if (on) Ui.gradient(context, 0, shape = GradientDrawable.OVAL)
+                         else GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Ui.SURFACE2) }
+        }
+        row.addView(power, LinearLayout.LayoutParams(size, size).apply { marginStart = dp(12) })
+        return row
+    }
+
+    private fun buildHome(col: LinearLayout) {
+        val profiles = Store.profiles()
+        val vpnDesc = when {
+            profiles.isEmpty() -> "Свой сервер VLESS или AmneziaVPN. Добавьте ключ на вкладке VPN."
+            Store.ruDirect -> "Зарубежное — через VPN, российское — напрямую"
+            else -> "Весь трафик — через VPN"
+        }
+        col.addView(tile("vpn", "VPN", vpnDesc), Ui.lp(top = dp(8)))
+        val bypassDesc = if (Store.bypassAll) "Без VPN и без root: разбиение TLS для всех сайтов"
+                         else "Без VPN и без root: YouTube, Discord и другие сайты из списков"
+        col.addView(tile("bypass", "Обход блокировок", bypassDesc), Ui.lp(top = dp(12), bottom = dp(16)))
+
+        if (profiles.isEmpty()) return
         val c = Ui.card(this)
         val head = Ui.hbox(this)
         head.addView(Ui.text(this, "Серверы", 17f, Ui.TEXT, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -390,6 +413,18 @@ class MainActivity : Activity() {
             }, Ui.lp(top = dp(10)))
             col.addView(c.margins(top = 14))
         }
+        val split = Ui.card(this)
+        split.addView(Ui.text(this, "Раздельное туннелирование", 17f, Ui.TEXT, true))
+        split.addView(Ui.switch(this, "Российское — напрямую", Store.ruDirect) {
+            Store.ruDirect = it
+            if (Vpn.running && Vpn.mode == "vpn") Vpn.start(this)
+        }.apply { tag = "ru" }, Ui.lp(top = dp(6)))
+        split.addView(Ui.text(this, "Через VPN идёт всё зарубежное. Напрямую, с домашнего IP, — сайты .ru, .рф, .su, " +
+            "российские IP-адреса и российские сервисы на «нерусских» доменах (VK, Яндекс, банки и др.) по базам " +
+            "roscomvpn. YouTube, Telegram, GitHub и Google Play всегда идут через VPN.", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
+        val age = Rules.age(this)?.let { SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(it)) }
+        split.addView(Ui.text(this, "Базы: " + (age?.let { "от $it" } ?: "скачаются при включении"), 12f, Ui.MUTED), Ui.lp(top = dp(6)))
+        col.addView(split.margins(top = 14))
     }
 
     private fun addServers(text: String) {
@@ -431,7 +466,7 @@ class MainActivity : Activity() {
 
     private fun remove(p: Profile) = confirm("Удалить сервер «${p.name}»?") {
         Store.remove(p.id)
-        if (Vpn.running) {
+        if (Vpn.running && Vpn.mode == "vpn") {
             if (Store.profiles().isEmpty()) Vpn.stop(this) else if (p.kind == "vless" || Vpn.serverName == p.name) Vpn.start(this)
         }
         render()
@@ -439,19 +474,6 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- настройки
     private fun buildSettings(col: LinearLayout) {
-        val c = Ui.card(this)
-        c.addView(Ui.text(this, "Раздельное туннелирование", 17f, Ui.TEXT, true))
-        c.addView(Ui.switch(this, "Российское — напрямую", Store.ruDirect) {
-            Store.ruDirect = it
-            if (Vpn.running) Vpn.start(this)
-        }.apply { tag = "ru" }, Ui.lp(top = dp(6)))
-        c.addView(Ui.text(this, "Через VPN идёт всё зарубежное. Напрямую, с домашнего IP, — сайты .ru, .рф, .su, " +
-            "российские IP-адреса и российские сервисы на «нерусских» доменах (VK, Яндекс, банки и др.) по базам " +
-            "roscomvpn. YouTube, Telegram, GitHub и Google Play всегда идут через VPN.", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
-        val age = Rules.age(this)?.let { SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(it)) }
-        c.addView(Ui.text(this, "Базы: " + (age?.let { "от $it" } ?: "скачаются при включении"), 12f, Ui.MUTED), Ui.lp(top = dp(6)))
-        col.addView(c)
-
         val a = Ui.card(this)
         a.addView(Ui.text(this, "Постоянная VPN", 17f, Ui.TEXT, true))
         a.addView(Ui.text(this, "Чтобы VPN включался сам после перезагрузки, в настройках Android выберите " +
@@ -463,7 +485,7 @@ class MainActivity : Activity() {
                 toast("На этом устройстве нет таких настроек")
             }
         })
-        col.addView(a.margins(top = 14))
+        col.addView(a)
 
         val u = Ui.card(this)
         u.addView(Ui.text(this, "Обновления", 17f, Ui.TEXT, true))
@@ -478,6 +500,98 @@ class MainActivity : Activity() {
             "Движки: sing-box (SagerNet, GPL-3.0) и AmneziaWG (Amnezia, MIT). Исходный код: github.com/Miffk/BypassHub",
             13f, Ui.MUTED), Ui.lp(top = dp(4)))
         col.addView(about.margins(top = 14))
+    }
+
+    // ---------------------------------------------------------------- обход
+    private fun restartBypass() {
+        if (Vpn.mode == "bypass" && Vpn.status == Vpn.Status.RUNNING) Vpn.start(this)
+    }
+
+    private fun buildBypass(col: LinearLayout) {
+        val how = Ui.card(this)
+        how.addView(Ui.text(this, "Обход блокировок без VPN", 17f, Ui.TEXT, true))
+        how.addView(Ui.text(this, "Работает без сервера и без root: трафик идёт напрямую, а к сайтам из списков " +
+            "BypassHub разбивает начало защищённого соединения на части — так провайдер не видит, какой сайт " +
+            "открывается, и не замедляет его. Списки — те же, что у zapret для Windows (YouTube, Discord, " +
+            "Twitch и др.). Включается на главной.", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
+        how.addView(Ui.text(this, "Голосовые звонки Discord и игры так не ускорить — для них нужен VPN. " +
+            "Если сайт всё равно не открывается, попробуйте другой способ ниже.", 13f, Ui.MUTED), Ui.lp(top = dp(6)))
+        col.addView(how)
+
+        val method = Ui.card(this)
+        method.addView(Ui.text(this, "Способ", 17f, Ui.TEXT, true))
+        for ((key, title, sub) in listOf(
+            Triple(Bypass.METHOD_TCP, "Разбивать TCP-пакеты", "Рекомендуется — работает у большинства провайдеров"),
+            Triple(Bypass.METHOD_RECORD, "Разбивать TLS-записи", "Если первый способ не помог"))) {
+            method.addView(optionRow("method:$key", title, sub, Store.bypassMethod == key) {
+                if (Store.bypassMethod != key) {
+                    Store.bypassMethod = key
+                    render()
+                    restartBypass()
+                }
+            })
+        }
+        method.addView(Ui.switch(this, "Применять ко всем сайтам", Store.bypassAll) {
+            Store.bypassAll = it
+            restartBypass()
+        }.apply { tag = "all" }, Ui.lp(top = dp(10)))
+        method.addView(Ui.text(this, "Кроме российских. Помогает с сайтами, которых нет в списках; QUIC при этом " +
+            "отключается для всех сайтов.", 12f, Ui.MUTED))
+        col.addView(method.margins(top = 14))
+
+        val user = Ui.card(this)
+        user.addView(Ui.text(this, "Свои сайты", 17f, Ui.TEXT, true))
+        user.addView(Ui.text(this, "По одному на строку, например example.com — поддомены учитываются автоматически.",
+            13f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(10)))
+        val input = Ui.input(this, "example.com", multiline = true).apply {
+            tag = "bypass-user"
+            setText(Store.bypassUser)
+        }
+        user.addView(input)
+        user.addView(Ui.button(this, "Сохранить", primary = false) {
+            val (suffix, exact) = Bypass.parse(input.text.lineSequence())
+            Store.bypassUser = (suffix + exact.map { "^$it" }).joinToString("\n")
+            input.setText(Store.bypassUser)
+            toast("Сохранено сайтов: ${suffix.size + exact.size}")
+            restartBypass()
+        }, Ui.lp(top = dp(10)))
+        col.addView(user.margins(top = 14))
+
+        val lists = Ui.card(this)
+        lists.addView(Ui.text(this, "Списки сайтов", 17f, Ui.TEXT, true))
+        val age = Bypass.age(this)?.let { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.US).format(Date(it)) }
+        lists.addView(Ui.text(this, "Из zapret-discord-youtube (Flowseal), обновляются раз в сутки при включении. " +
+            (age?.let { "Скачаны: $it." } ?: "Ещё не скачаны — пока используется встроенный список."), 13f, Ui.MUTED),
+            Ui.lp(top = dp(4), bottom = dp(10)))
+        lists.addView(Ui.button(this, "Обновить списки", primary = false) {
+            toast("Обновляю списки…")
+            Vpn.io.execute {
+                Bypass.update(this, force = true)
+                main.post {
+                    toast(if (Bypass.age(this) != null) "Списки обновлены" else "Не удалось скачать списки — см. журнал")
+                    render()
+                    restartBypass()
+                }
+            }
+        })
+        col.addView(lists.margins(top = 14))
+    }
+
+    /** Строка выбора одного варианта из нескольких. */
+    private fun optionRow(tag: String, title: String, subtitle: String, selected: Boolean, onClick: () -> Unit): View {
+        val row = Ui.vbox(this).apply {
+            this.tag = tag
+            val normal = Ui.rounded(context, Ui.SURFACE2, 12, if (selected) Ui.ACCENT else Ui.SURFACE2, if (selected) 2 else 0)
+            background = Ui.stateful(context, normal, 12, Ui.BORDER)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        row.addView(Ui.text(this, (if (selected) "● " else "○ ") + title, 15f, if (selected) Ui.FOCUS else Ui.TEXT, true))
+        row.addView(Ui.text(this, subtitle, 12f, Ui.MUTED))
+        row.layoutParams = Ui.lp(top = dp(8))
+        return row
     }
 
     // ---------------------------------------------------------------- журнал

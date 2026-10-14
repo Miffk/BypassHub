@@ -46,6 +46,25 @@ object Store {
         get() = prefs.getBoolean("ru_direct", true)
         set(value) = prefs.edit().putBoolean("ru_direct", value).apply()
 
+    /** Что запускает служба: «vpn» — свой VPN-сервер, «bypass» — обход блокировок без сервера.
+     *  На Android одновременно может работать только одно VPN-подключение. */
+    var mode: String
+        get() = prefs.getString("mode", "vpn") ?: "vpn"
+        set(value) = prefs.edit().putString("mode", value).apply()
+
+    /** Обход: способ разбиения (Bypass.METHOD_*), все сайты или только из списков, свои сайты. */
+    var bypassMethod: String
+        get() = prefs.getString("bypass_method", Bypass.METHOD_TCP) ?: Bypass.METHOD_TCP
+        set(value) = prefs.edit().putString("bypass_method", value).apply()
+
+    var bypassAll: Boolean
+        get() = prefs.getBoolean("bypass_all", false)
+        set(value) = prefs.edit().putBoolean("bypass_all", value).apply()
+
+    var bypassUser: String
+        get() = prefs.getString("bypass_user", "") ?: ""
+        set(value) = prefs.edit().putString("bypass_user", value).apply()
+
     /** Включать VPN при запуске приложения, если он был включён. */
     var wasEnabled: Boolean
         get() = prefs.getBoolean("enabled", false)

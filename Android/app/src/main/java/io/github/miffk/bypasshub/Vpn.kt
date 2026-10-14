@@ -16,7 +16,7 @@ object Vpn {
         private set
     @Volatile var error: String? = null
     @Volatile var serverName = ""
-    @Volatile var kind = ""                 // vless | awg
+    @Volatile var kind = ""                 // vless | awg | bypass
     @Volatile var api: ClashApi? = null      // есть, когда запущен sing-box
     @Volatile var groupTags: List<String> = emptyList()   // id серверов VLESS в запущенном конфиге
     @Volatile var group: ClashApi.GroupState? = null      // выбранный/текущий сервер и задержки
@@ -48,6 +48,20 @@ object Vpn {
 
     val running get() = status == Status.RUNNING
 
+    /** Что сейчас работает или запускается: «vpn», «bypass» или "" (выключено). */
+    val mode: String get() = when {
+        status == Status.STOPPED -> ""
+        kind == "bypass" -> "bypass"
+        kind.isEmpty() -> Store.mode
+        else -> "vpn"
+    }
+
+    /** Включить режим (vpn или bypass); работающий другой режим будет заменён. */
+    fun startMode(context: Context, m: String) {
+        Store.mode = m
+        start(context)
+    }
+
     /** Запустить (или перезапустить с новыми настройками). Разрешение VPN должно быть уже получено. */
     fun start(context: Context) {
         Store.wasEnabled = true
@@ -63,7 +77,7 @@ object Vpn {
 
     /** Выбран другой сервер: между серверами VLESS — на лету, иначе — перезапуск. */
     fun switchServer(context: Context) {
-        if (!running) return
+        if (!running || kind == "bypass") return
         val target = if (Store.isAuto()) AUTO else Store.activeProfile()?.id ?: return
         val a = api
         if (kind == "vless" && a != null && (target == AUTO || target in groupTags)) {

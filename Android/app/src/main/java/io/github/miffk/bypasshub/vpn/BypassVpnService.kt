@@ -16,6 +16,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import io.github.miffk.bypasshub.AUTO
+import io.github.miffk.bypasshub.Bypass
 import io.github.miffk.bypasshub.ClashApi
 import io.github.miffk.bypasshub.Config
 import io.github.miffk.bypasshub.Keys
@@ -75,9 +76,14 @@ class BypassVpnService : VpnService(), Platform {
 
     // ---------------------------------------------------------------- запуск
     private fun startVpn() {
+        Vpn.kind = ""
         Vpn.set(Vpn.Status.STARTING)
         stopCore()
         try {
+            if (Store.mode == "bypass") {
+                startBypass()
+                return
+            }
             val profiles = Store.profiles()
             if (profiles.isEmpty()) throw Exception("Сначала добавьте свой сервер: ключ vless://… или ключ AmneziaVPN vpn://…")
             val auto = Store.isAuto()
@@ -104,22 +110,45 @@ class BypassVpnService : VpnService(), Platform {
                 Vpn.serverName = Vpn.nameOf(if (selected in Vpn.groupTags || selected == AUTO) selected else vless[0].id)
             }
             if (Store.ruDirect) Rules.update(this, onlyMissing = true)
-            val apiPort = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
-            val secret = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+            val (apiPort, secret) = apiEndpoint()
             val config = Config.build(proxy, Store.ruDirect, Rules.files(this), apiPort, secret, bypass)
             LogBuffer.add("Запуск VPN: ${Vpn.serverName}")
-            Bhcore.start(config, this)
-            Vpn.api = ClashApi(apiPort, secret)
-            registerNetworkMonitor()
-            Vpn.set(Vpn.Status.RUNNING)
-            showNotification(getString(R.string.vpn_connected, Vpn.serverName))
+            runCore(config, apiPort, secret, getString(R.string.vpn_connected, Vpn.serverName))
             Thread.sleep(1500)
             Vpn.refreshGroup()
         } catch (e: Exception) {
             val msg = e.message ?: e.toString()
-            LogBuffer.add("Ошибка VPN: $msg")
+            LogBuffer.add("Ошибка: $msg")
             shutdown(msg)
         }
+    }
+
+    /** Обход блокировок: без сервера, всё напрямую, к сайтам из списков — с разбиением TLS. */
+    private fun startBypass() {
+        Vpn.kind = "bypass"
+        Vpn.groupTags = emptyList()
+        Vpn.serverName = "Обход блокировок"
+        Bypass.update(this)
+        val (suffix, exact) = Bypass.domains(this, Store.bypassUser)
+        val (apiPort, secret) = apiEndpoint()
+        val config = Bypass.config(suffix, exact, Store.bypassAll, Store.bypassMethod, apiPort, secret)
+        LogBuffer.add("Запуск обхода: сайтов в списке ${suffix.size + exact.size}" +
+            (if (Store.bypassAll) ", применяется ко всем сайтам" else ""))
+        runCore(config, apiPort, secret, getString(R.string.bypass_on))
+    }
+
+    private fun apiEndpoint(): Pair<Int, String> {
+        val port = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        val secret = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        return port to secret
+    }
+
+    private fun runCore(config: String, apiPort: Int, secret: String, notification: String) {
+        Bhcore.start(config, this)
+        Vpn.api = ClashApi(apiPort, secret)
+        registerNetworkMonitor()
+        Vpn.set(Vpn.Status.RUNNING)
+        showNotification(notification)
     }
 
     /** Endpoint из .conf — сразу IP: так ядру не нужен DNS, а адрес сервера идёт мимо туннеля. */
@@ -157,7 +186,7 @@ class BypassVpnService : VpnService(), Platform {
             foreground = false
         }
         Vpn.set(Vpn.Status.STOPPED, error)
-        if (error == null) LogBuffer.add("VPN выключен")
+        if (error == null) LogBuffer.add(if (Vpn.kind == "bypass") "Обход выключен" else "VPN выключен")
         stopSelf()
     }
 

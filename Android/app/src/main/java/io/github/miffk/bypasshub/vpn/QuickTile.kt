@@ -24,7 +24,7 @@ class QuickTile : TileService() {
         when {
             Vpn.status == Vpn.Status.RUNNING || Vpn.status == Vpn.Status.STARTING -> Vpn.stop(this)
             // нет разрешения или серверов — открыть приложение
-            vpnPrepareIntent(this) != null || Store.profiles().isEmpty() -> openApp()
+            vpnPrepareIntent(this) != null || (Store.mode == "vpn" && Store.profiles().isEmpty()) -> openApp()
             else -> try {
                 Vpn.start(this)
             } catch (e: IllegalStateException) {

@@ -5,4 +5,5 @@
     <string name="vpn_connected">Подключено: %s</string>
     <string name="channel_vpn">VPN</string>
     <string name="action_disconnect">Отключить</string>
+    <string name="bypass_on">Обход блокировок включён</string>
 </resources>
