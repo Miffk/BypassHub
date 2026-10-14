@@ -58,6 +58,15 @@
         </service>
 
         <service
+            android:name=".vpn.TgProxyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local MTProto proxy for Telegram" />
+        </service>
+
+        <service
             android:name=".vpn.QuickTile"
             android:exported="true"
             android:icon="@drawable/ic_stat"

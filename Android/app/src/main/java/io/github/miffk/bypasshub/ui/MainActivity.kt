@@ -30,6 +30,7 @@ import io.github.miffk.bypasshub.Profile
 import io.github.miffk.bypasshub.R
 import io.github.miffk.bypasshub.Rules
 import io.github.miffk.bypasshub.Store
+import io.github.miffk.bypasshub.Tg
 import io.github.miffk.bypasshub.Updater
 import io.github.miffk.bypasshub.Vpn
 import io.github.miffk.bypasshub.bhcore.Bhcore
@@ -64,6 +65,7 @@ class MainActivity : Activity() {
     private val poll = object : Runnable {
         override fun run() {
             if (Vpn.running && Vpn.kind != "bypass") Vpn.io.execute { Vpn.refreshGroup() }
+            if (Tg.running && page == "home" && homeMode == "tg") render()
             main.postDelayed(this, 3000)
         }
     }
@@ -115,6 +117,7 @@ class MainActivity : Activity() {
             Triple("home", "Главная", R.drawable.ic_nav_home),
             Triple("vpn", "Серверы", R.drawable.ic_nav_servers),
             Triple("bypass", "Обход", R.drawable.ic_nav_bypass),
+            Triple("tg", "Telegram", R.drawable.ic_nav_telegram),
             Triple("settings", "Настройки", R.drawable.ic_nav_settings))) {
             val item = Ui.vbox(this).apply {
                 gravity = Gravity.CENTER
@@ -183,6 +186,8 @@ class MainActivity : Activity() {
         show("home")
         handleIntent(intent)
         Updater.checkInBackground(this)
+        // прокси для Telegram был включён — поднимаем снова (например, после перезапуска телефона)
+        if (Store.tgEnabled && Tg.status == Tg.Status.STOPPED) Tg.start(this)
     }
 
     @Deprecated("Activity API")
@@ -202,6 +207,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Vpn.listen(renderer)
+        Tg.listen(renderer)
         LogBuffer.listen(logRenderer)
         main.post(poll)
         render()
@@ -210,6 +216,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         Vpn.unlisten(renderer)
+        Tg.unlisten(renderer)
         LogBuffer.unlisten(logRenderer)
         main.removeCallbacks(poll)
         super.onPause()
@@ -269,10 +276,11 @@ class MainActivity : Activity() {
             "home" -> buildHome(column)
             "vpn" -> buildServers(column)
             "bypass" -> buildBypass(column)
+            "tg" -> buildTg(column)
             "settings" -> buildSettings(column)
             "log" -> buildLog(column)
         }
-        setGlow(Vpn.status == Vpn.Status.RUNNING)
+        setGlow(if (page == "home") modeOn(homeMode) else Vpn.status == Vpn.Status.RUNNING || Tg.running)
         val focused = currentFocus?.let { it.tag }
         content.removeAllViews()
         content.addView(scroll)
@@ -334,34 +342,15 @@ class MainActivity : Activity() {
             lastVpnMode = Vpn.mode
         }
         val m = homeMode
+        if (m == "tg") {
+            buildHomeTg(col)
+            return
+        }
         val active = Vpn.mode == m
         val on = active && Vpn.status == Vpn.Status.RUNNING
         val busy = active && (Vpn.status == Vpn.Status.STARTING || Vpn.status == Vpn.Status.STOPPING)
         val profiles = Store.profiles()
-
-        // переключатель режима: VPN | Обход блокировок
-        val seg = Ui.hbox(this).apply {
-            background = Ui.rounded(context, Ui.GLASS, 24)
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-        }
-        for ((key, label) in listOf("vpn" to "VPN", "bypass" to "Обход блокировок")) {
-            val sel = key == m
-            val running = Vpn.mode == key && Vpn.status == Vpn.Status.RUNNING
-            val t = Ui.text(this, (if (running) "● " else "") + label, 15f, if (sel) Color.WHITE else Ui.MUTED, true).apply {
-                gravity = Gravity.CENTER
-                isSingleLine = true
-                setPadding(dp(8), dp(10), dp(8), dp(10))
-            }
-            clickable(t, "seg:$key", 20, if (sel) Ui.gradient(this, 20) else Ui.rounded(this, Color.TRANSPARENT, 20)) {
-                if (homeMode != key) {
-                    homeMode = key
-                    render()
-                }
-            }
-            if (running && !sel) t.setTextColor(Ui.GREEN)
-            seg.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        col.addView(seg, Ui.lp(top = dp(6)))
+        segments(col, m)
 
         // подсказка, как в VPN-приложениях: что сейчас с трафиком
         val (hint, hintColor) = when {
@@ -463,6 +452,167 @@ class MainActivity : Activity() {
         homeServers(col, profiles)
     }
 
+    /** Работает ли режим (для точки на сегменте и свечения фона). */
+    private fun modeOn(m: String): Boolean =
+        if (m == "tg") Tg.running else Vpn.mode == m && Vpn.status == Vpn.Status.RUNNING
+
+    private fun segments(col: LinearLayout, m: String) {
+        // переключатель режима: VPN | Обход | Telegram
+        val seg = Ui.hbox(this).apply {
+            background = Ui.rounded(context, Ui.GLASS, 24)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        for ((key, label) in listOf("vpn" to "VPN", "bypass" to "Обход", "tg" to "Telegram")) {
+            val sel = key == m
+            val running = modeOn(key)
+            val t = Ui.text(this, (if (running) "● " else "") + label, 15f, if (sel) Color.WHITE else Ui.MUTED, true).apply {
+                gravity = Gravity.CENTER
+                isSingleLine = true
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+            }
+            clickable(t, "seg:$key", 20, if (sel) Ui.gradient(this, 20) else Ui.rounded(this, Color.TRANSPARENT, 20)) {
+                if (homeMode != key) {
+                    homeMode = key
+                    render()
+                }
+            }
+            if (running && !sel) t.setTextColor(Ui.GREEN)
+            seg.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        col.addView(seg, Ui.lp(top = dp(6)))
+
+    }
+
+    // ---------------------------------------------------------------- Telegram
+    private fun buildHomeTg(col: LinearLayout) {
+        segments(col, "tg")
+        val on = Tg.running
+        val busy = Tg.status == Tg.Status.STARTING
+        val (hint, hintColor) = if (on) "Telegram идёт через WebSocket — как web.telegram.org" to Ui.GREEN
+                                else "Telegram может замедляться провайдером" to Ui.SOFT_RED
+        col.addView(Ui.text(this, hint, 13f, hintColor).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(14)))
+
+        val pick = Ui.hbox(this).apply { setPadding(dp(14), dp(12), dp(18), dp(12)) }
+        clickable(pick, "pick:tg", 30, glass(30, Ui.BORDER)) { show("tg") }
+        val badge = FrameLayout(this).apply { background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Ui.SURFACE2)
+        } }
+        badge.addView(icon(R.drawable.ic_nav_telegram, if (on) Ui.ACCENT2 else Ui.TEXT, 24),
+            FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        pick.addView(badge, LinearLayout.LayoutParams(dp(46), dp(46)))
+        val texts = Ui.vbox(this)
+        texts.addView(Ui.text(this, "Прокси для Telegram", 13f, Ui.MUTED))
+        texts.addView(Ui.text(this, "${Tg.HOST}:${Store.tgPort}", 17f, Ui.TEXT, true))
+        pick.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(14) })
+        pick.addView(Ui.text(this, "›", 26f, Ui.MUTED))
+        col.addView(pick, Ui.lp(top = dp(12)))
+
+        val title = when {
+            busy -> "Запуск…"
+            on -> "Прокси работает"
+            else -> "Прокси выключен"
+        }
+        col.addView(Ui.text(this, title, 20f, Ui.TEXT, true).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(44)))
+        val err = Tg.error
+        if (Tg.status == Tg.Status.STOPPED && err != null) {
+            col.addView(Ui.text(this, "Ошибка: $err", 13f, Ui.RED).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(6)))
+        }
+        col.addView(powerSwitch("tg", on || busy, busy).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(260), dp(76)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(18)
+            }
+        })
+        val stats = if (on) try { Bhcore.tgStats() } catch (e: Throwable) { "" } else ""
+        col.addView(Ui.text(this, stats.ifEmpty { "Работает вместе с VPN или обходом — можно держать включённым" },
+            13f, Ui.MUTED).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(14), bottom = dp(40)))
+
+        val c = Ui.vbox(this).apply {
+            background = glass()
+            setPadding(dp(18), dp(16), dp(18), dp(18))
+        }
+        c.addView(Ui.text(this, "Подключить Telegram", 16f, Ui.TEXT, true))
+        c.addView(Ui.text(this, "Один раз: Telegram откроется и предложит добавить прокси — нажмите «Подключить». " +
+            "Дальше достаточно включать прокси здесь.", 13f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(12)))
+        c.addView(Ui.button(this, "Открыть в Telegram") { openTelegramLink() }.apply { tag = "tg-open" })
+        col.addView(c)
+    }
+
+    private fun openTelegramLink() {
+        if (!Tg.running) {
+            toast("Сначала включите прокси")
+            Tg.start(this)
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(Tg.link())))
+        } catch (e: android.content.ActivityNotFoundException) {
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                .setPrimaryClip(android.content.ClipData.newPlainText("TG proxy", Tg.link()))
+            toast("Telegram не найден — ссылка на прокси скопирована")
+        }
+    }
+
+    private fun buildTg(col: LinearLayout) {
+        val how = Ui.card(this)
+        how.addView(Ui.text(this, "TG WS Proxy", 17f, Ui.TEXT, true))
+        how.addView(Ui.text(this, "Локальный прокси для Telegram на этом телефоне. Он пускает Telegram через " +
+            "WebSocket — так же, как работает web.telegram.org, — и провайдер его не замедляет. VPN не нужен; " +
+            "работает и вместе с VPN или обходом. Основан на tg-ws-proxy (Flowseal).", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
+        val status = when (Tg.status) {
+            Tg.Status.RUNNING -> "Работает · ${Tg.HOST}:${Store.tgPort}" to Ui.GREEN
+            Tg.Status.STARTING -> "Запуск…" to Ui.YELLOW
+            Tg.Status.STOPPED -> (Tg.error?.let { "Ошибка: $it" } ?: "Выключен") to (if (Tg.error != null) Ui.RED else Ui.MUTED)
+        }
+        how.addView(Ui.text(this, status.first, 14f, status.second, true), Ui.lp(top = dp(10), bottom = dp(10)))
+        val bar = Ui.hbox(this)
+        bar.addView(Ui.button(this, if (Tg.status == Tg.Status.STOPPED) "Включить" else "Выключить") {
+            if (Tg.status == Tg.Status.STOPPED) Tg.start(this) else Tg.stop(this)
+            main.postDelayed({ render() }, 300)
+        }.apply { tag = "tg-toggle" }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+        bar.addView(Ui.button(this, "Открыть в Telegram", primary = false) { openTelegramLink() },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        how.addView(bar)
+        col.addView(how)
+
+        val opt = Ui.card(this)
+        opt.addView(Ui.text(this, "Настройки", 17f, Ui.TEXT, true))
+        opt.addView(Ui.switch(this, "Запасной путь через Cloudflare", Store.tgCF) {
+            Store.tgCF = it
+            Tg.restartIfRunning(this)
+        }.apply { tag = "tg-cf" }, Ui.lp(top = dp(6)))
+        opt.addView(Ui.text(this, "Если WebSocket Telegram недоступен, прокси подключится через домены tg-ws-proxy " +
+            "на Cloudflare, а потом — напрямую.", 12f, Ui.MUTED))
+        opt.addView(Ui.text(this, "Порт", 14f, Ui.TEXT, true), Ui.lp(top = dp(14), bottom = dp(6)))
+        val port = Ui.input(this, "1443").apply {
+            tag = "tg-port"
+            setText(Store.tgPort.toString())
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        }
+        opt.addView(port)
+        val row = Ui.hbox(this)
+        row.addView(Ui.button(this, "Сохранить порт", primary = false) {
+            val p = port.text.toString().trim().toIntOrNull()
+            if (p == null || p !in 1024..65535) {
+                toast("Порт — число от 1024 до 65535")
+            } else if (p != Store.tgPort) {
+                Store.tgPort = p
+                Tg.restartIfRunning(this)
+                toast("Сохранено. Добавьте прокси в Telegram заново — кнопкой «Открыть в Telegram»")
+                render()
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+        row.addView(Ui.button(this, "Новый секрет", primary = false) {
+            confirm("Создать новый секрет? Старый прокси в Telegram перестанет работать — его нужно будет добавить заново.") {
+                Store.tgSecret = Bhcore.newTGSecret()
+                Tg.restartIfRunning(this)
+                render()
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        opt.addView(row, Ui.lp(top = dp(10)))
+        col.addView(opt.margins(top = 14))
+    }
+
     /** Переключатель «Выкл | Вкл» с кнопкой питания; бегунок переезжает при нажатии. */
     private fun powerSwitch(m: String, right: Boolean, busy: Boolean): View {
         val track = FrameLayout(this).apply {
@@ -502,11 +652,15 @@ class MainActivity : Activity() {
             rightMargin = dp(6)
         })
         track.setOnClickListener {
-            if (Vpn.status == Vpn.Status.STOPPING) return@setOnClickListener
+            if (m != "tg" && Vpn.status == Vpn.Status.STOPPING) return@setOnClickListener
             // бегунок сразу едет на другую сторону, а состояние догонит его, когда служба ответит
             val shift = (dp(260) - dp(12) - dp(150)).toFloat()
             thumb.animate().translationX(if (right) -shift else shift).setDuration(220).start()
-            toggle(m)
+            if (m == "tg") {
+                if (Tg.status == Tg.Status.STOPPED) Tg.start(this) else Tg.stop(this)
+            } else {
+                toggle(m)
+            }
         }
         return track
     }

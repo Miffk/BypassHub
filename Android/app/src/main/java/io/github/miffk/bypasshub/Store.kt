@@ -65,6 +65,23 @@ object Store {
         get() = prefs.getString("bypass_user", "") ?: ""
         set(value) = prefs.edit().putString("bypass_user", value).apply()
 
+    /** TG WS Proxy: был ли включён, порт, секрет (32 hex), запасной путь через Cloudflare. */
+    var tgEnabled: Boolean
+        get() = prefs.getBoolean("tg_enabled", false)
+        set(value) = prefs.edit().putBoolean("tg_enabled", value).apply()
+
+    var tgPort: Int
+        get() = prefs.getInt("tg_port", 1443)
+        set(value) = prefs.edit().putInt("tg_port", value).apply()
+
+    var tgSecret: String
+        get() = prefs.getString("tg_secret", null) ?: io.github.miffk.bypasshub.bhcore.Bhcore.newTGSecret().also { tgSecret = it }
+        set(value) = prefs.edit().putString("tg_secret", value).apply()
+
+    var tgCF: Boolean
+        get() = prefs.getBoolean("tg_cf", true)
+        set(value) = prefs.edit().putBoolean("tg_cf", value).apply()
+
     /** Включать VPN при запуске приложения, если он был включён. */
     var wasEnabled: Boolean
         get() = prefs.getBoolean("enabled", false)
