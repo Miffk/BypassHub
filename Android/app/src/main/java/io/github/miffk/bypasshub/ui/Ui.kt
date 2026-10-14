@@ -32,6 +32,13 @@ object Ui {
     val YELLOW = Color.parseColor("#f6c343")
     val RED = Color.parseColor("#ff6b6b")
     val FOCUS = Color.parseColor("#c9b8ff")
+    val SOFT_RED = Color.parseColor("#ff8f80")
+    val NAV = Color.parseColor("#0b0f13")                 // нижняя панель
+    val GLASS = Color.argb(0xCC, 0x1b, 0x21, 0x29)          // полупрозрачные карточки главной
+    val DIVIDER = Color.argb(0x40, 0x9a, 0xa3, 0xad)
+    val TRACK = Color.parseColor("#0a0d11")               // дорожка переключателя
+    val THUMB = Color.parseColor("#3a4658")
+    val THUMB_CIRCLE = Color.parseColor("#55657c")
 
     fun Context.dp(v: Float): Int = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics).toInt()
     fun Context.dp(v: Int): Int = dp(v.toFloat())

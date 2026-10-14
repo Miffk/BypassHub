@@ -27,6 +27,7 @@ import io.github.miffk.bypasshub.BuildConfig
 import io.github.miffk.bypasshub.Bypass
 import io.github.miffk.bypasshub.LogBuffer
 import io.github.miffk.bypasshub.Profile
+import io.github.miffk.bypasshub.R
 import io.github.miffk.bypasshub.Rules
 import io.github.miffk.bypasshub.Store
 import io.github.miffk.bypasshub.Updater
@@ -46,8 +47,13 @@ class MainActivity : Activity() {
     }
 
     private lateinit var content: FrameLayout
-    private val tabs = linkedMapOf<String, TextView>()
+    private lateinit var glow: GradientDrawable
+    /** Нижняя панель: ключ → (значок, подпись). «Журнал» открывается из «Настроек». */
+    private val nav = linkedMapOf<String, Pair<android.widget.ImageView, TextView>>()
     private var page = "home"
+    /** Какой режим показывает главная (VPN или обход) — переключается сегментом вверху. */
+    private var homeMode = "vpn"
+    private var lastVpnMode = ""
     private val main = Handler(Looper.getMainLooper())
     private var lastPing = 0L
     // живые данные (состояние, текущий сервер, пинг) есть только на вкладке VPN; остальные вкладки
@@ -65,46 +71,110 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- жизненный цикл
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Ui.BG
-        window.navigationBarColor = Ui.BG
-        val root = Ui.vbox(this).apply { setBackgroundColor(Ui.BG) }
+        // рисуем под системными панелями сами и отступаем на их высоту (на Android 15 это обязательно)
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+        @Suppress("DEPRECATION")
+        window.statusBarColor = Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
 
-        val header = Ui.hbox(this).apply { setPadding(dp(20), dp(16), dp(20), dp(8)) }
-        header.addView(Ui.text(this, "BypassHub", 24f, Ui.TEXT, true).apply {
-            paint.shader = android.graphics.LinearGradient(0f, 0f, dp(150).toFloat(), 0f, Ui.ACCENT, Ui.ACCENT2,
+        // фон: тёмный с мягким свечением посередине (цвет свечения зависит от состояния)
+        glow = GradientDrawable().apply {
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = maxOf(resources.displayMetrics.widthPixels, dp(360)) * 0.85f
+            setGradientCenter(0.5f, 0.36f)
+        }
+        setGlow(false)
+        val root = Ui.vbox(this).apply {
+            background = android.graphics.drawable.LayerDrawable(arrayOf(android.graphics.drawable.ColorDrawable(Ui.BG), glow))
+        }
+
+        val header = Ui.hbox(this).apply { setPadding(dp(20), dp(16), dp(20), dp(4)) }
+        header.addView(Ui.text(this, "BypassHub", 22f, Ui.TEXT, true).apply {
+            paint.shader = android.graphics.LinearGradient(0f, 0f, dp(140).toFloat(), 0f, Ui.ACCENT, Ui.ACCENT2,
                 android.graphics.Shader.TileMode.CLAMP)
         })
         root.addView(header)
 
-        // вкладки — всегда в одну строку: шрифт уменьшается под ширину экрана, на совсем узких — прокрутка
-        val tabScroll = android.widget.HorizontalScrollView(this).apply {
-            isFillViewport = true
-            isHorizontalScrollBarEnabled = false
+        content = FrameLayout(this)
+        root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        // нижняя панель — до неё удобно дотянуться большим пальцем
+        val bar = Ui.hbox(this).apply {
+            setBackgroundColor(Ui.NAV)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
-        val tabRow = Ui.hbox(this).apply { setPadding(dp(10), 0, dp(10), dp(8)) }
-        tabScroll.addView(tabRow)
-        for ((key, label) in listOf("home" to "Главная", "vpn" to "VPN", "bypass" to "Обход",
-                                    "settings" to "Настройки", "log" to "Журнал")) {
-            val t = Ui.text(this, label, 15f, Ui.MUTED, true).apply {
+        for ((key, label, icon) in listOf(
+            Triple("home", "Главная", R.drawable.ic_nav_home),
+            Triple("vpn", "Серверы", R.drawable.ic_nav_servers),
+            Triple("bypass", "Обход", R.drawable.ic_nav_bypass),
+            Triple("settings", "Настройки", R.drawable.ic_nav_settings))) {
+            val item = Ui.vbox(this).apply {
                 gravity = Gravity.CENTER
-                isSingleLine = true
-                setPadding(dp(10), dp(10), dp(10), dp(10))
+                setPadding(0, dp(6), 0, dp(6))
+                background = Ui.stateful(context, Ui.rounded(context, Color.TRANSPARENT, 14), 14, Ui.SURFACE2)
                 isFocusable = true
                 isClickable = true
                 setOnClickListener { show(key) }
             }
-            tabs[key] = t
-            tabRow.addView(t, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
+            val image = android.widget.ImageView(this).apply { setImageResource(icon) }
+            item.addView(image, LinearLayout.LayoutParams(dp(24), dp(24)))
+            val text = Ui.text(this, label, 12f, Ui.MUTED).apply {
+                isSingleLine = true
+                gravity = Gravity.CENTER
+            }
+            item.addView(text, Ui.lp(w = ViewGroup.LayoutParams.WRAP_CONTENT, top = dp(3)))
+            nav[key] = image to text
+            bar.addView(item, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(2)
+                marginEnd = dp(2)
+            })
         }
-        tabScroll.addOnLayoutChangeListener { v, l, _, r, _, ol, _, or, _ ->
-            if (r - l != or - ol) v.post { fitTabs(r - l) }
-        }
-        root.addView(tabScroll)
+        root.addView(bar)
 
-        content = FrameLayout(this)
-        root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            var top: Int
+            var bottom: Int
+            var left = 0
+            var right = 0
+            var ime = 0
+            if (Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or
+                    android.view.WindowInsets.Type.displayCutout())
+                top = bars.top
+                bottom = bars.bottom
+                left = bars.left
+                right = bars.right
+                ime = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom
+            } else {
+                @Suppress("DEPRECATION")
+                top = insets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                bottom = insets.systemWindowInsetBottom
+                // в старых Android клавиатура входит в нижний отступ
+                if (bottom > dp(150)) {
+                    ime = bottom
+                    bottom = 0
+                }
+            }
+            root.setPadding(left, 0, right, 0)
+            header.setPadding(dp(20), top + dp(10), dp(20), dp(4))
+            // пока открыта клавиатура, панель не нужна — поле ввода остаётся видно
+            bar.visibility = if (ime > 0) View.GONE else View.VISIBLE
+            bar.setPadding(dp(6), dp(6), dp(6), bottom + dp(6))
+            content.setPadding(0, 0, 0, if (ime > 0) ime else 0)
+            insets
+        }
         setContentView(root)
+        homeMode = Vpn.mode.ifEmpty { Store.mode }
+        lastVpnMode = Vpn.mode
 
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED) {
@@ -113,6 +183,15 @@ class MainActivity : Activity() {
         show("home")
         handleIntent(intent)
         Updater.checkInBackground(this)
+    }
+
+    @Deprecated("Activity API")
+    override fun onBackPressed() {
+        when (page) {
+            "home" -> @Suppress("DEPRECATION") super.onBackPressed()
+            "log" -> show("settings")
+            else -> show("home")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -158,32 +237,16 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ---------------------------------------------------------------- вкладки
-    /** Самый крупный шрифт (от 15 до 12 sp) и отступы, при которых все вкладки помещаются в ширину экрана. */
-    private fun fitTabs(available: Int) {
-        if (available <= 0 || tabs.isEmpty()) return
-        val paint = android.text.TextPaint(tabs.values.first().paint)
-        fun fits(size: Float, pad: Int): Boolean {
-            paint.textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, size,
-                resources.displayMetrics)
-            val text = tabs.values.sumOf { paint.measureText(it.text.toString()).toDouble() }
-            return text + tabs.size * (2 * dp(pad) + dp(4)) + dp(20) <= available
-        }
-        var pad = 10
-        var size = 15f
-        while (size > 12f && !fits(size, pad)) size -= 0.5f
-        if (!fits(size, pad)) pad = 6
-        tabs.values.forEach {
-            it.textSize = size
-            it.setPadding(dp(pad), dp(10), dp(pad), dp(10))
-        }
-    }
-
+    // ---------------------------------------------------------------- навигация
     private fun show(key: String) {
         page = key
-        for ((k, t) in tabs) {
-            t.setTextColor(if (k == key) Color.WHITE else Ui.MUTED)
-            t.background = Ui.stateful(this, if (k == key) Ui.gradient(this, 12) else Ui.rounded(this, Color.TRANSPARENT, 12), 12)
+        val active = if (key == "log") "settings" else key
+        for ((k, v) in nav) {
+            val (image, text) = v
+            val on = k == active
+            image.setColorFilter(if (on) Color.WHITE else Ui.MUTED)
+            text.setTextColor(if (on) Color.WHITE else Ui.MUTED)
+            text.typeface = if (on) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
         render()
         if (key == "home") maybePing()
@@ -196,11 +259,11 @@ class MainActivity : Activity() {
         val oldScroll = (content.getChildAt(0) as? ScrollView)?.scrollY?.takeIf { renderedPage == page } ?: 0
         renderedPage = page
         val scroll = ScrollView(this).apply { isFillViewport = true }
-        val column = Ui.vbox(this).apply { setPadding(dp(16), dp(4), dp(16), dp(24)) }
+        val column = Ui.vbox(this).apply { setPadding(dp(16), dp(4), dp(16), dp(20)) }
         // на планшетах и ТВ — колонка ограниченной ширины по центру
         val holder = FrameLayout(this)
         holder.addView(column, FrameLayout.LayoutParams(
-            minOf(resources.displayMetrics.widthPixels, dp(760)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
+            minOf(resources.displayMetrics.widthPixels, dp(640)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
         scroll.addView(holder)
         when (page) {
             "home" -> buildHome(column)
@@ -209,11 +272,17 @@ class MainActivity : Activity() {
             "settings" -> buildSettings(column)
             "log" -> buildLog(column)
         }
+        setGlow(Vpn.status == Vpn.Status.RUNNING)
         val focused = currentFocus?.let { it.tag }
         content.removeAllViews()
         content.addView(scroll)
         if (focused != null) content.findViewWithTag<View>(focused)?.requestFocus()
         if (oldScroll > 0) scroll.post { scroll.scrollTo(0, oldScroll) }
+    }
+
+    /** Свечение фона: синее — выключено, зелёное — работает. */
+    private fun setGlow(on: Boolean) {
+        glow.colors = intArrayOf(if (on) Color.argb(70, 44, 182, 125) else Color.argb(80, 58, 92, 190), Color.TRANSPARENT)
     }
 
     // ---------------------------------------------------------------- главная
@@ -239,84 +308,275 @@ class MainActivity : Activity() {
         if (prepare != null) startActivityForResult(prepare, REQ_VPN) else Vpn.start(this)
     }
 
-    /** (текст, цвет) состояния режима для плитки. */
-    private fun modeStatus(m: String): Pair<String, Int> {
-        val active = Vpn.mode == m
-        return when {
-            active && Vpn.status == Vpn.Status.RUNNING -> if (m == "bypass") "Включён" to Ui.GREEN else {
-                val g = Vpn.group
-                val cur = g?.current?.takeIf { it.isNotEmpty() }
-                val name = if (Vpn.kind == "vless" && cur != null) Vpn.nameOf(cur) else Vpn.serverName
-                val ms = cur?.let { Vpn.pings[it] }
-                val prefix = if (g?.selected == AUTO) "Авто: " else ""
-                "Подключён: $prefix$name" + (if (ms != null) " · $ms мс" else "") to Ui.GREEN
-            }
-            active && Vpn.status == Vpn.Status.STARTING -> "Подключение…" to Ui.YELLOW
-            active && Vpn.status == Vpn.Status.STOPPING -> "Отключение…" to Ui.YELLOW
-            Vpn.status == Vpn.Status.STOPPED && Vpn.error != null && Store.mode == m -> "Ошибка: ${Vpn.error}" to Ui.RED
-            else -> "Выключен" to Ui.MUTED
-        }
+    /** Полупрозрачная карточка — сквозь неё видно свечение фона. */
+    private fun glass(radiusDp: Int = 22, stroke: Int = 0): GradientDrawable =
+        Ui.rounded(this, Ui.GLASS, radiusDp, stroke, if (stroke != 0) 1 else 0)
+
+    private fun clickable(v: View, tag: String, radiusDp: Int, normal: android.graphics.drawable.Drawable, onClick: () -> Unit) {
+        v.tag = tag
+        v.background = Ui.stateful(this, normal, radiusDp, Ui.SURFACE2)
+        v.isFocusable = true
+        v.isClickable = true
+        v.setOnClickListener { onClick() }
     }
 
-    /** Плитка режима: вся карточка — кнопка (удобно и пальцем, и пультом). */
-    private fun tile(m: String, title: String, description: String): View {
-        val on = Vpn.mode == m && Vpn.status == Vpn.Status.RUNNING
-        val busy = Vpn.mode == m && (Vpn.status == Vpn.Status.STARTING || Vpn.status == Vpn.Status.STOPPING)
-        val row = Ui.hbox(this).apply {
-            tag = "tile:$m"
-            val p = dp(18)
-            setPadding(p, p, p, p)
-            background = Ui.stateful(context, Ui.rounded(context, Ui.SURFACE, 18, if (on) Ui.ACCENT2 else Ui.SURFACE,
-                if (on) 2 else 0), 18, Ui.SURFACE2)
-            isFocusable = true
-            isClickable = true
-            setOnClickListener { toggle(m) }
+    private fun icon(res: Int, color: Int, sizeDp: Int = 22): android.widget.ImageView =
+        android.widget.ImageView(this).apply {
+            setImageResource(res)
+            setColorFilter(color)
+            layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
         }
-        val left = Ui.vbox(this)
-        left.addView(Ui.text(this, title, 19f, Ui.TEXT, true))
-        val (status, color) = modeStatus(m)
-        left.addView(Ui.text(this, status, 14f, color, true), Ui.lp(top = dp(4)))
-        left.addView(Ui.text(this, description, 13f, Ui.MUTED), Ui.lp(top = dp(4)))
-        row.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val size = dp(64)
-        val power = TextView(this).apply {
-            text = if (busy) "…" else "⏻"
-            gravity = Gravity.CENTER
-            setTextColor(if (on) Color.WHITE else Ui.MUTED)
-            textSize = 26f
-            background = if (on) Ui.gradient(context, 0, shape = GradientDrawable.OVAL)
-                         else GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Ui.SURFACE2) }
-        }
-        row.addView(power, LinearLayout.LayoutParams(size, size).apply { marginStart = dp(12) })
-        return row
-    }
 
     private fun buildHome(col: LinearLayout) {
+        // главная показывает тот режим, который только что включили (в том числе из шторки)
+        if (Vpn.mode != lastVpnMode) {
+            if (Vpn.mode.isNotEmpty()) homeMode = Vpn.mode
+            lastVpnMode = Vpn.mode
+        }
+        val m = homeMode
+        val active = Vpn.mode == m
+        val on = active && Vpn.status == Vpn.Status.RUNNING
+        val busy = active && (Vpn.status == Vpn.Status.STARTING || Vpn.status == Vpn.Status.STOPPING)
         val profiles = Store.profiles()
-        val vpnDesc = when {
-            profiles.isEmpty() -> "Свой сервер VLESS или AmneziaVPN. Добавьте ключ на вкладке VPN."
+
+        // переключатель режима: VPN | Обход блокировок
+        val seg = Ui.hbox(this).apply {
+            background = Ui.rounded(context, Ui.GLASS, 24)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        for ((key, label) in listOf("vpn" to "VPN", "bypass" to "Обход блокировок")) {
+            val sel = key == m
+            val running = Vpn.mode == key && Vpn.status == Vpn.Status.RUNNING
+            val t = Ui.text(this, (if (running) "● " else "") + label, 15f, if (sel) Color.WHITE else Ui.MUTED, true).apply {
+                gravity = Gravity.CENTER
+                isSingleLine = true
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+            }
+            clickable(t, "seg:$key", 20, if (sel) Ui.gradient(this, 20) else Ui.rounded(this, Color.TRANSPARENT, 20)) {
+                if (homeMode != key) {
+                    homeMode = key
+                    render()
+                }
+            }
+            if (running && !sel) t.setTextColor(Ui.GREEN)
+            seg.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        col.addView(seg, Ui.lp(top = dp(6)))
+
+        // подсказка, как в VPN-приложениях: что сейчас с трафиком
+        val (hint, hintColor) = when {
+            on && m == "vpn" -> "Трафик идёт через ваш сервер" to Ui.GREEN
+            on -> "Заблокированные сайты открываются напрямую" to Ui.GREEN
+            m == "vpn" -> "Без VPN провайдер видит, какие сайты вы открываете" to Ui.SOFT_RED
+            else -> "YouTube и Discord могут замедляться провайдером" to Ui.SOFT_RED
+        }
+        col.addView(Ui.text(this, hint, 13f, hintColor).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(14)))
+
+        // выбранный сервер (или что делает обход) — нажатие открывает настройки режима
+        val pick = Ui.hbox(this).apply { setPadding(dp(14), dp(12), dp(18), dp(12)) }
+        clickable(pick, "pick:$m", 30, glass(30, Ui.BORDER)) { show(if (m == "vpn") "vpn" else "bypass") }
+        val badge = FrameLayout(this).apply { background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Ui.SURFACE2)
+        } }
+        val auto = Store.isAuto()
+        val badgeIcon = when {
+            m == "bypass" -> R.drawable.ic_nav_bypass
+            auto -> R.drawable.ic_auto
+            else -> R.drawable.ic_globe
+        }
+        badge.addView(icon(badgeIcon, if (on) Ui.ACCENT2 else Ui.TEXT, 24),
+            FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        pick.addView(badge, LinearLayout.LayoutParams(dp(46), dp(46)))
+        val texts = Ui.vbox(this)
+        val (caption, value) = if (m == "bypass") {
+            "Сайты для обхода" to (if (Store.bypassAll) "Все, кроме российских" else "YouTube, Discord и другие")
+        } else if (profiles.isEmpty()) {
+            "Сервер не добавлен" to "Нажмите, чтобы добавить"
+        } else {
+            val g = Vpn.group
+            val live = Vpn.running && Vpn.kind == "vless" && g?.selected == AUTO && g.current.isNotEmpty()
+            "Выбранный сервер" to when {
+                auto && live -> "Авто · ${Vpn.nameOf(g!!.current)}"
+                auto -> "Авто — лучший сервер"
+                else -> Store.activeProfile()?.name ?: "—"
+            }
+        }
+        texts.addView(Ui.text(this, caption, 13f, Ui.MUTED))
+        texts.addView(Ui.text(this, value, 17f, Ui.TEXT, true).apply {
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+        pick.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(14) })
+        pick.addView(Ui.text(this, "›", 26f, Ui.MUTED))
+        col.addView(pick, Ui.lp(top = dp(12)))
+
+        // состояние и большой переключатель
+        val title = when {
+            busy && Vpn.status == Vpn.Status.STOPPING -> "Отключение…"
+            busy -> "Подключение…"
+            on && m == "vpn" -> "VPN подключён"
+            on -> "Обход работает"
+            m == "vpn" -> "Вы не подключены"
+            else -> "Обход выключен"
+        }
+        col.addView(Ui.text(this, title, 20f, Ui.TEXT, true).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(44)))
+        val err = Vpn.error
+        if (!active && Vpn.status == Vpn.Status.STOPPED && err != null && Store.mode == m) {
+            col.addView(Ui.text(this, "Ошибка: $err", 13f, Ui.RED).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(6)))
+        }
+        col.addView(powerSwitch(m, on || (busy && Vpn.status == Vpn.Status.STARTING), busy).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(260), dp(76)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(18)
+            }
+        })
+        val desc = when {
+            m == "bypass" -> "Без VPN и без root · " + (if (Store.bypassMethod == Bypass.METHOD_RECORD) "разбиение TLS-записей"
+                                                       else "разбиение TCP-пакетов")
             Store.ruDirect -> "Зарубежное — через VPN, российское — напрямую"
             else -> "Весь трафик — через VPN"
         }
-        col.addView(tile("vpn", "VPN", vpnDesc), Ui.lp(top = dp(8)))
-        val bypassDesc = if (Store.bypassAll) "Без VPN и без root: разбиение TLS для всех сайтов"
-                         else "Без VPN и без root: YouTube, Discord и другие сайты из списков"
-        col.addView(tile("bypass", "Обход блокировок", bypassDesc), Ui.lp(top = dp(12), bottom = dp(16)))
+        col.addView(Ui.text(this, desc, 13f, Ui.MUTED).apply { gravity = Gravity.CENTER }, Ui.lp(top = dp(14), bottom = dp(40)))
 
-        if (profiles.isEmpty()) return
-        val c = Ui.card(this)
-        val head = Ui.hbox(this)
-        head.addView(Ui.text(this, "Серверы", 17f, Ui.TEXT, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (Vpn.pings.isNotEmpty()) {
-            head.addView(Ui.text(this, if (Vpn.pingsReal) "через VPN" else "до сервера", 12f, Ui.MUTED).margins(end = 8))
+        if (m == "bypass") {
+            val c = Ui.vbox(this).apply { setPadding(dp(18), dp(16), dp(18), dp(16)) }
+            clickable(c, "bypass-help", 22, glass()) { show("bypass") }
+            c.addView(Ui.text(this, "Сайт всё равно не открывается?", 16f, Ui.TEXT, true))
+            c.addView(Ui.text(this, "Смените способ разбиения или добавьте свои сайты на вкладке «Обход». " +
+                "Голосовые звонки Discord и игры без VPN не ускорить.", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
+            col.addView(c)
+            return
         }
-        head.addView(Ui.button(this, if (Vpn.pinging) "Проверка…" else "Пинг", primary = false) {
+        if (profiles.isEmpty()) {
+            val c = Ui.vbox(this).apply {
+                background = glass()
+                setPadding(dp(18), dp(16), dp(18), dp(18))
+            }
+            c.addView(Ui.text(this, "Серверов пока нет", 17f, Ui.TEXT, true))
+            c.addView(Ui.text(this, "Добавьте ключ vless://… от вашего VPN-сервиса или ключ AmneziaVPN vpn://… " +
+                "(AmneziaVPN → «Поделиться»).", 13f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(12)))
+            c.addView(Ui.button(this, "Добавить сервер") { show("vpn") }.apply { tag = "add" })
+            col.addView(c)
+            return
+        }
+        homeServers(col, profiles)
+    }
+
+    /** Переключатель «Выкл | Вкл» с кнопкой питания; бегунок переезжает при нажатии. */
+    private fun powerSwitch(m: String, right: Boolean, busy: Boolean): View {
+        val track = FrameLayout(this).apply {
+            tag = "power:$m"
+            val bg = Ui.rounded(context, Ui.TRACK, 38)
+            val ring = Ui.rounded(context, Color.TRANSPARENT, 38, Ui.FOCUS, 3)
+            background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.LayerDrawable(arrayOf(bg, ring)))
+                addState(intArrayOf(), bg)
+            }
+            elevation = dp(10).toFloat()
+            isFocusable = true
+            isClickable = true
+        }
+        // подписи на дорожке — та сторона, куда можно переключить
+        track.addView(Ui.text(this, if (right) "Выкл" else "Вкл", 16f, Ui.MUTED).apply { gravity = Gravity.CENTER },
+            FrameLayout.LayoutParams(dp(100), ViewGroup.LayoutParams.MATCH_PARENT,
+                if (right) Gravity.START or Gravity.CENTER_VERTICAL else Gravity.END or Gravity.CENTER_VERTICAL))
+        val thumb = Ui.hbox(this).apply {
+            background = if (right) Ui.gradient(context, 32) else Ui.rounded(context, Ui.THUMB, 32)
+            setPadding(dp(6), 0, dp(14), 0)
+        }
+        val circle = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (right) Color.argb(60, 255, 255, 255) else Ui.THUMB_CIRCLE)
+            }
+        }
+        circle.addView(icon(R.drawable.ic_power, Color.WHITE, 26), FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+        thumb.addView(circle, LinearLayout.LayoutParams(dp(52), dp(52)))
+        thumb.addView(Ui.text(this, if (busy) "…" else if (right) "Вкл" else "Выкл", 17f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        track.addView(thumb, FrameLayout.LayoutParams(dp(150), dp(64),
+            (if (right) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL).apply {
+            leftMargin = dp(6)
+            rightMargin = dp(6)
+        })
+        track.setOnClickListener {
+            if (Vpn.status == Vpn.Status.STOPPING) return@setOnClickListener
+            // бегунок сразу едет на другую сторону, а состояние догонит его, когда служба ответит
+            val shift = (dp(260) - dp(12) - dp(150)).toFloat()
+            thumb.animate().translationX(if (right) -shift else shift).setDuration(220).start()
+            toggle(m)
+        }
+        return track
+    }
+
+    /** «Авто» и список серверов на главной: нажатие выбирает сервер, справа — пинг. */
+    private fun homeServers(col: LinearLayout, profiles: List<Profile>) {
+        val selected = if (Store.isAuto()) AUTO else Store.activeProfile()?.id ?: ""
+        val g = Vpn.group
+        val live = Vpn.running && Vpn.kind == "vless"
+        if (Store.vless().size >= 2) {
+            val autoRow = Ui.hbox(this).apply { setPadding(dp(18), dp(16), dp(18), dp(16)) }
+            val sel = selected == AUTO
+            clickable(autoRow, "row:$AUTO", 22, glass(22, if (sel) Ui.ACCENT else 0)) { selectServer(AUTO) }
+            autoRow.addView(icon(R.drawable.ic_auto, Ui.FOCUS, 24))
+            autoRow.addView(Ui.text(this, "Авто — лучший сервер", 16f, Ui.FOCUS, true),
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+            val cur = if (live && g?.selected == AUTO) g.current else ""
+            autoRow.addView(Ui.text(this, if (cur.isNotEmpty()) "сейчас: ${Vpn.nameOf(cur)}" else "Рекомендуем", 13f,
+                Ui.MUTED).apply {
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                maxWidth = dp(150)
+            })
+            col.addView(autoRow)
+        }
+
+        val list = Ui.vbox(this).apply {
+            background = glass()
+            setPadding(dp(18), dp(12), dp(18), dp(6))
+        }
+        val head = Ui.hbox(this)
+        head.addView(Ui.text(this, "Серверы", 14f, Ui.MUTED), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (Vpn.pings.isNotEmpty()) head.addView(Ui.text(this, if (Vpn.pingsReal) "пинг через VPN" else "пинг до сервера",
+            12f, Ui.MUTED).margins(end = 6))
+        val pingBtn = Ui.text(this, if (Vpn.pinging) "Проверка…" else "Пинг", 14f, Ui.ACCENT2, true).apply {
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+        }
+        clickable(pingBtn, "ping", 10, Ui.rounded(this, Color.TRANSPARENT, 10)) {
             Vpn.ping()
             lastPing = System.currentTimeMillis()
-        }.apply { tag = "ping" })
-        c.addView(head)
-        serverList(c, profiles, editable = false)
-        col.addView(c)
+        }
+        head.addView(pingBtn)
+        list.addView(head)
+        profiles.forEachIndexed { i, p ->
+            if (i > 0) list.addView(View(this).apply { setBackgroundColor(Ui.DIVIDER) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+            val sel = p.id == selected
+            val now = live && g?.selected == AUTO && g.current == p.id
+            val row = Ui.hbox(this).apply { setPadding(dp(4), dp(14), dp(4), dp(14)) }
+            clickable(row, "row:${p.id}", 12, Ui.rounded(this, Color.TRANSPARENT, 12)) { selectServer(p.id) }
+            val name = android.text.SpannableStringBuilder().apply {
+                append(if (sel) "● " else "")
+                append(p.name)
+                setSpan(android.text.style.StyleSpan(Typeface.BOLD), 0, length, 0)
+                val kind = " - " + (if (p.kind == "awg") "AmneziaWG" else "VLESS") + if (now) " · сейчас" else ""
+                val start = length
+                append(kind)
+                setSpan(android.text.style.ForegroundColorSpan(Ui.MUTED), start, length, 0)
+            }
+            row.addView(Ui.text(this, name, 16f, if (sel) Ui.FOCUS else Ui.TEXT).apply {
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (p.kind == "vless") {
+                val (t, color) = Ui.pingText(Vpn.pings[p.id], Vpn.pings.containsKey(p.id))
+                row.addView(Ui.text(this, t, 14f, color, true).margins(start = 8))
+            }
+            list.addView(row)
+        }
+        col.addView(list, Ui.lp(top = dp(12)))
     }
 
     /** Строки серверов: нажатие выбирает сервер, справа — пинг. «Авто» — если VLESS-серверов два и больше. */
@@ -511,6 +771,13 @@ class MainActivity : Activity() {
         })
         col.addView(a)
 
+        val j = Ui.card(this)
+        j.addView(Ui.text(this, "Журнал", 17f, Ui.TEXT, true))
+        j.addView(Ui.text(this, "Что делали VPN и обход — пригодится, если что-то не работает.", 13f, Ui.MUTED),
+            Ui.lp(top = dp(4), bottom = dp(10)))
+        j.addView(Ui.button(this, "Открыть журнал", primary = false) { show("log") }.apply { tag = "open-log" })
+        col.addView(j.margins(top = 14))
+
         val u = Ui.card(this)
         u.addView(Ui.text(this, "Обновления", 17f, Ui.TEXT, true))
         val core = try { Bhcore.version() } catch (e: Throwable) { "?" }
@@ -620,6 +887,8 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- журнал
     private fun buildLog(col: LinearLayout) {
+        col.addView(Ui.button(this, "‹ Настройки", primary = false) { show("settings") }.apply { tag = "back" },
+            Ui.lp(w = ViewGroup.LayoutParams.WRAP_CONTENT, bottom = dp(10)))
         val bar = Ui.hbox(this)
         bar.addView(Ui.button(this, "Копировать", primary = false) {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
