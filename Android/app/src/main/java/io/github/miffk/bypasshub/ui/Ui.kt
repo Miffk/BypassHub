@@ -112,9 +112,13 @@ object Ui {
             bottomMargin = bottom
         }
 
+    /** Отступы. Без своих размеров: с отступом сбоку — элемент строки (по содержимому),
+     *  иначе — блок колонки (во всю ширину). */
     fun View.margins(top: Int = 0, bottom: Int = 0, start: Int = 0, end: Int = 0): View {
         val p = (layoutParams as? ViewGroup.MarginLayoutParams)
-            ?: LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            ?: LinearLayout.LayoutParams(
+                if (start != 0 || end != 0) ViewGroup.LayoutParams.WRAP_CONTENT else ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
         p.setMargins(context.dp(start), context.dp(top), context.dp(end), context.dp(bottom))
         layoutParams = p
         return this

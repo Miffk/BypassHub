@@ -40,12 +40,16 @@ func (w *platformWrapper) Initialize(networkManager adapter.NetworkManager) erro
 
 func (w *platformWrapper) UsePlatformAutoDetectInterfaceControl() bool { return true }
 
+// AutoDetectInterfaceControl помечает сокет ядра, чтобы он шёл мимо VPN. BypassHub и так исключён
+// из своего VPN (addDisallowedApplication), поэтому неудача protect не мешает — только пишем в журнал.
 func (w *platformWrapper) AutoDetectInterfaceControl(fd int) error {
-	if w.iif == nil || w.iif.Protect(int32(fd)) {
-		return nil
+	if w.iif != nil && !w.iif.Protect(int32(fd)) {
+		protectWarn.Do(func() { logf("VpnService.protect не удался — сокеты и так идут мимо VPN") })
 	}
-	return E.New("VpnService.protect не удался")
+	return nil
 }
+
+var protectWarn sync.Once
 
 func (w *platformWrapper) UsePlatformInterface() bool { return true }
 
