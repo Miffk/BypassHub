@@ -6,10 +6,11 @@
 
 - **[zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)** — обход блокировок Discord, YouTube и др.;
 - **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** — локальный MTProto-прокси, ускоряющий Telegram Desktop.
+- **свой VPN** — ключи VLESS (sing-box) и AmneziaVPN/AmneziaWG (официальный клиент AmneziaWG), см. раздел «VPN» ниже.
 
 ## Возможности
 
-**Главная** — два переключателя «вкл/выкл» (zapret и TG WS Proxy), индикаторы «Discord / YouTube / Telegram доступны» (проверка каждые 3 минуты и после переключения), выбор стратегии, кнопки «Подобрать» и «Открыть в Telegram».
+**Главная** (`gui/home_page.py`) — три плитки `W.PowerTile` (Zapret, TG WS Proxy, VPN): нажатие включает или выключает сервис. Состояние каждого сервиса хранит `ServiceControl`: он обновляет плитку и шапку `ServiceCard` вверху страницы сервиса (переключатель + подробный статус). Логика переключения (`toggle_*`, `apply_vpn`, проверка доступности) живёт в `HomePage` — её вызывают страницы, трей и горячие клавиши.
 
 **Zapret** — всё, что умеет `service.bat`, но кнопками:
 - **автоподбор стратегии** прямо в программе: все стратегии запускаются по очереди, проверяются сайты из `utils/targets.txt` (TLS 1.2 и 1.3), лучшая применяется одной кнопкой;
