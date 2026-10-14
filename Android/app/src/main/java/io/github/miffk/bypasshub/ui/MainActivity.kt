@@ -76,25 +76,29 @@ class MainActivity : Activity() {
         })
         root.addView(header)
 
-        // на узких экранах вкладки прокручиваются, на широких — растягиваются на всю ширину
+        // вкладки — всегда в одну строку: шрифт уменьшается под ширину экрана, на совсем узких — прокрутка
         val tabScroll = android.widget.HorizontalScrollView(this).apply {
             isFillViewport = true
             isHorizontalScrollBarEnabled = false
         }
-        val tabRow = Ui.hbox(this).apply { setPadding(dp(14), 0, dp(14), dp(8)) }
+        val tabRow = Ui.hbox(this).apply { setPadding(dp(10), 0, dp(10), dp(8)) }
         tabScroll.addView(tabRow)
         for ((key, label) in listOf("home" to "Главная", "vpn" to "VPN", "bypass" to "Обход",
                                     "settings" to "Настройки", "log" to "Журнал")) {
             val t = Ui.text(this, label, 15f, Ui.MUTED, true).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isSingleLine = true
+                setPadding(dp(10), dp(10), dp(10), dp(10))
                 isFocusable = true
                 isClickable = true
                 setOnClickListener { show(key) }
             }
             tabs[key] = t
             tabRow.addView(t, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
+        }
+        tabScroll.addOnLayoutChangeListener { v, l, _, r, _, ol, _, or, _ ->
+            if (r - l != or - ol) v.post { fitTabs(r - l) }
         }
         root.addView(tabScroll)
 
@@ -155,6 +159,26 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- вкладки
+    /** Самый крупный шрифт (от 15 до 12 sp) и отступы, при которых все вкладки помещаются в ширину экрана. */
+    private fun fitTabs(available: Int) {
+        if (available <= 0 || tabs.isEmpty()) return
+        val paint = android.text.TextPaint(tabs.values.first().paint)
+        fun fits(size: Float, pad: Int): Boolean {
+            paint.textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, size,
+                resources.displayMetrics)
+            val text = tabs.values.sumOf { paint.measureText(it.text.toString()).toDouble() }
+            return text + tabs.size * (2 * dp(pad) + dp(4)) + dp(20) <= available
+        }
+        var pad = 10
+        var size = 15f
+        while (size > 12f && !fits(size, pad)) size -= 0.5f
+        if (!fits(size, pad)) pad = 6
+        tabs.values.forEach {
+            it.textSize = size
+            it.setPadding(dp(pad), dp(10), dp(pad), dp(10))
+        }
+    }
+
     private fun show(key: String) {
         page = key
         for ((k, t) in tabs) {
