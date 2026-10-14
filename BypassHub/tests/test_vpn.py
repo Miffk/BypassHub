@@ -200,3 +200,11 @@ def test_proxy_backup_restored_after_crash(tmp_path):
     m.proxy_backup.write_text(json.dumps({"enable": False, "server": "", "override": ""}))
     m.recover()
     assert not m.proxy_backup.exists()
+
+
+def test_awg_needs_wintun_next_to_exe(tmp_path):
+    m = awg.AwgManager(tmp_path)
+    m.exe.write_bytes(b"x")
+    assert not m.is_installed()          # без wintun.dll служба туннеля не стартует — нужна переустановка
+    (tmp_path / awg.WINTUN_DLL).write_bytes(b"x")
+    assert m.is_installed()

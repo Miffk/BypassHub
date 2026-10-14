@@ -120,8 +120,16 @@ class HomePage(GradientPage):
         super().__init__(parent)
         self.app = app
 
-        W.page_title(self, "BypassHub", "Нажмите на сервис, чтобы включить или выключить его. "
-                                        "Настройки — в меню слева.")
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=W.PAGE_PADX, pady=(6, 12))
+        left = ctk.CTkFrame(head, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(left, text="BypassHub", font=W.title_font(26), anchor="w").pack(fill="x", padx=(2, 0))
+        ctk.CTkLabel(left, text="Нажмите на сервис, чтобы включить или выключить его. Настройки — в меню слева.",
+                     anchor="w", text_color=W.GRAY).pack(fill="x", padx=(2, 0))
+        # заново проверить доступность Discord / YouTube / Telegram
+        self.refresh_btn = W.add_button(head, "⟳  Обновить", self.check_services, secondary=True, width=130)
+        self.refresh_btn.pack_configure(side="right", padx=0)
 
         self.banner = mark_card(ctk.CTkFrame(self, fg_color=W.P.surface, corner_radius=14, border_width=1,
                                              border_color=W.P.accent))
@@ -290,17 +298,21 @@ class HomePage(GradientPage):
         if self._checking:
             return
         self._checking = True
+        self.refresh_btn.configure(text="Проверка…", state="disabled")
+        self.on_status(self._zs, self._ts)  # на кнопках — «проверка…»
         self.app.run_task(netcheck.check_services, self._services_done)
 
     def _services_done(self, states, error) -> None:
         self._checking = False
-        if error or not states:
-            return
-        self._avail = {st.name: st for st in states}
+        self.refresh_btn.configure(text="⟳  Обновить", state="normal")
+        if not error and states:
+            self._avail = {st.name: st for st in states}
         self.on_status(self._zs, self._ts)
 
     def availability(self, names) -> str:
         """«Discord: доступен · YouTube: недоступен» по последней проверке."""
+        if self._checking:
+            return "Проверка доступности…"
         parts = []
         for name in names:
             st = self._avail.get(name)

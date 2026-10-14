@@ -27,6 +27,7 @@ EXE_NAME = "amneziawg.exe"
 TUNNEL_NAME = "BypassHub"                 # имя туннеля = имя сетевого адаптера
 SERVICE_NAME = f"AmneziaWGTunnel${TUNNEL_NAME}"
 FALLBACK_METRIC = 9000
+WINTUN_DLL = "wintun.dll"  # драйвер сетевого адаптера; служба загружает его из папки amneziawg.exe
 
 
 # ====================================================================== ключи
@@ -237,7 +238,8 @@ class AwgManager:
         return self.root / "version.txt"
 
     def is_installed(self) -> bool:
-        return self.exe.exists()
+        # без wintun.dll рядом служба туннеля сразу останавливается (так было в 1.3.0 до исправления)
+        return self.exe.exists() and (self.root / WINTUN_DLL).exists()
 
     def local_version(self) -> str:
         try:
@@ -274,10 +276,25 @@ class AwgManager:
             time.sleep(0.25)
         state = winutil.service_state(SERVICE_NAME)
         if state != "RUNNING":
+            details = self.service_log_tail()
             self.stop()
             raise RuntimeError("Туннель AmneziaWG не запустился (служба: "
                                f"{state or 'нет'}). Если открыт AmneziaVPN, отключитесь в нём и "
-                               "попробуйте снова.")
+                               "попробуйте снова." + (f"\n\nЖурнал AmneziaWG:\n{details}" if details else ""))
+
+    def service_log_tail(self, lines: int = 8) -> str:
+        """Последние строки журнала службы туннеля — там причина, если туннель не запустился."""
+        try:
+            res = winutil.run([str(self.exe), "/dumplog"], timeout=15, encoding="utf-8")
+        except Exception as exc:
+            log.debug("amneziawg /dumplog: %r", exc)
+            return ""
+        out = [ln for ln in res.stdout.splitlines() if ln.strip()]
+        ours = [ln for ln in out if TUNNEL_NAME in ln] or out
+        text = "\n".join(ours[-lines:])
+        if text:
+            log.warning("Журнал AmneziaWG:\n%s", text)
+        return text
 
     def _add_fallback_route(self) -> None:
         """Маршрут по умолчанию через туннель с самым низким приоритетом. Обычный трафик
@@ -294,7 +311,7 @@ class AwgManager:
     def stop(self) -> None:
         if winutil.service_state(SERVICE_NAME) is None:
             return
-        if self.is_installed():
+        if self.exe.exists():
             winutil.run_logged([str(self.exe), "/uninstalltunnelservice", TUNNEL_NAME], timeout=60)
         for _ in range(40):
             if winutil.service_state(SERVICE_NAME) is None:
@@ -306,7 +323,7 @@ class AwgManager:
 
     def install_release(self, release: github.Release, download_dir: Path,
                         progress: Optional[github.ProgressCb] = None) -> None:
-        """Скачивает .msi и достаёт из него amneziawg.exe (msiexec /a — распаковка без установки)."""
+        """Скачивает .msi и достаёт из него amneziawg.exe и wintun.dll (msiexec /a — распаковка без установки)."""
         asset = release.asset(asset_name(release.version))
         msi = download_dir / asset.name
         github.download(asset.url, msi, progress, asset.sha256)
@@ -320,15 +337,21 @@ class AwgManager:
             running = self.status().running
             if running:
                 self.stop()
+            files = [found] + [f for f in found.parent.iterdir()
+                               if f.is_file() and f.suffix.lower() in (".dll", ".exe") and f != found]
+            if not any(f.name.lower() == WINTUN_DLL for f in files):
+                raise RuntimeError(f"в {asset.name} нет {WINTUN_DLL}")
             self.root.mkdir(parents=True, exist_ok=True)
-            for _ in range(10):
-                try:
-                    shutil.copy2(found, self.exe)
-                    break
-                except OSError:
-                    time.sleep(0.5)
-            else:
-                raise RuntimeError("не удалось заменить amneziawg.exe — файл занят")
+            for src in files:
+                dest = self.root / src.name.lower()
+                for _ in range(10):
+                    try:
+                        shutil.copy2(src, dest)
+                        break
+                    except OSError:
+                        time.sleep(0.5)
+                else:
+                    raise RuntimeError(f"не удалось заменить {src.name} — файл занят")
         finally:
             msi.unlink(missing_ok=True)
             shutil.rmtree(extract, ignore_errors=True)
