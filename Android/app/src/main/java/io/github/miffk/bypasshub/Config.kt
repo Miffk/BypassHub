@@ -86,7 +86,10 @@ object Config {
                 .put("type", "tun").put("tag", "tun-in")
                 // IPv6 тоже в TUN — иначе приложения ходили бы по IPv6 мимо VPN
                 .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))
-                .put("mtu", 9000).put("auto_route", true).put("stack", "mixed")))
+                .put("mtu", 9000).put("auto_route", true)
+                // gvisor: весь TCP/UDP обрабатывается внутри ядра. Стек system/mixed принимает TCP локальным
+                // сокетом, а BypassHub исключён из своего VPN — ответы этого сокета ушли бы мимо TUN
+                .put("stack", "gvisor")))
             .put("outbounds", JSONArray(proxy + JSONObject().put("type", "direct").put("tag", "direct")))
             .put("route", route)
             .put("experimental", JSONObject().put("clash_api", JSONObject()

@@ -112,7 +112,10 @@ object Bypass {
             .put("inbounds", JSONArray().put(JSONObject()
                 .put("type", "tun").put("tag", "tun-in")
                 .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))
-                .put("mtu", 9000).put("auto_route", true).put("stack", "mixed")))
+                .put("mtu", 9000).put("auto_route", true)
+                // gvisor: весь TCP/UDP обрабатывается внутри ядра. Стек system/mixed принимает TCP локальным
+                // сокетом, а BypassHub исключён из своего VPN — ответы этого сокета ушли бы мимо TUN
+                .put("stack", "gvisor")))
             .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
             .put("route", JSONObject()
                 .put("rules", rules)
