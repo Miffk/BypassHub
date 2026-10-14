@@ -208,3 +208,15 @@ def test_awg_needs_wintun_next_to_exe(tmp_path):
     assert not m.is_installed()          # без wintun.dll служба туннеля не стартует — нужна переустановка
     (tmp_path / awg.WINTUN_DLL).write_bytes(b"x")
     assert m.is_installed()
+
+
+def test_service_state_on_localized_windows():
+    from bypasshub.winutil import parse_service_state
+    ru = ("\nИмя_службы: AmneziaWGTunnel$BypassHub\n        Тип                : 10  WIN32_OWN_PROCESS\n"
+          "        Состояние          : 4  RUNNING\n                                (STOPPABLE, NOT_PAUSABLE)\n"
+          "        Код_выхода_Win32   : 0  (0x0)\n")
+    en = ("SERVICE_NAME: zapret\n        TYPE               : 10  WIN32_OWN_PROCESS\n"
+          "        STATE              : 1  STOPPED\n")
+    assert parse_service_state(ru) == "RUNNING"
+    assert parse_service_state(en) == "STOPPED"
+    assert parse_service_state("мусор") == "UNKNOWN"

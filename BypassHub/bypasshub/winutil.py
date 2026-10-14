@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -234,12 +235,18 @@ def service_state(name: str) -> Optional[str]:
     res = run(["sc", "query", name], encoding="cp437")
     if res.returncode != 0:
         return None
-    for line in res.stdout.splitlines():
-        if "STATE" in line.upper() and ":" in line:
-            parts = line.split(":", 1)[1].split()
-            if len(parts) >= 2:
-                return parts[1].upper()
-    return "UNKNOWN"
+    return parse_service_state(res.stdout)
+
+
+_SERVICE_STATES = ("STOPPED", "START_PENDING", "STOP_PENDING", "RUNNING", "CONTINUE_PENDING",
+                   "PAUSE_PENDING", "PAUSED")
+
+
+def parse_service_state(sc_output: str) -> str:
+    """Состояние из вывода `sc query`. Название строки переводится («STATE», «Состояние»…),
+    а код и имя состояния («4  RUNNING») — нет, поэтому ищем именно их."""
+    m = re.search(r":\s*[1-7]\s+(" + "|".join(_SERVICE_STATES) + r")\b", sc_output)
+    return m.group(1) if m else "UNKNOWN"
 
 
 def service_stop_delete(name: str) -> None:
