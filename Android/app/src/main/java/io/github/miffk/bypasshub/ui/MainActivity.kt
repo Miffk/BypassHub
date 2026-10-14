@@ -49,7 +49,9 @@ class MainActivity : Activity() {
     private var page = "vpn"
     private val main = Handler(Looper.getMainLooper())
     private var lastPing = 0L
-    private val renderer = { render() }
+    // живые данные (состояние, текущий сервер, пинг) есть только на вкладке VPN; остальные вкладки
+    // перестраиваются по действиям — иначе стирался бы вводимый ключ и сбивалась прокрутка
+    private val renderer = { if (page == "vpn") render() }
     private val logRenderer = { if (page == "log") renderLogText() }
     private var logView: TextView? = null
     private val poll = object : Runnable {
@@ -156,8 +158,12 @@ class MainActivity : Activity() {
         if (key == "vpn") maybePing()
     }
 
+    private var renderedPage = ""
+
     private fun render() {
         if (isFinishing) return
+        val oldScroll = (content.getChildAt(0) as? ScrollView)?.scrollY?.takeIf { renderedPage == page } ?: 0
+        renderedPage = page
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val column = Ui.vbox(this).apply { setPadding(dp(16), dp(4), dp(16), dp(24)) }
         // на планшетах и ТВ — колонка ограниченной ширины по центру
@@ -175,6 +181,7 @@ class MainActivity : Activity() {
         content.removeAllViews()
         content.addView(scroll)
         if (focused != null) content.findViewWithTag<View>(focused)?.requestFocus()
+        if (oldScroll > 0) scroll.post { scroll.scrollTo(0, oldScroll) }
     }
 
     // ---------------------------------------------------------------- VPN
@@ -305,8 +312,8 @@ class MainActivity : Activity() {
             row.addView(Ui.text(this, t, 14f, color, true).margins(start = 8, end = 4))
         }
         if (editable != null) {
-            row.addView(Ui.button(this, "✎", primary = false) { rename(editable) }.margins(start = 6))
-            row.addView(Ui.button(this, "✕", primary = false) { remove(editable) }.margins(start = 6))
+            row.addView(Ui.button(this, "✎", primary = false) { rename(editable) }.apply { tag = "edit:$id" }.margins(start = 6))
+            row.addView(Ui.button(this, "✕", primary = false) { remove(editable) }.apply { tag = "del:$id" }.margins(start = 6))
         }
         row.layoutParams = Ui.lp(top = dp(8))
         return row

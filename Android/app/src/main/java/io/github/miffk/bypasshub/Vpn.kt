@@ -91,8 +91,9 @@ object Vpn {
         val a = api ?: return
         try {
             val g = a.groupState()
+            if (g == group) return
             group = g
-            g.delays.forEach { (k, v) -> pings[k] = v.toLong() }
+            synchronized(pings) { g.delays.forEach { (k, v) -> pings[k] = v.toLong() } }
             if (g.delays.isNotEmpty()) pingsReal = true
             notifyChanged()
         } catch (e: Exception) {
