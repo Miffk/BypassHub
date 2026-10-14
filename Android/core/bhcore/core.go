@@ -170,6 +170,10 @@ type logWriter struct{ p Platform }
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func (l logWriter) WriteMessage(level log.Level, message string) {
+	// DEBUG/TRACE — тысячи строк в минуту: в журнал приложения не пишем
+	if level > log.LevelInfo {
+		return
+	}
 	if l.p != nil {
 		l.p.WriteLog(ansi.ReplaceAllString(message, ""))
 	}

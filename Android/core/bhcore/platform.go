@@ -210,10 +210,12 @@ func (w *platformWrapper) ReadWIFIState(ctx context.Context) adapter.WIFIState {
 	return adapter.WIFIState{}
 }
 
-func (w *platformWrapper) UsePlatformConnectionOwnerFinder() bool { return false }
+// Владелец соединения нам не нужен (правил по приложениям нет). Без этого sing-box на Android сам
+// ищет процесс через netlink, получает «permission denied» и пишет это в журнал на каждое соединение.
+func (w *platformWrapper) UsePlatformConnectionOwnerFinder() bool { return true }
 
 func (w *platformWrapper) FindConnectionOwner(request *adapter.FindConnectionOwnerRequest) (*adapter.ConnectionOwner, error) {
-	return nil, E.New("не поддерживается")
+	return &adapter.ConnectionOwner{UserId: -1}, nil
 }
 
 func (w *platformWrapper) UsePlatformNotification() bool { return false }

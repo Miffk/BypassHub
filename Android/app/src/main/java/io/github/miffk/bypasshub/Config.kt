@@ -64,7 +64,9 @@ object Config {
         val route = JSONObject()
             .put("rules", routeRules)
             .put("final", "proxy")
-            .put("auto_detect_interface", true)
+            // без выбора интерфейса: BypassHub исключён из своего VPN, и Android сам отправляет соединения
+                // ядра через основную сеть (выбор по списку интерфейсов на части телефонов не работает)
+                .put("auto_detect_interface", false)
             .put("default_domain_resolver", "dns-direct")
         if (has.isNotEmpty()) {
             route.put("rule_set", JSONArray(has.map {

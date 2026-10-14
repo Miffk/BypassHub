@@ -120,7 +120,9 @@ object Bypass {
             .put("route", JSONObject()
                 .put("rules", rules)
                 .put("final", "direct")
-                .put("auto_detect_interface", true)
+                // без выбора интерфейса: BypassHub исключён из своего VPN, и Android сам отправляет соединения
+                // ядра через основную сеть (выбор по списку интерфейсов на части телефонов не работает)
+                .put("auto_detect_interface", false)
                 .put("default_domain_resolver", "dns-direct"))
             .put("experimental", JSONObject().put("clash_api", JSONObject()
                 .put("external_controller", "127.0.0.1:$apiPort").put("secret", apiSecret)))
