@@ -102,8 +102,9 @@ object Bypass {
             .put("log", JSONObject().put("level", "info").put("timestamp", true))
             .put("dns", JSONObject()
                 .put("servers", JSONArray()
-                    // DNS провайдера может подменять адреса заблокированных сайтов — спрашиваем Cloudflare по HTTPS
-                    .put(JSONObject().put("type", "https").put("tag", "dns-remote").put("server", "1.1.1.1"))
+                    // DNS провайдера может подменять адреса заблокированных сайтов — спрашиваем Google.
+                    // Обычный UDP, а не DNS по HTTPS: соединения с Cloudflare и другими DoH в России часто режут
+                    .put(JSONObject().put("type", "udp").put("tag", "dns-remote").put("server", "8.8.8.8"))
                     .put(JSONObject().put("type", "udp").put("tag", "dns-direct").put("server", "77.88.8.8")))
                 .put("rules", JSONArray().put(JSONObject().put("domain_suffix", JSONArray(RU_SUFFIXES)).put("server", "dns-direct")))
                 .put("final", "dns-remote")
