@@ -12,6 +12,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let queue = DispatchQueue(label: "bypasshub.core")
     private let pathMonitor = Network.NWPathMonitor()
     private var lastError = ""
+    /// Что запущено последним (режим и TG) и идёт ли перезапуск — для команды state.
+    private let stateLock = NSLock()
+    private var reqMode = "none"
+    private var reqTG = false
+    private var restarting = false
 
     private var caches: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0] }
     private var workDir: URL { caches.appendingPathComponent("core", isDirectory: true) }
@@ -60,15 +65,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // папка для баз и списков — расширения (приложение не знает, где его контейнер)
         req["dataDir"] = workDir.path
         let mode = req["mode"] as? String ?? "none"
+        let tg = (req["tg"] as? [String: Any])?["enabled"] as? Bool ?? false
+        setRequested(nil, nil, busy: true)
         guard let data = try? JSONSerialization.data(withJSONObject: req),
               let json = String(data: data, encoding: .utf8) else {
+            setRequested("none", false, busy: false)
             return TunnelError("Неверные настройки")
         }
         lastError = ""
         if mode != "vpn" && mode != "bypass" {
             // только TG-прокси: туннель без маршрутов, чтобы расширение работало в фоне
             BhcoreStopAll()
-            if let e = setSettings(TunnelPlatform.idleSettings()) { return e }
+            if let e = setSettings(TunnelPlatform.idleSettings()) {
+                setRequested("none", false, busy: false)
+                return e
+            }
         }
         var err: NSError?
         if !BhcoreRun(json, platform, &err) {
@@ -79,11 +90,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 // маршруты остались от прежнего режима, а читать туннель некому — убираем их
                 setSettings(TunnelPlatform.idleSettings())
             }
+            setRequested("none", false, busy: false)
             return TunnelError(e.localizedDescription)
         }
+        setRequested(mode, tg, busy: false)
         try? request.write(to: lastRequestFile, atomically: true, encoding: .utf8)
         reportPath(pathMonitor.currentPath)
         return nil
+    }
+
+    private func setRequested(_ mode: String?, _ tg: Bool?, busy: Bool) {
+        stateLock.lock()
+        if let mode = mode { reqMode = mode }
+        if let tg = tg { reqTG = tg }
+        restarting = busy
+        stateLock.unlock()
     }
 
     @discardableResult
@@ -133,6 +154,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 default:
                     var state = (try? JSONSerialization.jsonObject(with: Data(BhcoreState().utf8))) as? [String: Any] ?? [:]
                     state["error"] = self.lastError
+                    self.stateLock.lock()
+                    state["reqMode"] = self.reqMode
+                    state["reqTG"] = self.reqTG
+                    state["busy"] = self.restarting
+                    self.stateLock.unlock()
                     reply(Self.json(state))
                 }
             }

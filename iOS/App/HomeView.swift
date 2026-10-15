@@ -66,7 +66,7 @@ struct HomeView: View {
     // ---------------------------------------------------------------- VPN и обход
     private var modeHome: some View {
         let on = tunnel.isOn(m)
-        let busy = tunnel.connecting || (tunnel.busy && tunnel.mode == m)
+        let busy = (tunnel.connecting || tunnel.busy) && tunnel.mode == m
         let hint: (String, Color) = on ? (m == "vpn" ? "Трафик идёт через ваш сервер"
                                                      : "Заблокированные сайты открываются напрямую", Theme.green)
             : (m == "vpn" ? "Без VPN провайдер видит, какие сайты вы открываете"

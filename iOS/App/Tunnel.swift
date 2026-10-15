@@ -15,6 +15,10 @@ struct CoreState: Decodable {
     var tg: Bool?
     var tgStats: String?
     var error: String?
+    /// Что расширению велели запустить последним (режим и TG) и идёт ли сейчас перезапуск.
+    var reqMode: String?
+    var reqTG: Bool?
+    var busy: Bool?
 }
 
 /// Управляет VPN-профилем BypassHub: на iOS VPN, обход и TG-прокси работают в одном расширении-туннеле.
@@ -25,10 +29,18 @@ final class Tunnel: ObservableObject {
     @Published private(set) var status: NEVPNStatus = .invalid
     @Published private(set) var core = CoreState()
     @Published var error: String?
-    /// Что запрошено у расширения сейчас: режим (vpn | bypass | none) и TG-прокси.
+    /// Что должно работать: режим (vpn | bypass | none) и TG-прокси. Источник правды — приложение;
+    /// расширение догоняет его командой run (или запуском туннеля с этими настройками).
     @Published private(set) var mode = "none"
     @Published private(set) var tg = false
-    @Published private(set) var busy = false
+    /// Туннель запускается (до состояния «подключено»).
+    @Published private var starting = false
+    /// Команда run отправлена, ответа ещё нет.
+    @Published private var running = false
+    /// Настройки поменялись, пока туннель запускался или ядро перезапускалось, — отправить ещё раз.
+    private var dirty = false
+    /// Растёт при каждом изменении — ответы на старые запросы состояния не должны затирать новое.
+    private var generation = 0
     /// Последний журнал расширения — остаётся виден и после отключения.
     private(set) var savedLog = ""
 
@@ -37,7 +49,10 @@ final class Tunnel: ObservableObject {
     private var timer: Timer?
 
     var connected: Bool { status == .connected }
-    var connecting: Bool { status == .connecting || status == .reasserting || (busy && !connected) }
+    var connecting: Bool { status == .connecting || status == .reasserting || starting }
+    var busy: Bool { starting || running || dirty }
+    /// Туннель поднят или поднимается — тогда новый режим добавляется к уже включённым.
+    private var active: Bool { connected || connecting }
 
     /// Работает ли режим: vpn, bypass или tg.
     func isOn(_ m: String) -> Bool {
@@ -67,17 +82,27 @@ final class Tunnel: ObservableObject {
         let s = manager?.connection.status ?? .invalid
         let was = status
         status = s
-        if s == .connected && was != .connected { poll() }
-        if s == .disconnected || s == .invalid {
-            if was == .connecting || was == .connected || was == .disconnecting {
-                busy = false
+        if s == .connected && was != .connected {
+            starting = false
+            if dirty {
+                dirty = false
+                sendRun()
+            } else {
+                poll()
             }
-            if !busy {
+        }
+        if s == .disconnected || s == .invalid {
+            if was == .connecting || was == .connected || was == .reasserting || was == .disconnecting {
+                starting = false
+            }
+            if !starting {
+                if was == .connecting { fetchDisconnectError() }
                 mode = "none"
                 tg = false
+                running = false
+                dirty = false
                 core = CoreState()
             }
-            if was == .connecting { fetchDisconnectError() }
         }
     }
 
@@ -94,14 +119,17 @@ final class Tunnel: ObservableObject {
 
     private func poll() {
         guard connected else { return }
+        let gen = generation
         send(["cmd": "state"]) { data in
             guard let data = data, let st = try? JSONDecoder().decode(CoreState.self, from: data) else { return }
             self.core = st
-            if !self.busy {
-                self.mode = st.mode?.isEmpty == false ? st.mode! : "none"
-                self.tg = st.tg ?? false
+            // приложение могло быть закрыто, пока туннель работал, — берём режим у расширения,
+            // но только если с момента запроса ничего не меняли и ядро не перезапускается
+            if gen == self.generation && !self.busy && st.busy != true, let m = st.reqMode {
+                self.mode = m.isEmpty ? "none" : m
+                self.tg = st.reqTG ?? false
             }
-            if let e = st.error, !e.isEmpty {
+            if let e = st.error, !e.isEmpty, !self.busy {
                 // ядро не запустилось — показываем ошибку, забираем журнал и выключаем туннель
                 self.error = e
                 self.fetchLog { _ in self.stop() }
@@ -110,49 +138,72 @@ final class Tunnel: ObservableObject {
     }
 
     // ---------------------------------------------------------------- управление
-    /// Включить или выключить режим vpn | bypass | tg.
+    /// Включить или выключить режим vpn | bypass | tg. Остальное, что уже включено, остаётся.
     func toggle(_ m: String) {
         error = nil
-        var newMode = connected ? mode : "none"
-        var newTG = connected ? tg : false
+        var newMode = active ? mode : "none"
+        var newTG = active ? tg : false
         if m == "tg" {
             newTG.toggle()
         } else {
-            newMode = (connected && mode == m) ? "none" : m
+            newMode = newMode == m ? "none" : m
         }
         apply(mode: newMode, tg: newTG)
     }
 
     /// Перезапустить с новыми настройками, если работает (сменили сервер, способ обхода, порт…).
     func restartIfRunning() {
-        if connected { apply(mode: mode, tg: tg) }
+        if active { apply(mode: mode, tg: tg) }
     }
 
     func apply(mode newMode: String, tg newTG: Bool) {
+        generation += 1
+        mode = newMode
+        tg = newTG
         if newMode == "none" && !newTG {
             stop()
             return
         }
-        let request = Store.shared.request(mode: newMode, tg: newTG)
-        mode = newMode
-        tg = newTG
-        busy = true
-        if connected {
-            send(["cmd": "run", "request": request]) { data in
-                self.busy = false
-                let reply = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-                if reply["ok"] as? Bool != true {
-                    self.error = reply["error"] as? String ?? "Расширение не ответило"
-                    self.fetchLog { _ in self.stop() }
-                }
+        if connected && !running {
+            sendRun()
+        } else if active {
+            // туннель ещё поднимается или ядро перезапускается — отправим, когда освободится
+            dirty = true
+        } else {
+            start(Store.shared.request(mode: newMode, tg: newTG))
+        }
+    }
+
+    /// Отправить расширению текущие настройки (mode, tg) — оно перезапустит ядро без переподключения.
+    private func sendRun() {
+        running = true
+        send(["cmd": "run", "request": Store.shared.request(mode: mode, tg: tg)]) { data in
+            self.running = false
+            let reply = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            if reply["ok"] as? Bool != true {
+                self.dirty = false
+                self.error = reply["error"] as? String ?? "Расширение не ответило"
+                self.fetchLog { _ in self.stop() }
+                return
+            }
+            if self.dirty {
+                self.dirty = false
+                self.sendRun()
+            } else {
                 self.poll()
             }
-            return
         }
-        start(request)
     }
 
     private func start(_ request: String) {
+        starting = true
+        let gen = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 40) {
+            // iOS так и не начала подключение — не держим «Подключение…» вечно
+            if gen == self.generation && self.starting && self.status != .connecting && !self.connected {
+                self.fail("Туннель не запустился")
+            }
+        }
         withManager { m in
             guard let m = m else { return }
             do {
@@ -160,17 +211,21 @@ final class Tunnel: ObservableObject {
             } catch {
                 self.fail("Запуск: \(error.localizedDescription)")
             }
-            self.busy = false
         }
     }
 
     func stop() {
-        busy = false
+        starting = false
+        running = false
+        dirty = false
+        generation += 1
         manager?.connection.stopVPNTunnel()
     }
 
     private func fail(_ message: String) {
-        busy = false
+        starting = false
+        running = false
+        dirty = false
         mode = "none"
         tg = false
         error = message
