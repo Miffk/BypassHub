@@ -14,7 +14,7 @@ settings:
     SWIFT_VERSION: "5.0"
     ENABLE_BITCODE: "NO"
     # Go-ядру нужны libresolv (DNS) и системные фреймворки (сертификаты, сеть)
-    OTHER_LDFLAGS: ["-lresolv", "-framework", "Security", "-framework", "CoreFoundation", "-framework", "SystemConfiguration"]
+    OTHER_LDFLAGS: ["-lresolv", "-framework", "Security", "-framework", "CoreFoundation", "-framework", "SystemConfiguration", "-framework", "UIKit"]
 targets:
   BypassHub:
     type: application
