@@ -3,13 +3,14 @@
 Те же три сервиса, что и в версии для Android: **VPN** (VLESS, AmneziaVPN/AmneziaWG, раздельное туннелирование),
 **Обход блокировок** без VPN-сервера и **TG WS Proxy** для Telegram. iOS 15 и новее.
 
-> Версия для iOS пока тестовая. В App Store её нет: IPA собирается без подписи, а подписываете его вы —
-> своим сертификатом.
+> В App Store BypassHub нет: IPA собирается без подписи, и установить его можно **только подписав своим
+> сертификатом** (`.p12` + `.mobileprovision`) — например, в ESign, Sideloadly или zsign. Без сертификата
+> iOS-версию не установить.
 
 ## Установка
 
-1. Скачайте `BypassHub-ios.ipa`: GitHub → **Actions** → последняя успешная сборка **BypassHub build** →
-   внизу, в **Artifacts**, — **BypassHub-ios** (внутри zip лежит IPA).
+1. Скачайте `BypassHub-ios.ipa` со страницы **[Releases](https://github.com/Miffk/BypassHub/releases/latest)**
+   (тестовые сборки — в GitHub → **Actions** → **BypassHub build** → **Artifacts** → **BypassHub-ios**).
 2. Подпишите IPA своим сертификатом (`.p12` + `.mobileprovision`) в **ESign**, **Sideloadly** или **zsign**:
    - **не удаляйте плагины/расширения** (в ESign — не включайте «Удалить плагины»): VPN работает
      внутри расширения `BypassHub Tunnel`;

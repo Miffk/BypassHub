@@ -127,7 +127,10 @@ object Bypass {
                     .put(JSONObject().put("type", "udp").put("tag", "dns-direct").put("server", "77.88.8.8")))
                 .put("rules", JSONArray().put(JSONObject().put("domain_suffix", JSONArray(RU_SUFFIXES)).put("server", "dns-direct")))
                 .put("final", "dns-remote")
-                .put("strategy", "ipv4_only"))
+                .put("strategy", "ipv4_only")
+                // имя сайта по адресу из DNS: QUIC YouTube (googlevideo) начинается с ClientHello в нескольких
+                // пакетах, и sniff его не узнаёт — без этого QUIC к видео не отклоняется и идёт мимо обхода
+                .put("reverse_mapping", true))
             .put("inbounds", JSONArray().put(JSONObject()
                 .put("type", "tun").put("tag", "tun-in")
                 .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))

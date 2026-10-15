@@ -75,7 +75,7 @@ type RunRequest struct {
 	BypassUser   string    `json:"bypassUser"`
 	// Bypass при mode = vpn: сайты из списков обхода идут напрямую с разбиением, остальное — через VPN
 	Bypass bool `json:"bypass"`
-	TG           struct {
+	TG     struct {
 		Enabled bool   `json:"enabled"`
 		Port    int    `json:"port"`
 		Secret  string `json:"secret"`
@@ -308,15 +308,19 @@ func buildVPNConfig(proxy []map[string]any, ruDirect bool, rules map[string]stri
 	if bp != nil && useDesync(bp.method, bp.desyncPort) {
 		outbounds = append(outbounds, desyncOutbound(bp.desyncPort))
 	}
-	cfg := map[string]any{
-		"log": map[string]any{"level": "info", "timestamp": true},
-		"dns": map[string]any{
-			"servers": []any{
-				map[string]any{"type": "https", "tag": "dns-remote", "server": "1.1.1.1", "detour": "proxy"},
-				map[string]any{"type": "udp", "tag": "dns-direct", "server": "77.88.8.8"},
-			},
-			"rules": dnsRules, "final": "dns-remote", "strategy": "ipv4_only",
+	dns := map[string]any{
+		"servers": []any{
+			map[string]any{"type": "https", "tag": "dns-remote", "server": "1.1.1.1", "detour": "proxy"},
+			map[string]any{"type": "udp", "tag": "dns-direct", "server": "77.88.8.8"},
 		},
+		"rules": dnsRules, "final": "dns-remote", "strategy": "ipv4_only",
+	}
+	if bp != nil {
+		dns["reverse_mapping"] = true // см. buildBypassConfig
+	}
+	cfg := map[string]any{
+		"log":          map[string]any{"level": "info", "timestamp": true},
+		"dns":          dns,
 		"inbounds":     []any{tunInbound()},
 		"outbounds":    outbounds,
 		"route":        route,
@@ -426,6 +430,9 @@ func buildBypassConfig(suffix, exact []string, allSites bool, method string, api
 			"rules":    []any{map[string]any{"domain_suffix": ruSuffixes, "server": "dns-direct"}},
 			"final":    "dns-remote",
 			"strategy": "ipv4_only",
+			// имя сайта по адресу из DNS: QUIC YouTube (googlevideo) начинается с ClientHello в нескольких
+			// пакетах, и sniff его не узнаёт — без этого правило «QUIC к сайтам из списка — отклонить» мимо
+			"reverse_mapping": true,
 		},
 		"inbounds":  []any{tunInbound()},
 		"outbounds": outbounds,

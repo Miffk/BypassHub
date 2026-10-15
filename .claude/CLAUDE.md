@@ -1,6 +1,6 @@
 # BypassHub — заметки для Claude
 
-Код программы — в папке `BypassHub/` (подробности в `BypassHub/README.md`), версия для Android — в `Android/` (`Android/README.md`, версия берётся из того же `__version__`). Тесты: `cd BypassHub && python -m pytest -q`.
+Код программы — в папке `BypassHub/` (подробности в `BypassHub/README.md`), версия для Android — в `Android/` (`Android/README.md`), для iOS — в `iOS/` (`iOS/README.md`); версия у всех берётся из того же `__version__`. Тесты: `cd BypassHub && python -m pytest -q`.
 
 ## Выпуск новой версии
 
@@ -10,7 +10,7 @@
 
 1. GitHub → **Actions** → **BypassHub build** → **Run workflow**
 2. Ветка — основная, в поле версии — тот же номер, что в `__version__` (например `1.2.0`)
-3. Через 10–15 минут в **Releases** появятся `BypassHub.exe` и `BypassHub-android.apk`; установленные копии обновятся сами
+3. Через 10–15 минут в **Releases** появятся `BypassHub.exe`, `BypassHub-android.apk` и `BypassHub-ios.ipa`; Windows и Android обновятся сами, IPA ставят заново со своим сертификатом (ESign)
    (APK попадает в релиз, только если заданы секреты ключа подписи `BH_KEYSTORE_*` — см. `Android/README.md`)
 
 Если версия в коде не менялась, а изменения стоит выпустить — сначала предложи повысить `__version__`.

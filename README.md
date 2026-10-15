@@ -8,9 +8,12 @@
 [![Скачивания](https://img.shields.io/github/downloads/Miffk/BypassHub/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F&color=2cb67d)](https://github.com/Miffk/BypassHub/releases)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
 ![Android 7+](https://img.shields.io/badge/Android-7%2B%20%C2%B7%20TV-3ddc84)
+![iOS 15+](https://img.shields.io/badge/iOS-15%2B-lightgrey)
 [![Сборка](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml/badge.svg)](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml)
 
-**[⬇ Скачать для Windows](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub.exe)** &nbsp;·&nbsp; **[⬇ Скачать для Android](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk)**
+**[⬇ Скачать для Windows](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub.exe)** &nbsp;·&nbsp; **[⬇ Скачать для Android](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk)** &nbsp;·&nbsp; **[⬇ Скачать для iOS](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-ios.ipa)**
+
+<sub>iOS-версия ставится только с вашим сертификатом через ESign, Sideloadly и т. п. — см. [iPhone и iPad](#iphone-и-ipad)</sub>
 
 <sub>Все версии и история изменений — на странице [Releases](https://github.com/Miffk/BypassHub/releases)</sub>
 
@@ -31,7 +34,8 @@ BypassHub — программа для Windows, которая собирает
 обновления: BypassHub делает это сам.
 
 Есть и **[версия для Android](#android)** — для телефонов, планшетов и Android TV: обход блокировок без VPN,
-TG WS Proxy и тот же VPN с раздельным туннелированием, root не нужен.
+TG WS Proxy и тот же VPN с раздельным туннелированием, root не нужен. И **[версия для iPhone и iPad](#iphone-и-ipad)** —
+то же самое на iOS (ставится со своим сертификатом).
 
 ## Содержание
 
@@ -40,6 +44,7 @@ TG WS Proxy и тот же VPN с раздельным туннелирован�
 - [Установка и первый запуск](#установка-и-первый-запуск)
 - [VPN и раздельное туннелирование](#vpn-и-раздельное-туннелирование)
 - [Android](#android)
+- [iPhone и iPad](#iphone-и-ipad)
 - [Telegram на телефоне](#telegram-на-телефоне)
 - [Вопросы и проблемы](#вопросы-и-проблемы)
 - [Где хранятся данные](#где-хранятся-данные)
@@ -225,6 +230,27 @@ VPN вставьте ключ на вкладке **VPN** и нажмите **VP
 Обход и VPN работают по очереди: Android разрешает только одно VPN-подключение. Голосовые звонки Discord без VPN
 не ускоряются. Подробнее — в [Android/README.md](Android/README.md).
 
+## iPhone и iPad
+
+BypassHub для iOS (iOS 15 и новее) умеет то же, что версия для Android: **обход блокировок без VPN**, **TG WS Proxy**
+и **VPN** по ключам VLESS и AmneziaVPN с раздельным туннелированием. На iPhone все три можно включить одновременно:
+сайты из списков обхода (YouTube, Discord…) идут напрямую с обходом, остальное — через VPN.
+
+> **Важно:** приложения нет в App Store, и просто так IPA-файл на iPhone не установить. Его нужно подписать
+> **своим сертификатом** (файлы `.p12` и `.mobileprovision`) в программе для установки — **ESign**, Sideloadly,
+> zsign или похожей. В профиле сертификата должно быть право **Network Extensions** (`packet-tunnel-provider`) —
+> без него iOS не даст создать VPN. Если сертификата нет, установить iOS-версию не получится.
+
+**Установка:**
+
+1. Скачайте [BypassHub-ios.ipa](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-ios.ipa).
+2. Подпишите его своим сертификатом в ESign (или Sideloadly, zsign). **Не удаляйте плагины/расширения** — VPN
+   работает во встроенном расширении `BypassHub Tunnel`.
+3. Установите и откройте BypassHub. При первом включении iOS попросит разрешение добавить VPN-конфигурацию.
+
+Само iOS-приложение не обновляется: новую версию скачайте из Releases и подпишите так же — серверы и настройки
+сохранятся. Файл `.p12` и пароль от него никому не отправляйте. Подробнее — в [iOS/README.md](iOS/README.md).
+
 ## Telegram на телефоне
 
 Прокси, запущенный на компьютере, может ускорять Telegram и на телефоне в той же Wi-Fi-сети:
@@ -349,6 +375,7 @@ build.bat
 Тесты: `python -m pytest`. Подробности для разработчиков — в [BypassHub/README.md](BypassHub/README.md).
 
 Версия для Android (Go + Kotlin) собирается в GitHub Actions; как собрать её самому — в [Android/README.md](Android/README.md).
+Версия для iOS (то же ядро на Go + SwiftUI) — тоже в GitHub Actions, без подписи; сборка — в [iOS/README.md](iOS/README.md).
 
 ## Благодарности и лицензии
 

@@ -128,7 +128,7 @@ jobs:
           path: Android/BypassHub-android.apk
 
   # iOS: неподписанный IPA — его подписывают своим сертификатом (ESign, Sideloadly, zsign), см. iOS/README.md.
-  # Пока в релиз не попадает — только артефакт сборки.
+  # В релиз попадает как BypassHub-ios.ipa — без подписи, её ставят своим сертификатом.
   ios:
     runs-on: macos-latest
     steps:
@@ -176,7 +176,7 @@ jobs:
           path: iOS/BypassHub-ios.ipa
 
   release:
-    needs: [windows, android]
+    needs: [windows, android, ios]
     if: startsWith(github.ref, 'refs/tags/bypasshub-v') || inputs.release != ''
     runs-on: ubuntu-latest
     steps:
@@ -188,11 +188,11 @@ jobs:
       - name: Files
         id: files
         run: |
-          files="dist/BypassHub.exe"
+          files="dist/BypassHub.exe"$'\n'"dist/BypassHub-ios.ipa"
           if [ "${{ needs.android.outputs.signed }}" = "true" ]; then
             files="$files"$'\n'"dist/BypassHub-android.apk"
           else
-            echo "::warning::APK не подписан ключом релизов — в релиз попадёт только BypassHub.exe"
+            echo "::warning::APK не подписан ключом релизов — в релиз попадут BypassHub.exe и BypassHub-ios.ipa, без APK"
           fi
           { echo "list<<EOF"; echo "$files"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
@@ -210,4 +210,9 @@ jobs:
             **Android** (телефоны, планшеты, Android TV) — скачайте **BypassHub-android.apk** и установите
             (Android попросит разрешить установку из этого источника).
 
-            Установленные копии обновятся сами.
+            **iPhone и iPad** — **BypassHub-ios.ipa** ставится только **со своим сертификатом**: подпишите его
+            в ESign, Sideloadly или zsign (не удаляя плагины) и установите. Без сертификата iOS-версию не установить —
+            подробнее в [README](https://github.com/Miffk/BypassHub#iphone-и-ipad).
+
+            Windows и Android обновятся сами; на iPhone новую версию нужно подписать и установить заново
+            (серверы и настройки сохранятся).
