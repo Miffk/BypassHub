@@ -120,24 +120,27 @@ final class Store: ObservableObject {
                 problems.append("подписка не скачалась: \(error.localizedDescription)")
             }
         }
-        return await MainActor.run {
-            subscriptions = subs
-            var known = Set(profiles.map { $0.id })
-            let added = found.filter { known.insert($0.id).inserted }
-            profiles += added
-            if let first = added.first, !profiles.contains(where: { $0.id == active }), active != autoID {
-                active = first.id
+        let (newSubs, newFound, allProblems) = (subs, found, problems)
+        let count: Int = await MainActor.run {
+            self.subscriptions = newSubs
+            var known = Set(self.profiles.map { $0.id })
+            let added = newFound.filter { known.insert($0.id).inserted }
+            self.profiles += added
+            if let first = added.first, !self.profiles.contains(where: { $0.id == self.active }), self.active != autoID {
+                self.active = first.id
             }
-            return (added.count, problems)
+            return added.count
         }
+        return (count, allProblems)
     }
 
     /// Обновить серверы из подписок (ключи подписки заменяются новыми, имена сохраняются).
     func refreshSubscriptions() async -> (Int, [String]) {
         var problems: [String] = []
-        var list = await MainActor.run { profiles }
+        var list: [Profile] = await MainActor.run { self.profiles }
         var total = 0
-        for url in await MainActor.run(body: { subscriptions }) {
+        let urls: [String] = await MainActor.run { self.subscriptions }
+        for url in urls {
             do {
                 let (keys, extra) = try await Self.fetchSubscription(url)
                 problems += extra
@@ -154,7 +157,7 @@ final class Store: ObservableObject {
             }
         }
         let result = list
-        await MainActor.run { profiles = result }
+        await MainActor.run { self.profiles = result }
         return (total, problems)
     }
 

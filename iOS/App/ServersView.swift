@@ -176,6 +176,7 @@ struct ServersView: View {
 
 /// TextEditor на iOS 15 рисует свой белый фон — убираем его.
 struct HideEditorBackground: ViewModifier {
+    @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 16.0, *) {
             content.scrollContentBackground(.hidden)
