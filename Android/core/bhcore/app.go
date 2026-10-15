@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -508,6 +509,8 @@ func Run(requestJSON string, platform Platform) error {
 		return fmt.Errorf("настройки: %v", err)
 	}
 	StopAll()
+	// прежний запуск ещё держит память; на iOS у VPN-расширения предел около 50 МБ — отдаём её сразу
+	debug.FreeOSMemory()
 	logPlatform = platform
 	if req.DataDir == "" {
 		req.DataDir = workingPath

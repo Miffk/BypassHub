@@ -12,6 +12,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let queue = DispatchQueue(label: "bypasshub.core")
     private let pathMonitor = Network.NWPathMonitor()
     private var lastError = ""
+    private var memTimer: DispatchSourceTimer?
     /// Что запущено последним (режим и TG) и идёт ли перезапуск — для команды state.
     private let stateLock = NSLock()
     private var reqMode = "none"
@@ -34,6 +35,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let temp = caches.appendingPathComponent("tmp", isDirectory: true)
         pathMonitor.pathUpdateHandler = { [weak self] path in self?.queue.async { self?.reportPath(path) } }
         pathMonitor.start(queue: DispatchQueue(label: "bypasshub.path"))
+        let memTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "bypasshub.mem"))
+        memTimer.schedule(deadline: .now() + 30, repeating: 30)
+        memTimer.setEventHandler { [weak self] in self?.log.add("Память расширения: \(memoryFootprintMB()) МБ") }
+        memTimer.resume()
+        self.memTimer = memTimer
 
         queue.async {
             BhcoreSetMemoryLimit(40)
@@ -101,6 +107,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         stateLock.unlock()
         try? request.write(to: lastRequestFile, atomically: true, encoding: .utf8)
         reportPath(pathMonitor.currentPath)
+        log.add("Запущено: \(mode)\(withBypass ? " + обход" : "")\(tg ? " + TG-прокси" : ""), память \(memoryFootprintMB()) МБ")
+        log.save()
         return nil
     }
 
@@ -182,15 +190,34 @@ struct TunnelError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Журнал расширения (последние строки) — приложение забирает его командой log.
+/// Журнал расширения (последние строки) — приложение забирает его командой log. Он же сохраняется в файл:
+/// если iOS остановит расширение (например, за нехватку памяти), при следующем запуске будет видно, на чём.
 final class TunnelLog {
     private var lines: [String] = []
     private let lock = NSLock()
+    private var dirty = false
+    private let file = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("tunnel-log.txt")
     private let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+
+    init() {
+        if let old = try? String(contentsOf: file, encoding: .utf8), !old.isEmpty {
+            lines = ["———— прошлый запуск ————"] + old.split(separator: "\n").suffix(80).map(String.init) +
+                ["———— новый запуск ————"]
+        }
+        // сохраняем раз в несколько секунд, а не на каждую строку
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "bypasshub.log"))
+        timer.schedule(deadline: .now() + 3, repeating: 3)
+        timer.setEventHandler { [weak self] in self?.save() }
+        timer.resume()
+        saveTimer = timer
+    }
+
+    private var saveTimer: DispatchSourceTimer?
 
     func add(_ message: String) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -201,6 +228,7 @@ final class TunnelLog {
         lock.lock()
         lines.append(line)
         if lines.count > 400 { lines.removeFirst(lines.count - 400) }
+        dirty = true
         lock.unlock()
     }
 
@@ -209,6 +237,30 @@ final class TunnelLog {
         defer { lock.unlock() }
         return lines.joined(separator: "\n")
     }
+
+    func save() {
+        lock.lock()
+        guard dirty else {
+            lock.unlock()
+            return
+        }
+        dirty = false
+        let all = lines.joined(separator: "\n")
+        lock.unlock()
+        try? all.write(to: file, atomically: true, encoding: .utf8)
+    }
+}
+
+/// Сколько памяти занимает расширение (как считает iOS для своего предела), МБ.
+func memoryFootprintMB() -> Int {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return kr == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : -1
 }
 
 /// Платформа для ядра: настраивает туннель iOS по запросу sing-box.
