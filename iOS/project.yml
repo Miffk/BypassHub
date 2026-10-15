@@ -19,7 +19,7 @@ targets:
   BypassHub:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.miffk.bypasshub
@@ -36,7 +36,7 @@ targets:
   Tunnel:
     type: app-extension
     platform: iOS
-    sources: [Tunnel]
+    sources: [Tunnel, Shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.miffk.bypasshub.tunnel

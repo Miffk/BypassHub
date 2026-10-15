@@ -45,6 +45,8 @@ final class Tunnel: ObservableObject {
     private var generation = 0
     /// Последний журнал расширения — остаётся виден и после отключения.
     private(set) var savedLog = ""
+    /// Отвечает ли расширение на сообщения (nil — ещё не проверяли). Для диагностики в журнале.
+    @Published private(set) var messagesOK: Bool?
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
@@ -303,8 +305,14 @@ final class Tunnel: ObservableObject {
             return
         }
         do {
-            try session.sendProviderMessage(data) { r in DispatchQueue.main.async { reply(r) } }
+            try session.sendProviderMessage(data) { r in
+                DispatchQueue.main.async {
+                    if self.connected { self.messagesOK = r != nil }
+                    reply(r)
+                }
+            }
         } catch {
+            if connected { messagesOK = false }
             reply(nil)
         }
     }
@@ -336,6 +344,13 @@ final class Tunnel: ObservableObject {
     }
 
     func fetchLog(_ done: @escaping (String) -> Void) {
+        // журнал из общей папки — работает, даже если сообщения до расширения не доходят
+        if SharedGroup.directory != nil, let t = try? String(contentsOf: SharedGroup.logFile, encoding: .utf8),
+           !t.isEmpty {
+            savedLog = t
+            done(t)
+            return
+        }
         guard connected else {
             done(savedLog)
             return

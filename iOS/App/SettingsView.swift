@@ -1,4 +1,5 @@
 import Bhcore
+import Network
 import SwiftUI
 import UIKit
 
@@ -75,19 +76,26 @@ struct SettingsView: View {
 
 struct LogView: View {
     @EnvironmentObject var tunnel: Tunnel
+    @EnvironmentObject var store: Store
     @State private var text = ""
     @State private var timer: Timer?
+    @State private var tgPortOpen: Bool?
 
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
                     BHButton("Копировать", primary: false) {
-                        UIPasteboard.general.string = text
+                        UIPasteboard.general.string = diagnostics + "\n\n" + text
                         Toast.shared.show("Журнал скопирован")
                     }
                     BHButton("Обновить", primary: false) { refresh() }
                 }
+                Text(diagnostics)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
                 Text(text.isEmpty ? (tunnel.connected ? "Журнал пуст" : "Журнал ведёт VPN-расширение — включите любой режим на главной. Если оно перед этим остановилось с " +
                      "ошибкой, в начале журнала будет «прошлый запуск»")
                      : text)
@@ -110,7 +118,52 @@ struct LogView: View {
         .onDisappear { timer?.invalidate() }
     }
 
+    /// Что видно со стороны приложения — чтобы понять, где рвётся связь.
+    private var diagnostics: String {
+        func yesNo(_ v: Bool?) -> String { v == nil ? "не проверено" : v! ? "есть" : "нет" }
+        var lines = [
+            "BypassHub \(appVersion) (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))",
+            "VPN-подключение: \(tunnel.connected ? "есть" : "нет") · VPN \(tunnel.want("vpn") ? "вкл" : "выкл"), " +
+                "обход \(tunnel.want("bypass") ? "вкл" : "выкл"), TG \(tunnel.want("tg") ? "вкл" : "выкл")",
+            "Общая папка с расширением: \(SharedGroup.directory != nil ? "есть" : "нет") · " +
+                "сообщения расширению: \(yesNo(tunnel.messagesOK))",
+        ]
+        if tunnel.want("tg") {
+            lines.append("Порт прокси 127.0.0.1:\(String(store.tgPort)): " +
+                         (tgPortOpen == nil ? "проверка…" : tgPortOpen! ? "открыт" : "закрыт"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func refresh() {
         tunnel.fetchLog { text = $0 }
+        if tunnel.want("tg") {
+            checkPort(store.tgPort) { tgPortOpen = $0 }
+        }
+    }
+
+    /// Открыт ли порт на 127.0.0.1 — так же к нему подключается Telegram.
+    private func checkPort(_ port: Int, done: @escaping (Bool) -> Void) {
+        guard let p = NWEndpoint.Port(rawValue: UInt16(port)) else { return done(false) }
+        let c = NWConnection(host: "127.0.0.1", port: p, using: .tcp)
+        final class Once { var done = false }
+        let once = Once()
+        let finish = { (ok: Bool) in
+            DispatchQueue.main.async {
+                if once.done { return }
+                once.done = true
+                c.cancel()
+                done(ok)
+            }
+        }
+        c.stateUpdateHandler = { state in
+            switch state {
+            case .ready: finish(true)
+            case .failed, .waiting: finish(false)
+            default: break
+            }
+        }
+        c.start(queue: .global())
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { finish(false) }
     }
 }

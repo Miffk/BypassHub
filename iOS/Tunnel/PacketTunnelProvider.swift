@@ -13,6 +13,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let pathMonitor = Network.NWPathMonitor()
     private var lastError = ""
     private var memTimer: DispatchSourceTimer?
+    private var seenCommands = Set<String>()
     /// Что запущено последним (режим и TG) и идёт ли перезапуск — для команды state.
     private let stateLock = NSLock()
     private var reqMode = "none"
@@ -35,6 +36,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let temp = caches.appendingPathComponent("tmp", isDirectory: true)
         pathMonitor.pathUpdateHandler = { [weak self] path in self?.queue.async { self?.reportPath(path) } }
         pathMonitor.start(queue: DispatchQueue(label: "bypasshub.path"))
+        log.add("Расширение запущено; общая папка с приложением: " +
+                (SharedGroup.directory != nil ? "есть" : "нет (группы в профиле: \(SharedGroup.groupIDs()))"))
         let memTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "bypasshub.mem"))
         memTimer.schedule(deadline: .now() + 30, repeating: 30)
         memTimer.setEventHandler { [weak self] in self?.log.add("Память расширения: \(memoryFootprintMB()) МБ") }
@@ -144,6 +147,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         let msg = (try? JSONSerialization.jsonObject(with: messageData)) as? [String: Any] ?? [:]
         let cmd = msg["cmd"] as? String ?? "state"
+        if !seenCommands.contains(cmd) {
+            seenCommands.insert(cmd)
+            log.add("Связь с приложением есть (команда \(cmd))")
+        }
         let reply: (String) -> Void = { completionHandler?($0.data(using: .utf8)) }
         switch cmd {
         case "run":
@@ -196,8 +203,7 @@ final class TunnelLog {
     private var lines: [String] = []
     private let lock = NSLock()
     private var dirty = false
-    private let file = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("tunnel-log.txt")
+    private let file = SharedGroup.logFile
     private let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
