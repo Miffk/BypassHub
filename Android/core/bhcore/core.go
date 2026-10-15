@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"sync"
 
 	box "github.com/sagernet/sing-box"
@@ -56,6 +57,12 @@ func Setup(working, temp string) error {
 		return err
 	}
 	return os.MkdirAll(temp, 0o755)
+}
+
+// SetMemoryLimit — мягкий предел памяти Go в МБ (у VPN-расширения iOS жёсткий лимит около 50 МБ).
+func SetMemoryLimit(mb int) {
+	debug.SetMemoryLimit(int64(mb) << 20)
+	debug.SetGCPercent(50)
 }
 
 // Version — версия встроенного sing-box.

@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"sync"
 	"syscall"
-	"unsafe"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -20,7 +19,6 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/common/x/list"
-	"golang.org/x/sys/unix"
 )
 
 type platformWrapper struct {
@@ -110,6 +108,12 @@ func (w *platformWrapper) OpenInterface(options *tun.Options, platformOptions op
 	if err != nil {
 		return nil, err
 	}
+	if fd < 0 {
+		// iOS: NEPacketTunnelProvider не отдаёт fd напрямую — находим utun среди своих дескрипторов
+		if fd, err = findTunFD(); err != nil {
+			return nil, err
+		}
+	}
 	name, err := tunName(fd)
 	if err != nil {
 		return nil, E.Cause(err, "имя TUN")
@@ -129,15 +133,6 @@ func (w *platformWrapper) OpenInterface(options *tun.Options, platformOptions op
 	return tun.New(*options)
 }
 
-func tunName(fd int32) (string, error) {
-	var ifr [unix.IFNAMSIZ + 64]byte
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.TUNGETIFF), uintptr(unsafe.Pointer(&ifr[0])))
-	if errno != 0 {
-		return "", errno
-	}
-	return unix.ByteSliceToString(ifr[:]), nil
-}
-
 func (w *platformWrapper) ProcessPlatformOptions(options option.TunPlatformOptions) error { return nil }
 
 func (w *platformWrapper) UsePlatformDefaultInterfaceMonitor() bool { return true }
@@ -147,7 +142,8 @@ func (w *platformWrapper) CreateDefaultInterfaceMonitor(l logger.Logger) tun.Def
 	return w.monitor
 }
 
-func (w *platformWrapper) UsePlatformNetworkInterfaces() bool { return true }
+// На iOS Go читает интерфейсы сам; на Android 11+ это запрещено — список даёт Kotlin.
+func (w *platformWrapper) UsePlatformNetworkInterfaces() bool { return !C.IsIos }
 
 // netInterface — интерфейс из InterfacesJSON (Kotlin: java.net.NetworkInterface + ConnectivityManager).
 type netInterface struct {
@@ -200,7 +196,7 @@ func (w *platformWrapper) NetworkInterfaces() ([]adapter.NetworkInterface, error
 	return out, nil
 }
 
-func (w *platformWrapper) UnderNetworkExtension() bool              { return false }
+func (w *platformWrapper) UnderNetworkExtension() bool              { return C.IsIos }
 func (w *platformWrapper) NetworkExtensionIncludeAllNetworks() bool { return false }
 func (w *platformWrapper) ClearDNSCache()                           {}
 func (w *platformWrapper) RequestPermissionForWIFIState() error     { return nil }

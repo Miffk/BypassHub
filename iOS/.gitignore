@@ -2,3 +2,4 @@ BypassHub.xcodeproj/
 build/
 Payload/
 *.ipa
+Bhcore.xcframework/

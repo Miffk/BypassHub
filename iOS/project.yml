@@ -1,4 +1,5 @@
 # Проект Xcode генерируется XcodeGen (brew install xcodegen; xcodegen) — так его можно собирать без Mac в CI.
+# Ядро (Bhcore.xcframework) собирается gomobile из Android/core — см. iOS/README.md.
 name: BypassHub
 options:
   bundleIdPrefix: io.github.miffk
@@ -6,11 +7,14 @@ options:
     iOS: "15.0"
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""
     CODE_SIGNING_ALLOWED: "NO"
     SWIFT_VERSION: "5.0"
+    ENABLE_BITCODE: "NO"
+    # Go-ядру нужны libresolv (DNS) и системные фреймворки (сертификаты, сеть)
+    OTHER_LDFLAGS: ["-lresolv", "-framework", "Security", "-framework", "CoreFoundation", "-framework", "SystemConfiguration"]
 targets:
   BypassHub:
     type: application
@@ -22,9 +26,13 @@ targets:
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/BypassHub.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: Tunnel
         embed: true
+      - framework: Bhcore.xcframework
+        embed: false
+      - sdk: NetworkExtension.framework
   Tunnel:
     type: app-extension
     platform: iOS
@@ -35,4 +43,6 @@ targets:
         INFOPLIST_FILE: Tunnel/Info.plist
         CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
     dependencies:
+      - framework: Bhcore.xcframework
+        embed: false
       - sdk: NetworkExtension.framework
