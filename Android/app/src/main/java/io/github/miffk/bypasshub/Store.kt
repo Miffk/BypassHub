@@ -28,6 +28,9 @@ data class Profile(val id: String, val kind: String, var name: String, val data:
 
 const val AUTO = "auto"
 
+/** Поддержать проект — ссылка внизу главной (та же, что в README и у Windows-версии). */
+const val SUPPORT_URL = "https://www.donationalerts.com/r/m1ffk"
+
 /** Настройки и серверы (SharedPreferences). */
 object Store {
     private lateinit var prefs: SharedPreferences

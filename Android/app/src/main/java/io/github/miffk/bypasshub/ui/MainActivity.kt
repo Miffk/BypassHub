@@ -29,6 +29,7 @@ import io.github.miffk.bypasshub.LogBuffer
 import io.github.miffk.bypasshub.Profile
 import io.github.miffk.bypasshub.R
 import io.github.miffk.bypasshub.Rules
+import io.github.miffk.bypasshub.SUPPORT_URL
 import io.github.miffk.bypasshub.Store
 import io.github.miffk.bypasshub.Tg
 import io.github.miffk.bypasshub.Updater
@@ -273,7 +274,10 @@ class MainActivity : Activity() {
             minOf(resources.displayMetrics.widthPixels, dp(640)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
         scroll.addView(holder)
         when (page) {
-            "home" -> buildHome(column)
+            "home" -> {
+                buildHome(column)
+                supportLink(column)
+            }
             "vpn" -> buildServers(column)
             "bypass" -> buildBypass(column)
             "tg" -> buildTg(column)
@@ -449,6 +453,26 @@ class MainActivity : Activity() {
             return
         }
         homeServers(col, profiles)
+    }
+
+    /** Небольшая ссылка «Поддержать проект» внизу главной. */
+    private fun supportLink(col: LinearLayout) {
+        val t = Ui.text(this, "❤️  Поддержать проект", 14f, Ui.MUTED, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }
+        clickable(t, "support", 18, Ui.rounded(this, Color.TRANSPARENT, 18)) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(SUPPORT_URL)))
+            } catch (e: android.content.ActivityNotFoundException) {
+                toast("Не найден браузер: $SUPPORT_URL")
+            }
+        }
+        col.addView(t, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(24)
+        })
     }
 
     /** Работает ли режим (для точки на сегменте и свечения фона). */

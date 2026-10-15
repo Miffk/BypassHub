@@ -12,7 +12,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from .. import APP_NAME, __version__
+from .. import APP_NAME, SUPPORT_URL, __version__, winutil
 from ..core import Core, UpdateInfo, VpnState
 from ..log import log
 from ..paths import resource_path
@@ -171,7 +171,9 @@ class App(ctk.CTk):
             self.nav_items[key] = item
 
         ctk.CTkLabel(self.nav, text=f"v{__version__}", text_color=P.muted,
-                     font=ctk.CTkFont(size=11)).pack(side="bottom", pady=14)
+                     font=ctk.CTkFont(size=11)).pack(side="bottom", pady=(0, 14))
+        W.NavItem(self.nav, "Поддержать проект", "heart",
+                  command=lambda: winutil.open_url(SUPPORT_URL)).pack(side="bottom", padx=16, pady=(0, 6))
         self.show_page(self.current_page)
 
     def apply_appearance(self, animate: bool = True) -> None:

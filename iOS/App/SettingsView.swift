@@ -4,6 +4,8 @@ import UIKit
 
 let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
 let releasesURL = URL(string: "https://github.com/Miffk/BypassHub/releases/latest")!
+/// Поддержать проект — ссылка внизу главной (та же, что в README и у Windows-версии).
+let supportURL = URL(string: "https://www.donationalerts.com/r/m1ffk")!
 
 struct SettingsView: View {
     @State private var checking = false

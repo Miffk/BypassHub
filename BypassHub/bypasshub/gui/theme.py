@@ -262,7 +262,7 @@ def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 ICONS = {  # глифы Segoe MDL2 Assets / Segoe Fluent Icons (есть в Windows 10/11)
     "home": "\uE80F", "shield": "\uE83D", "send": "\uE724", "sync": "\uE895",
-    "settings": "\uE713", "list": "\uE8A5", "power": "\uE7E8", "vpn": "\uE705",
+    "settings": "\uE713", "list": "\uE8A5", "power": "\uE7E8", "vpn": "\uE705", "heart": "\uE006",
 }
 
 

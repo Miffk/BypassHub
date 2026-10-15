@@ -17,6 +17,16 @@ struct HomeView: View {
             VStack(spacing: 0) {
                 segments.padding(.top, 6)
                 if m == "tg" { tgHome } else { modeHome }
+                Button { UIApplication.shared.open(supportURL) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "heart.fill").foregroundColor(Theme.softRed)
+                        Text("Поддержать проект").foregroundColor(Theme.muted)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 24)
             }
             .frame(maxWidth: 640)
             .padding(.horizontal, 16)
