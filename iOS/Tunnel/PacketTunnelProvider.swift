@@ -10,7 +10,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let log = TunnelLog()
     private lazy var platform = TunnelPlatform(provider: self, log: log)
     private let queue = DispatchQueue(label: "bypasshub.core")
-    private let pathMonitor = NWPathMonitor()
+    private let pathMonitor = Network.NWPathMonitor()
     private var lastError = ""
 
     private var caches: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0] }
@@ -99,7 +99,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// Основная сеть устройства (Wi-Fi, сотовая) — ядру для выбора маршрута.
-    private func reportPath(_ path: NWPath) {
+    private func reportPath(_ path: Network.NWPath) {
         guard path.status == .satisfied,
               let iface = path.availableInterfaces.first(where: { $0.type != .other && $0.type != .loopback })
         else { return }
