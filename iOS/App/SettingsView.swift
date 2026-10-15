@@ -86,7 +86,8 @@ struct LogView: View {
                     }
                     BHButton("Обновить", primary: false) { refresh() }
                 }
-                Text(text.isEmpty ? (tunnel.connected ? "Журнал пуст" : "Журнал ведёт VPN-расширение — включите режим на главной")
+                Text(text.isEmpty ? (tunnel.connected ? "Журнал пуст" : "Журнал ведёт VPN-расширение — включите любой режим на главной. Если оно перед этим остановилось с " +
+                     "ошибкой, в начале журнала будет «прошлый запуск»")
                      : text)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(Theme.text)

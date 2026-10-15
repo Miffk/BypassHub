@@ -37,9 +37,9 @@ final class Tunnel: ObservableObject {
     @Published private(set) var tg = false
     /// Туннель запускается (до состояния «подключено»).
     @Published private var starting = false
-    /// Команда run отправлена, ответа ещё нет.
-    @Published private var running = false
-    /// Настройки поменялись, пока туннель запускался или ядро перезапускалось, — отправить ещё раз.
+    /// Туннель остановлен, чтобы сразу запустить его с новым набором режимов.
+    @Published private var restarting = false
+    /// Набор поменялся, пока туннель запускался, — перезапустить, когда подключится.
     private var dirty = false
     /// Растёт при каждом изменении — ответы на старые запросы состояния не должны затирать новое.
     private var generation = 0
@@ -52,7 +52,7 @@ final class Tunnel: ObservableObject {
 
     var connected: Bool { status == .connected }
     var connecting: Bool { status == .connecting || status == .reasserting || starting }
-    var busy: Bool { starting || running || dirty }
+    var busy: Bool { starting || restarting || dirty }
     /// Туннель поднят или поднимается — тогда новый режим добавляется к уже включённым.
     private var active: Bool { connected || connecting }
 
@@ -97,10 +97,16 @@ final class Tunnel: ObservableObject {
             starting = false
             if dirty {
                 dirty = false
-                sendRun()
+                restart()
             } else {
                 poll()
             }
+        }
+        if (s == .disconnected || s == .invalid) && restarting {
+            // старое расширение остановлено — запускаем заново со всеми включёнными режимами
+            restarting = false
+            start(request)
+            return
         }
         if s == .disconnected || s == .invalid {
             if was == .connecting || was == .connected || was == .reasserting || was == .disconnecting {
@@ -111,7 +117,6 @@ final class Tunnel: ObservableObject {
                 vpn = false
                 bypass = false
                 tg = false
-                running = false
                 dirty = false
                 core = CoreState()
             }
@@ -177,40 +182,26 @@ final class Tunnel: ObservableObject {
             stop()
             return
         }
-        if connected && !running {
-            sendRun()
+        if connected {
+            restart()
         } else if active {
-            // туннель ещё поднимается или ядро перезапускается — отправим, когда освободится
+            // туннель ещё поднимается — перезапустим, когда подключится
             dirty = true
         } else {
             start(request)
         }
     }
 
+    /// Перезапуск туннеля с новым набором режимов. Перезапуск ядра внутри работающего расширения
+    /// (команда run) на iOS выходил за предел памяти расширения — новое расширение начинает с чистого листа.
+    private func restart() {
+        restarting = true
+        manager?.connection.stopVPNTunnel()
+    }
+
     /// RunRequest для расширения из того, что включено.
     private var request: String {
         Store.shared.request(mode: vpn ? "vpn" : bypass ? "bypass" : "none", bypass: vpn && bypass, tg: tg)
-    }
-
-    /// Отправить расширению текущие настройки — оно перезапустит ядро без переподключения.
-    private func sendRun() {
-        running = true
-        send(["cmd": "run", "request": request]) { data in
-            self.running = false
-            let reply = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-            if reply["ok"] as? Bool != true {
-                self.dirty = false
-                self.error = reply["error"] as? String ?? "Расширение не ответило"
-                self.fetchLog { _ in self.stop() }
-                return
-            }
-            if self.dirty {
-                self.dirty = false
-                self.sendRun()
-            } else {
-                self.poll()
-            }
-        }
     }
 
     private func start(_ request: String) {
@@ -234,7 +225,7 @@ final class Tunnel: ObservableObject {
 
     func stop() {
         starting = false
-        running = false
+        restarting = false
         dirty = false
         generation += 1
         manager?.connection.stopVPNTunnel()
@@ -242,7 +233,7 @@ final class Tunnel: ObservableObject {
 
     private func fail(_ message: String) {
         starting = false
-        running = false
+        restarting = false
         dirty = false
         vpn = false
         bypass = false
