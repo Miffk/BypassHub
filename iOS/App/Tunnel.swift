@@ -18,6 +18,7 @@ struct CoreState: Decodable {
     /// Что расширению велели запустить последним (режим и TG) и идёт ли сейчас перезапуск.
     var reqMode: String?
     var reqTG: Bool?
+    var reqBypass: Bool?
     var busy: Bool?
 }
 
@@ -29,9 +30,10 @@ final class Tunnel: ObservableObject {
     @Published private(set) var status: NEVPNStatus = .invalid
     @Published private(set) var core = CoreState()
     @Published var error: String?
-    /// Что должно работать: режим (vpn | bypass | none) и TG-прокси. Источник правды — приложение;
+    /// Что должно работать: VPN, обход и TG-прокси — в любом сочетании. Источник правды — приложение;
     /// расширение догоняет его командой run (или запуском туннеля с этими настройками).
-    @Published private(set) var mode = "none"
+    @Published private(set) var vpn = false
+    @Published private(set) var bypass = false
     @Published private(set) var tg = false
     /// Туннель запускается (до состояния «подключено»).
     @Published private var starting = false
@@ -57,7 +59,16 @@ final class Tunnel: ObservableObject {
     /// Работает ли режим: vpn, bypass или tg.
     func isOn(_ m: String) -> Bool {
         guard connected else { return false }
-        return m == "tg" ? tg : mode == m
+        return want(m)
+    }
+
+    /// Включён ли режим в приложении (туннель может ещё подключаться).
+    func want(_ m: String) -> Bool {
+        switch m {
+        case "vpn": return vpn
+        case "bypass": return bypass
+        default: return tg
+        }
     }
 
     func load() {
@@ -97,7 +108,8 @@ final class Tunnel: ObservableObject {
             }
             if !starting {
                 if was == .connecting { fetchDisconnectError() }
-                mode = "none"
+                vpn = false
+                bypass = false
                 tg = false
                 running = false
                 dirty = false
@@ -126,7 +138,8 @@ final class Tunnel: ObservableObject {
             // приложение могло быть закрыто, пока туннель работал, — берём режим у расширения,
             // но только если с момента запроса ничего не меняли и ядро не перезапускается
             if gen == self.generation && !self.busy && st.busy != true, let m = st.reqMode {
-                self.mode = m.isEmpty ? "none" : m
+                self.vpn = m == "vpn"
+                self.bypass = m == "bypass" || (m == "vpn" && st.reqBypass == true)
                 self.tg = st.reqTG ?? false
             }
             if let e = st.error, !e.isEmpty, !self.busy {
@@ -141,26 +154,26 @@ final class Tunnel: ObservableObject {
     /// Включить или выключить режим vpn | bypass | tg. Остальное, что уже включено, остаётся.
     func toggle(_ m: String) {
         error = nil
-        var newMode = active ? mode : "none"
-        var newTG = active ? tg : false
-        if m == "tg" {
-            newTG.toggle()
-        } else {
-            newMode = newMode == m ? "none" : m
+        var v = active && vpn, b = active && bypass, t = active && tg
+        switch m {
+        case "vpn": v.toggle()
+        case "bypass": b.toggle()
+        default: t.toggle()
         }
-        apply(mode: newMode, tg: newTG)
+        apply(vpn: v, bypass: b, tg: t)
     }
 
     /// Перезапустить с новыми настройками, если работает (сменили сервер, способ обхода, порт…).
     func restartIfRunning() {
-        if active { apply(mode: mode, tg: tg) }
+        if active { apply(vpn: vpn, bypass: bypass, tg: tg) }
     }
 
-    func apply(mode newMode: String, tg newTG: Bool) {
+    func apply(vpn v: Bool, bypass b: Bool, tg t: Bool) {
         generation += 1
-        mode = newMode
-        tg = newTG
-        if newMode == "none" && !newTG {
+        vpn = v
+        bypass = b
+        tg = t
+        if !v && !b && !t {
             stop()
             return
         }
@@ -170,14 +183,19 @@ final class Tunnel: ObservableObject {
             // туннель ещё поднимается или ядро перезапускается — отправим, когда освободится
             dirty = true
         } else {
-            start(Store.shared.request(mode: newMode, tg: newTG))
+            start(request)
         }
     }
 
-    /// Отправить расширению текущие настройки (mode, tg) — оно перезапустит ядро без переподключения.
+    /// RunRequest для расширения из того, что включено.
+    private var request: String {
+        Store.shared.request(mode: vpn ? "vpn" : bypass ? "bypass" : "none", bypass: vpn && bypass, tg: tg)
+    }
+
+    /// Отправить расширению текущие настройки — оно перезапустит ядро без переподключения.
     private func sendRun() {
         running = true
-        send(["cmd": "run", "request": Store.shared.request(mode: mode, tg: tg)]) { data in
+        send(["cmd": "run", "request": request]) { data in
             self.running = false
             let reply = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             if reply["ok"] as? Bool != true {
@@ -226,7 +244,8 @@ final class Tunnel: ObservableObject {
         starting = false
         running = false
         dirty = false
-        mode = "none"
+        vpn = false
+        bypass = false
         tg = false
         error = message
     }

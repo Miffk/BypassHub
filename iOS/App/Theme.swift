@@ -204,22 +204,62 @@ func hideKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }
 
-/// Кнопка «Готово» над клавиатурой и скрытие клавиатуры прокруткой: у многострочного поля и цифровой
-/// клавиатуры нет своей кнопки, которая её убирает.
+/// Скрытие клавиатуры прокруткой (iOS 16+). Кнопку «Скрыть клавиатуру» рисует RootView: панель
+/// SwiftUI над клавиатурой (.toolbar с placement .keyboard) внутри вкладок не показывается.
 struct KeyboardDismiss: ViewModifier {
+    @ViewBuilder
     func body(content: Content) -> some View {
-        Group {
-            if #available(iOS 16.0, *) {
-                content.scrollDismissesKeyboard(.interactively)
-            } else {
-                content
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Готово") { hideKeyboard() }.font(.body.bold())
-            }
+        if #available(iOS 16.0, *) {
+            content.scrollDismissesKeyboard(.interactively)
+        } else {
+            content
         }
     }
+}
+
+/// Видна ли клавиатура.
+final class KeyboardObserver: ObservableObject {
+    @Published var visible = false
+    private var tokens: [NSObjectProtocol] = []
+
+    init() {
+        let nc = NotificationCenter.default
+        tokens.append(nc.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) {
+            [weak self] _ in self?.visible = true
+        })
+        tokens.append(nc.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) {
+            [weak self] _ in self?.visible = false
+        })
+    }
+}
+
+/// Нажатие мимо поля ввода убирает клавиатуру (кнопки при этом нажимаются как обычно).
+final class TapToHideKeyboard: NSObject, UIGestureRecognizerDelegate {
+    static let shared = TapToHideKeyboard()
+    private var installed = false
+
+    func install() {
+        guard !installed, let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).flatMap({ $0.windows }).first
+        else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(hide))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+        installed = true
+    }
+
+    @objc private func hide() { hideKeyboard() }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var v = touch.view
+        while let view = v {
+            if view is UITextView || view is UITextField { return false }
+            v = view.superview
+        }
+        return true
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }

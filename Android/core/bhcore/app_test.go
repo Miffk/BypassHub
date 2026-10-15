@@ -84,12 +84,12 @@ func TestOutboundsAndConfigs(t *testing.T) {
 	if ws["path"] != "/ws" || ws["max_early_data"] != 2048 {
 		t.Fatalf("ws: %v", ws)
 	}
-	vpn := buildVPNConfig(serverGroup(servers, autoTag), true, map[string]string{}, 9090, "s", nil)
+	vpn := buildVPNConfig(serverGroup(servers, autoTag), true, map[string]string{}, 9090, "s", nil, nil)
 	if err := CheckConfig(vpn); err != nil {
 		t.Fatalf("VPN: %v\n%s", err, vpn)
 	}
 	awg := buildVPNConfig([]map[string]any{{"type": "socks", "tag": "proxy", "server": "127.0.0.1",
-		"server_port": 1080, "version": "5"}}, false, nil, 9090, "s", []string{"192.0.2.10"})
+		"server_port": 1080, "version": "5"}}, false, nil, 9090, "s", []string{"192.0.2.10"}, nil)
 	if err := CheckConfig(awg); err != nil {
 		t.Fatalf("AWG: %v", err)
 	}
@@ -103,6 +103,15 @@ func TestOutboundsAndConfigs(t *testing.T) {
 			if err := CheckConfig(cfg); err != nil {
 				t.Fatalf("обход %s/%v: %v", m, all, err)
 			}
+		}
+		// обход вместе с VPN
+		bp := &vpnBypass{suffix: suffix, exact: exact, method: m, desyncPort: 18555}
+		cfg := buildVPNConfig(serverGroup(servers, autoTag), true, map[string]string{}, 9090, "s", nil, bp)
+		if err := CheckConfig(cfg); err != nil {
+			t.Fatalf("VPN+обход %s: %v\n%s", m, err, cfg)
+		}
+		if !strings.Contains(cfg, `"youtube.com"`) {
+			t.Fatalf("VPN+обход %s: нет сайтов из списка", m)
 		}
 	}
 	conf, ip, err := resolveAWGEndpoint(testConf)

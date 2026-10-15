@@ -72,6 +72,8 @@ type RunRequest struct {
 	BypassMethod string    `json:"bypassMethod"`
 	BypassAll    bool      `json:"bypassAll"`
 	BypassUser   string    `json:"bypassUser"`
+	// Bypass при mode = vpn: сайты из списков обхода идут напрямую с разбиением, остальное — через VPN
+	Bypass bool `json:"bypass"`
 	TG           struct {
 		Enabled bool   `json:"enabled"`
 		Port    int    `json:"port"`
@@ -83,6 +85,7 @@ type RunRequest struct {
 
 type appState struct {
 	mode, server, kind string
+	bypass             bool
 	apiPort            int
 	apiSecret          string
 	groupTags          []string
@@ -186,8 +189,53 @@ func clashAPI(port int, secret string) map[string]any {
 		"secret": secret}}
 }
 
+// vpnBypass — обход вместе с VPN: сайты из списков идут напрямую с разбиением начала TLS.
+type vpnBypass struct {
+	suffix, exact []string
+	method        string
+	desyncPort    int
+}
+
+func useDesync(method string, desyncPort int) bool {
+	return (method == BypassDisorder || method == BypassRecordDisorder) && desyncPort > 0
+}
+
+// bypassRoute — правило для сайта из списка обхода: в приём disorder ядра или напрямую с разбиением TLS.
+// Без outbound (route-options) сопоставление продолжается — так в режиме обхода, где final = direct.
+func bypassRoute(method string, desyncPort int, withOutbound bool) map[string]any {
+	if useDesync(method, desyncPort) {
+		return map[string]any{"outbound": "desync"}
+	}
+	m := map[string]any{}
+	if withOutbound {
+		m["outbound"] = "direct"
+	} else {
+		m["action"] = "route-options"
+	}
+	if method == BypassRecord {
+		m["tls_record_fragment"] = true
+	} else {
+		m["tls_fragment"] = true
+	}
+	return m
+}
+
+func desyncOutbound(port int) map[string]any {
+	return map[string]any{"type": "socks", "tag": "desync", "server": "127.0.0.1", "server_port": port, "version": "5"}
+}
+
+func domainMatch(m map[string]any, suffix, exact []string) map[string]any {
+	if len(suffix) > 0 {
+		m["domain_suffix"] = suffix
+	}
+	if len(exact) > 0 {
+		m["domain"] = exact
+	}
+	return m
+}
+
 func buildVPNConfig(proxy []map[string]any, ruDirect bool, rules map[string]string, apiPort int, apiSecret string,
-	bypass []string) string {
+	bypass []string, bp *vpnBypass) string {
 	has := map[string]bool{}
 	if ruDirect {
 		for t := range rules {
@@ -223,6 +271,12 @@ func buildVPNConfig(proxy []map[string]any, ruDirect bool, rules map[string]stri
 		routeRules = append(routeRules, map[string]any{"ip_cidr": cidrs, "outbound": "direct"})
 	}
 	routeRules = append(routeRules, map[string]any{"ip_is_private": true, "outbound": "direct"})
+	if bp != nil && len(bp.suffix)+len(bp.exact) > 0 {
+		// раньше правил VPN: YouTube и др. из списков обхода — напрямую, без QUIC
+		routeRules = append(routeRules,
+			domainMatch(map[string]any{"network": "udp", "port": 443, "action": "reject"}, bp.suffix, bp.exact),
+			domainMatch(bypassRoute(bp.method, bp.desyncPort, true), bp.suffix, bp.exact))
+	}
 	if ruDirect {
 		if ps := filter(proxySets); len(ps) > 0 {
 			dnsRules = append(dnsRules, map[string]any{"rule_set": ps, "server": "dns-remote"})
@@ -250,6 +304,9 @@ func buildVPNConfig(proxy []map[string]any, ruDirect bool, rules map[string]stri
 		route["rule_set"] = sets
 	}
 	outbounds := append(append([]map[string]any{}, proxy...), map[string]any{"type": "direct", "tag": "direct"})
+	if bp != nil && useDesync(bp.method, bp.desyncPort) {
+		outbounds = append(outbounds, desyncOutbound(bp.desyncPort))
+	}
 	cfg := map[string]any{
 		"log": map[string]any{"level": "info", "timestamp": true},
 		"dns": map[string]any{
@@ -335,28 +392,8 @@ func bypassDomains(dir, user string) ([]string, []string) {
 
 func buildBypassConfig(suffix, exact []string, allSites bool, method string, apiPort int, apiSecret string,
 	desyncPort int) string {
-	match := func(m map[string]any) map[string]any {
-		if len(suffix) > 0 {
-			m["domain_suffix"] = suffix
-		}
-		if len(exact) > 0 {
-			m["domain"] = exact
-		}
-		return m
-	}
-	useDesync := (method == BypassDisorder || method == BypassRecordDisorder) && desyncPort > 0
-	fragment := func() map[string]any {
-		if useDesync {
-			return map[string]any{"outbound": "desync"}
-		}
-		m := map[string]any{"action": "route-options"}
-		if method == BypassRecord {
-			m["tls_record_fragment"] = true
-		} else {
-			m["tls_fragment"] = true
-		}
-		return m
-	}
+	match := func(m map[string]any) map[string]any { return domainMatch(m, suffix, exact) }
+	fragment := func() map[string]any { return bypassRoute(method, desyncPort, false) }
 	rules := []any{
 		map[string]any{"action": "sniff"},
 		map[string]any{"protocol": "dns", "action": "hijack-dns"},
@@ -375,9 +412,8 @@ func buildBypassConfig(suffix, exact []string, allSites bool, method string, api
 			match(fragment()))
 	}
 	outbounds := []any{map[string]any{"type": "direct", "tag": "direct"}}
-	if useDesync {
-		outbounds = append(outbounds, map[string]any{"type": "socks", "tag": "desync", "server": "127.0.0.1",
-			"server_port": desyncPort, "version": "5"})
+	if useDesync(method, desyncPort) {
+		outbounds = append(outbounds, desyncOutbound(desyncPort))
 	}
 	cfg := map[string]any{
 		"log": map[string]any{"level": "info", "timestamp": true},
@@ -584,18 +620,36 @@ func runVPN(req *RunRequest, st *appState, platform Platform) error {
 	if req.RuDirect {
 		rules = updateRules(req.DataDir)
 	}
+	var bp *vpnBypass
+	if req.Bypass {
+		suffix, exact := bypassDomains(req.DataDir, req.BypassUser)
+		bp = &vpnBypass{suffix: suffix, exact: exact, method: bypassMethod(req.BypassMethod)}
+		if useDesync(bp.method, 1) {
+			p, err := StartDesync(bp.method)
+			if err != nil {
+				return err
+			}
+			bp.desyncPort = p
+		}
+		st.bypass = true
+		logf("Обход вместе с VPN: способ %s, сайтов в списке %d — напрямую", bp.method, len(suffix)+len(exact))
+	}
 	st.apiPort, st.apiSecret = freePort(), randomSecret()
-	cfg := buildVPNConfig(proxy, req.RuDirect, rules, st.apiPort, st.apiSecret, bypass)
+	cfg := buildVPNConfig(proxy, req.RuDirect, rules, st.apiPort, st.apiSecret, bypass, bp)
 	logf("Запуск VPN: %s", st.server)
 	return Start(cfg, platform)
 }
 
+func bypassMethod(m string) string {
+	if m == "" {
+		return BypassDisorder
+	}
+	return m
+}
+
 func runBypass(req *RunRequest, st *appState, platform Platform) error {
 	suffix, exact := bypassDomains(req.DataDir, req.BypassUser)
-	method := req.BypassMethod
-	if method == "" {
-		method = BypassDisorder
-	}
+	method := bypassMethod(req.BypassMethod)
 	desync := 0
 	if method == BypassDisorder || method == BypassRecordDisorder {
 		p, err := StartDesync(method)
@@ -656,7 +710,7 @@ func State() string {
 	appMu.Lock()
 	st := appCur
 	appMu.Unlock()
-	out := map[string]any{"mode": st.mode, "kind": st.kind, "server": st.server, "running": IsRunning(),
+	out := map[string]any{"mode": st.mode, "kind": st.kind, "bypass": st.bypass, "server": st.server, "running": IsRunning(),
 		"tg": TGRunning(), "tgStats": TGStats(), "delays": map[string]int{}}
 	if st.kind == "vless" {
 		if b, err := apiCall("GET", "/proxies", "", 3*time.Second); err == nil {

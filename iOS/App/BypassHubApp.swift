@@ -45,6 +45,7 @@ struct RootView: View {
     @EnvironmentObject var store: Store
     @EnvironmentObject var tunnel: Tunnel
     @StateObject private var router = Router.shared
+    @StateObject private var keyboard = KeyboardObserver()
 
     var body: some View {
         ZStack {
@@ -57,7 +58,26 @@ struct RootView: View {
             }
             .accentColor(.white)
             ToastView()
+            if keyboard.visible {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button { hideKeyboard() } label: {
+                            Label("Скрыть клавиатуру", systemImage: "keyboard.chevron.compact.down")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .background(Capsule().fill(Theme.accent))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12).padding(.bottom, 8)
+                }
+            }
         }
+        .onAppear { TapToHideKeyboard.shared.install() }
+        .onChange(of: keyboard.visible) { _ in TapToHideKeyboard.shared.install() }
         .environmentObject(router)
         .onOpenURL { url in
             let s = url.absoluteString

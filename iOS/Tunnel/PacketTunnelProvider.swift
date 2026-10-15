@@ -16,6 +16,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let stateLock = NSLock()
     private var reqMode = "none"
     private var reqTG = false
+    private var reqBypass = false
     private var restarting = false
 
     private var caches: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0] }
@@ -66,6 +67,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         req["dataDir"] = workDir.path
         let mode = req["mode"] as? String ?? "none"
         let tg = (req["tg"] as? [String: Any])?["enabled"] as? Bool ?? false
+        let withBypass = req["bypass"] as? Bool ?? false
         setRequested(nil, nil, busy: true)
         guard let data = try? JSONSerialization.data(withJSONObject: req),
               let json = String(data: data, encoding: .utf8) else {
@@ -94,6 +96,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return TunnelError(e.localizedDescription)
         }
         setRequested(mode, tg, busy: false)
+        stateLock.lock()
+        reqBypass = withBypass
+        stateLock.unlock()
         try? request.write(to: lastRequestFile, atomically: true, encoding: .utf8)
         reportPath(pathMonitor.currentPath)
         return nil
@@ -157,6 +162,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     self.stateLock.lock()
                     state["reqMode"] = self.reqMode
                     state["reqTG"] = self.reqTG
+                    state["reqBypass"] = self.reqBypass
                     state["busy"] = self.restarting
                     self.stateLock.unlock()
                     reply(Self.json(state))

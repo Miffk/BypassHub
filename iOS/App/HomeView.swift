@@ -66,7 +66,7 @@ struct HomeView: View {
     // ---------------------------------------------------------------- VPN и обход
     private var modeHome: some View {
         let on = tunnel.isOn(m)
-        let busy = (tunnel.connecting || tunnel.busy) && tunnel.mode == m
+        let busy = (tunnel.connecting || tunnel.busy) && tunnel.want(m)
         let hint: (String, Color) = on ? (m == "vpn" ? "Трафик идёт через ваш сервер"
                                                      : "Заблокированные сайты открываются напрямую", Theme.green)
             : (m == "vpn" ? "Без VPN провайдер видит, какие сайты вы открываете"
@@ -82,7 +82,7 @@ struct HomeView: View {
                     .multilineTextAlignment(.center).padding(.top, 6)
             }
             PowerSwitch(on: on, busy: busy) { toggle(m) }.padding(.top, 18)
-            Text(m == "bypass" ? "Без VPN-сервера · " + methodTitle
+            Text(m == "bypass" ? (tunnel.want("vpn") ? "Вместе с VPN · " : "Без VPN-сервера · ") + methodTitle
                  : store.ruDirect ? "Зарубежное — через VPN, российское — напрямую" : "Весь трафик — через VPN")
                 .font(.footnote).foregroundColor(Theme.muted).multilineTextAlignment(.center)
                 .padding(.top, 14).padding(.bottom, 32)
@@ -211,9 +211,10 @@ struct HomeView: View {
             router.tab = "vpn"
             return
         }
-        if tunnel.connected && mode != "tg" && tunnel.mode != "none" && tunnel.mode != mode {
-            Toast.shared.show(mode == "vpn" ? "Обход выключен: на iPhone работает только одно VPN-подключение"
-                              : "VPN выключен: на iPhone работает только одно VPN-подключение")
+        let other = mode == "vpn" ? "bypass" : "vpn"
+        if mode != "tg" && !tunnel.want(mode) && tunnel.want(other) {
+            Toast.shared.show("Вместе с VPN: сайты из списков обхода (YouTube, Discord…) — напрямую с обходом, " +
+                              "остальное — через VPN")
         }
         tunnel.toggle(mode)
     }

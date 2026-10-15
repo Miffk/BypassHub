@@ -187,10 +187,11 @@ final class Store: ObservableObject {
     }
 
     // ---------------------------------------------------------------- запрос для ядра
-    /// RunRequest для bhcore.Run: mode = vpn | bypass | none (только TG-прокси).
-    func request(mode: String, tg: Bool) -> String {
+    /// RunRequest для bhcore.Run: mode = vpn | bypass | none (только TG-прокси); bypass — обход вместе с VPN.
+    func request(mode: String, bypass: Bool, tg: Bool) -> String {
         let req: [String: Any] = [
             "mode": mode,
+            "bypass": bypass,
             "profiles": profiles.map { ["id": $0.id, "kind": $0.kind, "name": $0.name, "data": $0.data] },
             "selected": isAuto ? autoID : (activeProfile?.id ?? ""),
             "ruDirect": ruDirect,
