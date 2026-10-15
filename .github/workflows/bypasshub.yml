@@ -3,10 +3,10 @@ name: BypassHub build
 on:
   push:
     branches: ["**"]
-    paths: ["BypassHub/**", "Android/**", ".github/workflows/bypasshub.yml"]
+    paths: ["BypassHub/**", "Android/**", "iOS/**", ".github/workflows/bypasshub.yml"]
     tags: ["bypasshub-v*"]
   pull_request:
-    paths: ["BypassHub/**", "Android/**", ".github/workflows/bypasshub.yml"]
+    paths: ["BypassHub/**", "Android/**", "iOS/**", ".github/workflows/bypasshub.yml"]
   workflow_dispatch:
     inputs:
       release:
@@ -126,6 +126,34 @@ jobs:
         with:
           name: BypassHub-android
           path: Android/BypassHub-android.apk
+
+  # iOS: неподписанный IPA — его подписывают своим сертификатом (ESign, Sideloadly, zsign).
+  # Пока это проверка, можно ли поднять VPN с таким сертификатом; в релиз не попадает.
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        working-directory: iOS
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build unsigned IPA
+        working-directory: iOS
+        run: |
+          xcodebuild -project BypassHub.xcodeproj -target BypassHub -configuration Release -sdk iphoneos \
+            SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/BypassHub.app Payload/
+          ls Payload/BypassHub.app/PlugIns
+          zip -qry BypassHub-ios.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BypassHub-ios
+          path: iOS/BypassHub-ios.ipa
 
   release:
     needs: [windows, android]

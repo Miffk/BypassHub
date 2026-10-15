@@ -1,0 +1,38 @@
+# Проект Xcode генерируется XcodeGen (brew install xcodegen; xcodegen) — так его можно собирать без Mac в CI.
+name: BypassHub
+options:
+  bundleIdPrefix: io.github.miffk
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGNING_ALLOWED: "NO"
+    SWIFT_VERSION: "5.0"
+targets:
+  BypassHub:
+    type: application
+    platform: iOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.miffk.bypasshub
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/BypassHub.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: Tunnel
+        embed: true
+  Tunnel:
+    type: app-extension
+    platform: iOS
+    sources: [Tunnel]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.miffk.bypasshub.tunnel
+        INFOPLIST_FILE: Tunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
+    dependencies:
+      - sdk: NetworkExtension.framework
