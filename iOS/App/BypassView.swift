@@ -59,6 +59,7 @@ struct BypassView: View {
                         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface2))
                         .modifier(HideEditorBackground())
                     BHButton("Сохранить", primary: false) {
+                        hideKeyboard()
                         let lines = user.split(whereSeparator: \.isNewline)
                             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                             .filter { !$0.isEmpty }
@@ -78,6 +79,7 @@ struct BypassView: View {
             .padding(16)
             .frame(maxWidth: .infinity)
         }
+        .modifier(KeyboardDismiss())
         .navigationTitle("Обход")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { user = store.bypassUser }

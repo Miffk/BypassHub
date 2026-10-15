@@ -89,6 +89,7 @@ struct ServersView: View {
             .padding(16)
             .frame(maxWidth: .infinity)
         }
+        .modifier(KeyboardDismiss())
         .navigationTitle("VPN")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Серверы", isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } })) {
@@ -151,6 +152,7 @@ struct ServersView: View {
     }
 
     private func add(_ text: String) {
+        hideKeyboard()
         adding = true
         Task {
             let (n, problems) = await store.add(text)

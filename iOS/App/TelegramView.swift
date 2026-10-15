@@ -50,6 +50,7 @@ struct TelegramView: View {
             .padding(16)
             .frame(maxWidth: .infinity)
         }
+        .modifier(KeyboardDismiss())
         .navigationTitle("Telegram")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { port = String(store.tgPort) }
@@ -63,6 +64,7 @@ struct TelegramView: View {
     }
 
     private func savePort() {
+        hideKeyboard()
         guard let p = Int(port.trimmingCharacters(in: .whitespaces)), (1024...65535).contains(p) else {
             Toast.shared.show("Порт — число от 1024 до 65535")
             return

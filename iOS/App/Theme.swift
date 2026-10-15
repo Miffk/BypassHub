@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Цвета и общие элементы — как в версии для Android.
 enum Theme {
@@ -195,5 +196,30 @@ struct ToastView: View {
         .padding(.horizontal, 16)
         .animation(.easeInOut(duration: 0.2), value: toast.text)
         .allowsHitTesting(false)
+    }
+}
+
+/// Убрать клавиатуру.
+func hideKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
+/// Кнопка «Готово» над клавиатурой и скрытие клавиатуры прокруткой: у многострочного поля и цифровой
+/// клавиатуры нет своей кнопки, которая её убирает.
+struct KeyboardDismiss: ViewModifier {
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 16.0, *) {
+                content.scrollDismissesKeyboard(.interactively)
+            } else {
+                content
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Готово") { hideKeyboard() }.font(.body.bold())
+            }
+        }
     }
 }
