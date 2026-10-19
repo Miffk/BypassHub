@@ -4,14 +4,11 @@
 
 ## Выпуск новой версии
 
-Релизы НЕ публикуются автоматически — владелец выпускает их сам. Поэтому каждый раз, когда
-меняется `__version__` в `BypassHub/bypasshub/__init__.py` (или работа над новой версией закончена
-и запушена), в конце ответа напомни пользователю выпустить релиз:
-
-1. GitHub → **Actions** → **BypassHub build** → **Run workflow**
-2. Ветка — основная, в поле версии — тот же номер, что в `__version__` (например `1.2.0`)
-3. Через 10–15 минут в **Releases** появятся `BypassHub.exe`, `BypassHub-android.apk` и `BypassHub-ios.ipa`; Windows и Android обновятся сами, IPA ставят заново со своим сертификатом (ESign)
-   (APK попадает в релиз, только если заданы секреты ключа подписи `BH_KEYSTORE_*` — см. `Android/README.md`)
-
-Если версия в коде не менялась, а изменения стоит выпустить — сначала предложи повысить `__version__`.
-Последний выпущенный релиз: 1.6.4 (bypasshub-v1.6.4).
+Владелец разрешил доводить работу до релиза самому (разрешения — в `.claude/settings.json`).
+Когда работа закончена:
+1. Прогони тесты затронутых частей (ядро: `cd Android/core && go test -tags with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0 -ldflags=-checklinkname=0 ./bhcore/`; Windows: `cd BypassHub && python -m pytest -q`).
+2. Посмотри последний релиз в Releases и подними `__version__` в `BypassHub/bypasshub/__init__.py` выше него — один номер дважды не выпускать.
+3. Закоммить, запушь, открой pull request в основную ветку (`claude/focused-archimedes-3ibw3w`).
+4. Дождись зелёной сборки BypassHub build. Красная — чини, не сливай.
+5. Слей pull request и запусти релиз: workflow `bypasshub.yml`, ветка — основная, release = номер версии.
+6. Проверь, что релиз появился в Releases, и коротко напиши владельцу: что вошло, номер версии, что проверить. Не получилось — скажи, почему.
