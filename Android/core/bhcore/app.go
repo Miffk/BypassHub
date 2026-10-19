@@ -35,6 +35,8 @@ const (
 	BypassRecord         = "record"
 	BypassDisorder       = DesyncDisorder
 	BypassRecordDisorder = DesyncRecordDisorder
+	BypassFake           = DesyncFake
+	BypassOOB            = DesyncOOB
 )
 
 var ruSuffixes = []string{"ru", "su", "xn--p1ai"}
@@ -198,7 +200,7 @@ type vpnBypass struct {
 }
 
 func useDesync(method string, desyncPort int) bool {
-	return (method == BypassDisorder || method == BypassRecordDisorder) && desyncPort > 0
+	return IsDesyncMethod(method) && desyncPort > 0
 }
 
 // bypassRoute — правило для сайта из списка обхода: в приём disorder ядра или напрямую с разбиением TLS.
@@ -661,7 +663,7 @@ func runBypass(req *RunRequest, st *appState, platform Platform) error {
 	suffix, exact := bypassDomains(req.DataDir, req.BypassUser)
 	method := bypassMethod(req.BypassMethod)
 	desync := 0
-	if method == BypassDisorder || method == BypassRecordDisorder {
+	if IsDesyncMethod(method) {
 		p, err := StartDesync(method)
 		if err != nil {
 			return err

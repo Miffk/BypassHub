@@ -8,6 +8,14 @@ package bhcore
 // имени. Ядро телефона тут же повторяет первую часть уже с обычным TTL, и сервер собирает всё целиком,
 // а фильтр, который не умеет собирать пакеты не по порядку, имя сайта так и не видит.
 // Вариант с TLS-записями дополнительно делит ClientHello на две корректные TLS-записи.
+//
+// Фильтры, которые умеют собирать части по порядку (так бывает в мобильных сетях), это не обманывает.
+// Для них два других приёма:
+//   - fake (как --fake в ByeDPI, только Android/Linux): сначала уходит подставная первая часть с малым TTL —
+//     она доходит до фильтра, но не до сайта, и фильтр принимает её за начало соединения с другим именем.
+//     Ядро телефона потом повторяет эту часть уже настоящей (подмена в той же странице памяти — desync_fake_linux.go);
+//   - oob (как --oob в ByeDPI): в середину имени сайта вставляется один байт срочных данных (TCP URG).
+//     Сайт его выбрасывает, а фильтр видит искажённое имя.
 
 import (
 	"context"
@@ -26,7 +34,20 @@ import (
 const (
 	DesyncDisorder       = "disorder"        // TCP: первая часть с TTL=1
 	DesyncRecordDisorder = "record-disorder" // TLS-записи + TCP disorder
+	DesyncFake           = "fake"            // подставная первая часть с малым TTL
+	DesyncOOB            = "oob"             // байт срочных данных в середине имени сайта
+
+	desyncFakeTTL = 5 // дальше фильтра провайдера, но ближе сайта
 )
+
+// IsDesyncMethod — способ обхода, который делает это ядро (а не sing-box).
+func IsDesyncMethod(method string) bool {
+	switch method {
+	case DesyncDisorder, DesyncRecordDisorder, DesyncFake, DesyncOOB:
+		return true
+	}
+	return false
+}
 
 type desyncServer struct {
 	ln     net.Listener
@@ -44,7 +65,7 @@ var (
 
 // StartDesync запускает локальный SOCKS5 с приёмом обхода method и возвращает его порт.
 func StartDesync(method string) (int, error) {
-	if method != DesyncDisorder && method != DesyncRecordDisorder {
+	if !IsDesyncMethod(method) {
 		return 0, errors.New("неизвестный способ обхода: " + method)
 	}
 	StopDesync()
@@ -272,7 +293,16 @@ func (s *desyncServer) sendFirst(remote *net.TCPConn, data []byte) error {
 		data = splitRecords(data, pos)
 	}
 	cut := pos
-	if err := writeDisorder(remote, data[:cut], data[cut:]); err != nil {
+	var err error
+	switch s.method {
+	case DesyncFake:
+		err = writeFake(remote, data[:cut], data[cut:], fakePart(data[:cut], start))
+	case DesyncOOB:
+		err = writeOOB(remote, data[:cut], data[cut:])
+	default:
+		err = writeDisorder(remote, data[:cut], data[cut:])
+	}
+	if err != nil {
 		return err
 	}
 	if len(rest) > 0 {
@@ -282,6 +312,55 @@ func (s *desyncServer) sendFirst(remote *net.TCPConn, data []byte) error {
 	return nil
 }
 
+// fakePart — подставная первая часть той же длины: тот же ClientHello, но начало имени сайта заменено.
+func fakePart(first []byte, sniStart int) []byte {
+	fake := append([]byte(nil), first...)
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	for i := sniStart; i < len(fake); i++ {
+		if fake[i] != '.' {
+			fake[i] = letters[(i-sniStart)%len(letters)]
+		}
+	}
+	return fake
+}
+
+// ttlOption — опция TTL сокета (IPv4 или IPv6).
+func ttlOption(c *net.TCPConn) (int, int) {
+	if a, ok := c.RemoteAddr().(*net.TCPAddr); ok && a.IP.To4() == nil {
+		return unix.IPPROTO_IPV6, unix.IPV6_UNICAST_HOPS
+	}
+	return unix.IPPROTO_IP, unix.IP_TTL
+}
+
+// writeOOB: первая часть и за ней один байт срочных данных (MSG_OOB), затем вторая часть.
+// Сайт срочный байт в поток не берёт, а фильтр провайдера видит его посреди имени сайта.
+func writeOOB(c *net.TCPConn, first, second []byte) error {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	buf := append(append([]byte(nil), first...), 'a')
+	var serr error
+	if err := rc.Write(func(fd uintptr) bool {
+		var n int
+		n, serr = unix.SendmsgN(int(fd), buf, nil, nil, unix.MSG_OOB)
+		if serr == unix.EAGAIN {
+			return false
+		}
+		if serr == nil && n != len(buf) {
+			serr = io.ErrShortWrite
+		}
+		return true
+	}); err != nil {
+		return err
+	}
+	if serr != nil {
+		return serr
+	}
+	_, err = c.Write(second)
+	return err
+}
+
 // writeDisorder: первая часть с TTL=1 (теряется до фильтра провайдера и повторяется ядром),
 // вторая — с обычным TTL.
 func writeDisorder(c *net.TCPConn, first, second []byte) error {
@@ -289,14 +368,7 @@ func writeDisorder(c *net.TCPConn, first, second []byte) error {
 	if err != nil {
 		return err
 	}
-	v6 := false
-	if a, ok := c.RemoteAddr().(*net.TCPAddr); ok && a.IP.To4() == nil {
-		v6 = true
-	}
-	level, opt := unix.IPPROTO_IP, unix.IP_TTL
-	if v6 {
-		level, opt = unix.IPPROTO_IPV6, unix.IPV6_UNICAST_HOPS
-	}
+	level, opt := ttlOption(c)
 	orig := 64
 	_ = rc.Control(func(fd uintptr) {
 		if v, err := unix.GetsockoptInt(int(fd), level, opt); err == nil && v > 0 {
