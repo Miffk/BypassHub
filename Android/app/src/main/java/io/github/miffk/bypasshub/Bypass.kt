@@ -22,12 +22,19 @@ object Bypass {
     // повтором — фильтр провайдера видит части не по порядку. Делает ядро (bhcore/desync.go).
     const val METHOD_DISORDER = "disorder"
     const val METHOD_RECORD_DISORDER = "record-disorder"
+    // Для фильтров, которые собирают части по порядку (часто в мобильных сетях), — тоже в ядре:
+    // подставная первая часть с малым TTL (как fake в ByeDPI) и байт срочных данных в имени сайта (oob).
+    const val METHOD_FAKE = "fake"
+    const val METHOD_OOB = "oob"
 
-    fun usesDesync(method: String) = method == METHOD_DISORDER || method == METHOD_RECORD_DISORDER
+    fun usesDesync(method: String) =
+        method == METHOD_DISORDER || method == METHOD_RECORD_DISORDER || method == METHOD_FAKE || method == METHOD_OOB
 
     fun methodName(method: String) = when (method) {
         METHOD_DISORDER -> "перемешивание пакетов"
         METHOD_RECORD_DISORDER -> "TLS-записи и перемешивание"
+        METHOD_FAKE -> "подставной пакет"
+        METHOD_OOB -> "внеполосный байт"
         METHOD_RECORD -> "разбиение TLS-записей"
         else -> "разбиение TCP-пакетов"
     }

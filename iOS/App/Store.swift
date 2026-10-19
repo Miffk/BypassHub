@@ -16,13 +16,15 @@ struct Profile: Codable, Identifiable, Equatable {
 let autoID = "auto"
 
 enum BypassMethod: String, CaseIterable, Identifiable {
-    case disorder, recordDisorder = "record-disorder", tcp, record
+    // «Подставной пакет» (fake) не предлагаем: подмена данных после отправки есть только в ядре Linux (Android)
+    case disorder, recordDisorder = "record-disorder", oob, tcp, record
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .disorder: return "Перемешивание пакетов"
         case .recordDisorder: return "TLS-записи и перемешивание"
+        case .oob: return "Внеполосный байт"
         case .tcp: return "Разбиение TCP-пакетов"
         case .record: return "Разбиение TLS-записей"
         }
@@ -32,6 +34,8 @@ enum BypassMethod: String, CaseIterable, Identifiable {
         switch self {
         case .disorder: return "Как disorder в ByeDPI: первая часть уходит с TTL=1 и доходит до сайта только повтором. По умолчанию."
         case .recordDisorder: return "То же, но начало соединения ещё и делится на две TLS-записи."
+        case .oob: return "Для мобильного интернета: в имя сайта вставляется лишний байт срочных данных — " +
+            "сайт его отбрасывает, а провайдер видит искажённое имя. Как oob в ByeDPI."
         case .tcp: return "Начало соединения режется на несколько TCP-пакетов."
         case .record: return "Начало соединения делится на несколько TLS-записей."
         }

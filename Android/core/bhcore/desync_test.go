@@ -59,7 +59,8 @@ func TestDesyncTLSHandshake(t *testing.T) {
 			}(c)
 		}
 	}()
-	for _, m := range []string{DesyncDisorder, DesyncRecordDisorder} {
+	// fake здесь не проверить: в петле нет узлов, и подставная часть доходит до сервера (см. TestFakeSend)
+	for _, m := range []string{DesyncDisorder, DesyncRecordDisorder, DesyncOOB} {
 		port, err := StartDesync(m)
 		if err != nil {
 			t.Fatal(err)

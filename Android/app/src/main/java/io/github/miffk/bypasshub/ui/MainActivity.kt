@@ -983,7 +983,8 @@ class MainActivity : Activity() {
             "открывается, и не замедляет его. Списки — те же, что у zapret для Windows (YouTube, Discord, " +
             "Twitch и др.). Включается на главной.", 13f, Ui.MUTED), Ui.lp(top = dp(4)))
         how.addView(Ui.text(this, "Голосовые звонки Discord и игры так не ускорить — для них нужен VPN. " +
-            "Если сайт всё равно не открывается, попробуйте другой способ ниже.", 13f, Ui.MUTED), Ui.lp(top = dp(6)))
+            "Если сайт всё равно не открывается, попробуйте другой способ ниже — в мобильной сети чаще " +
+            "помогают «Подставной пакет» и «Внеполосный байт».", 13f, Ui.MUTED), Ui.lp(top = dp(6)))
         col.addView(how)
 
         val method = Ui.card(this)
@@ -992,6 +993,10 @@ class MainActivity : Activity() {
             Triple(Bypass.METHOD_DISORDER, "Перемешивать пакеты",
                 "Рекомендуется. Как disorder в ByeDPI: начало соединения провайдер видит не по порядку"),
             Triple(Bypass.METHOD_RECORD_DISORDER, "TLS-записи и перемешивание", "Ещё сильнее — если первый способ не помог"),
+            Triple(Bypass.METHOD_FAKE, "Подставной пакет",
+                "Для мобильного интернета: провайдер сначала видит соединение с другим сайтом. Как fake в ByeDPI"),
+            Triple(Bypass.METHOD_OOB, "Внеполосный байт",
+                "Для мобильного интернета: в имя сайта вставляется лишний байт, который сайт отбрасывает. Как oob в ByeDPI"),
             Triple(Bypass.METHOD_TCP, "Разбивать TCP-пакеты", "Простое разбиение — самое быстрое"),
             Triple(Bypass.METHOD_RECORD, "Разбивать TLS-записи", "Простое разбиение на две TLS-записи"))) {
             method.addView(optionRow("method:$key", title, sub, Store.bypassMethod == key) {
