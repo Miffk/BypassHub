@@ -290,3 +290,67 @@ func atoi(s string) int {
 	}
 	return n
 }
+
+// Оператор не пропускает к адресу WebSocket Telegram: прокси не ждёт его на каждом соединении,
+// а сразу идёт к Cloudflare-прокси, пробуя несколько одновременно.
+func TestTGFallbackWhenWSUnreachable(t *testing.T) {
+	cert := selfSigned(t)
+	good, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer good.Close()
+	go func() {
+		for {
+			c, err := good.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				if _, err := http.ReadRequest(bufio.NewReader(c)); err != nil {
+					return
+				}
+				c.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+				io.Copy(io.Discard, c)
+			}(c)
+		}
+	}()
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	_, deadPort, _ := net.SplitHostPort(deadAddr)
+
+	oldRedir, oldWS, oldCF, oldInsecure := tgWSRedirects, tgWSPort, tgCFAddr, tgInsecureTLS
+	defer func() { tgWSRedirects, tgWSPort, tgCFAddr, tgInsecureTLS = oldRedir, oldWS, oldCF, oldInsecure }()
+	tgWSRedirects = map[int]string{2: "127.0.0.1"}
+	tgWSPort = atoi(deadPort)
+	tgInsecureTLS = true
+	tgCFAddr = func(domain string) string {
+		if strings.HasSuffix(domain, ".good") {
+			return good.Addr().String()
+		}
+		return deadAddr
+	}
+	p := &tgProxy{cf: []string{"a.bad", "b.good", "c.bad"}, useCF: true, cfByDC: map[int]string{},
+		conns: map[net.Conn]struct{}{}}
+	hs := &tgHandshake{dc: 2}
+	if ws := p.connectWS(hs); ws != nil {
+		t.Fatal("WebSocket к недоступному адресу")
+	}
+	if !p.wsDownUntil.After(time.Now()) {
+		t.Fatal("недоступный адрес не запомнен")
+	}
+	start := time.Now()
+	if ws := p.connectWS(hs); ws != nil || time.Since(start) > 100*time.Millisecond {
+		t.Fatal("недоступный адрес пробуется снова")
+	}
+	ws := p.connectCF(2)
+	if ws == nil {
+		t.Fatal("Cloudflare-прокси не найден")
+	}
+	ws.conn.Close()
+	if p.cfByDC[2] != "b.good" {
+		t.Fatalf("запомнен %q", p.cfByDC[2])
+	}
+}

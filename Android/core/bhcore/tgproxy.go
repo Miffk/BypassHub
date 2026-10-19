@@ -58,6 +58,8 @@ var (
 	tgTCPPort     = 443
 	tgInsecureTLS = false
 	tgFrontingSNI = "sprinthost.ru"
+	// адрес Cloudflare-прокси по домену (в тестах — локальный сервер)
+	tgCFAddr = func(domain string) string { return net.JoinHostPort(domain, "443") }
 )
 
 // Зашифрованный список доменов Cloudflare-прокси из tg-ws-proxy (расшифровка — tgDecodeDomain).
@@ -466,18 +468,20 @@ func (w *tgWS) close() {
 // ---------------------------------------------------------------- прокси
 
 type tgProxy struct {
-	ln       net.Listener
-	secret   []byte
-	cf       []string
-	useCF    bool
-	fronted  bool // последний удачный способ подключения WebSocket — через подставное имя
-	mu       sync.Mutex
-	cfByDC   map[int]string
-	conns    map[net.Conn]struct{}
-	closed   bool
-	upBytes  int64
-	dnBytes  int64
-	sessions int64
+	ln      net.Listener
+	secret  []byte
+	cf      []string
+	useCF   bool
+	fronted bool // последний удачный способ подключения WebSocket — через подставное имя
+	// до этого времени адрес WebSocket Telegram не пробуем: он не отвечал (оператор режет его по адресу)
+	wsDownUntil time.Time
+	mu          sync.Mutex
+	cfByDC      map[int]string
+	conns       map[net.Conn]struct{}
+	closed      bool
+	upBytes     int64
+	dnBytes     int64
+	sessions    int64
 }
 
 var (
@@ -688,9 +692,29 @@ func tgWSDomains(dc int, media bool) []string {
 	return []string{fmt.Sprintf("kws%d-1.web.telegram.org", dc), fmt.Sprintf("kws%d.web.telegram.org", dc)}
 }
 
+// Сколько не пробовать адрес WebSocket Telegram, если он не ответил, и сколько ждать Cloudflare-прокси.
+// Telegram ждёт ответа прокси недолго: пока перебирались все пути по очереди, он успевал оборвать соединение.
+const (
+	tgWSRetry   = 2 * time.Minute
+	tgCFTimeout = 8 * time.Second
+	tgCFRace    = 4 // сколько Cloudflare-прокси пробовать одновременно
+)
+
+// isDialError — не удалось даже установить TCP-соединение (адрес недоступен), а не ошибка TLS или HTTP.
+func isDialError(err error) bool {
+	var oe *net.OpError
+	return errors.As(err, &oe) && oe.Op == "dial"
+}
+
 func (p *tgProxy) connectWS(hs *tgHandshake) *tgWS {
 	ip, ok := tgWSRedirects[hs.dc]
 	if !ok {
+		return nil
+	}
+	p.mu.Lock()
+	down := time.Now().Before(p.wsDownUntil)
+	p.mu.Unlock()
+	if down {
 		return nil
 	}
 	path := "/apiws"
@@ -713,6 +737,14 @@ func (p *tgProxy) connectWS(hs *tgHandshake) *tgWS {
 			ws, err := tgDialWS(addr, domain, sni, !fronted, path, 8*time.Second)
 			if err != nil {
 				tgLogf("WebSocket %s (подставное имя: %v): %v", domain, fronted, err)
+				if isDialError(err) {
+					// адрес один для всех имён — другие варианты тоже не ответят
+					p.mu.Lock()
+					p.wsDownUntil = time.Now().Add(tgWSRetry)
+					p.mu.Unlock()
+					tgLogf("адрес WebSocket Telegram недоступен — %v идём сразу запасным путём", tgWSRetry)
+					return nil
+				}
 				continue
 			}
 			p.mu.Lock()
@@ -727,7 +759,8 @@ func (p *tgProxy) connectWS(hs *tgHandshake) *tgWS {
 func (p *tgProxy) connectCF(dc int) *tgWS {
 	p.mu.Lock()
 	order := []string{}
-	if cur, ok := p.cfByDC[dc]; ok {
+	cur, known := p.cfByDC[dc]
+	if known {
 		order = append(order, cur)
 	}
 	shuffled := append([]string{}, p.cf...)
@@ -738,20 +771,61 @@ func (p *tgProxy) connectCF(dc int) *tgWS {
 		}
 	}
 	p.mu.Unlock()
-	for i, base := range order {
-		if i >= 6 { // не перебираем бесконечно: остальные — при следующем соединении
-			break
+	// не перебираем бесконечно: остальные — при следующем соединении
+	if len(order) > 2*tgCFRace {
+		order = order[:2*tgCFRace]
+	}
+	// прокси, который уже работал, — сначала один, остальные — по нескольку сразу: первый ответивший и нужен
+	if known {
+		if ws := p.raceCF(dc, order[:1]); ws != nil {
+			return ws
 		}
-		domain := fmt.Sprintf("kws%d.%s", dc, base)
-		ws, err := tgDialWS(net.JoinHostPort(domain, "443"), domain, domain, true, "/apiws", 10*time.Second)
-		if err != nil {
-			tgLogf("Cloudflare-прокси %s: %v", domain, err)
+		order = order[1:]
+	}
+	for len(order) > 0 {
+		n := min(tgCFRace, len(order))
+		if ws := p.raceCF(dc, order[:n]); ws != nil {
+			return ws
+		}
+		order = order[n:]
+	}
+	return nil
+}
+
+// raceCF подключается ко всем bases сразу и возвращает первый удачный WebSocket (остальные закрывает).
+func (p *tgProxy) raceCF(dc int, bases []string) *tgWS {
+	type result struct {
+		base string
+		ws   *tgWS
+	}
+	results := make(chan result, len(bases))
+	for _, base := range bases {
+		go func(base string) {
+			domain := fmt.Sprintf("kws%d.%s", dc, base)
+			ws, err := tgDialWS(tgCFAddr(domain), domain, domain, true, "/apiws", tgCFTimeout)
+			if err != nil {
+				tgLogf("Cloudflare-прокси %s: %v", domain, err)
+			}
+			results <- result{base, ws}
+		}(base)
+	}
+	for got := 1; got <= len(bases); got++ {
+		r := <-results
+		if r.ws == nil {
 			continue
 		}
 		p.mu.Lock()
-		p.cfByDC[dc] = base
+		p.cfByDC[dc] = r.base
 		p.mu.Unlock()
-		return ws
+		// остальные дождутся своего и закроются сами
+		go func(left int) {
+			for ; left > 0; left-- {
+				if r := <-results; r.ws != nil {
+					r.ws.conn.Close()
+				}
+			}
+		}(len(bases) - got)
+		return r.ws
 	}
 	return nil
 }
