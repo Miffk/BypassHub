@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 from urllib.parse import urlsplit
 
+from . import tls as tlsctx
+
 TLS12 = "TLS1.2"
 TLS13 = "TLS1.3"
 
@@ -27,11 +29,9 @@ class Probe:
 
 
 def _context(tls: str) -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    version = ssl.TLSVersion.TLSv1_3 if tls == TLS13 else ssl.TLSVersion.TLSv1_2
-    ctx.minimum_version = version
-    ctx.maximum_version = version
-    return ctx
+    # с теми же корневыми сертификатами, что и для GitHub: иначе без нужного корневого в хранилище Windows
+    # любой сайт выглядел бы как «подмена сертификата»
+    return tlsctx.context(ssl.TLSVersion.TLSv1_3 if tls == TLS13 else ssl.TLSVersion.TLSv1_2)
 
 
 def probe(url: str, tls: str = TLS12, timeout: float = 5.0) -> Probe:

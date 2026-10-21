@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, unquote, urlsplit
 from urllib.request import urlopen
 
-from . import github, winutil
+from . import github, tls, winutil
 from .log import log
 
 REPO = "SagerNet/sing-box"
@@ -208,7 +208,7 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
 
 
 def fetch_subscription(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str]]:
-    with urlopen(github._request(url, "*/*"), timeout=timeout) as resp:
+    with urlopen(github._request(url, "*/*"), timeout=timeout, context=tls.context()) as resp:
         body = resp.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
     return parse_keys(body)
 
@@ -495,7 +495,7 @@ def latest_release() -> github.Release:
     try:
         req = github._request(f"https://api.github.com/repos/{REPO}/releases?per_page=40",
                               "application/vnd.github+json")
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15, context=tls.context()) as resp:
             rel = pick_release(json.loads(resp.read().decode("utf-8")))
         if rel is not None:
             return rel
