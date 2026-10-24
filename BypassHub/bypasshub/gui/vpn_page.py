@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from tkinter import filedialog
 from typing import TYPE_CHECKING
 
@@ -57,7 +58,7 @@ class VpnPage(GradientPage):
         bar.pack(fill="x", pady=(8, 0))
         self.ping_btn = W.add_button(bar, "Проверить пинг", lambda: home.ping_servers(), secondary=True,
                                      width=170)
-        self.subs_btn = W.add_button(bar, "Обновить подписки", self.refresh_subs, secondary=True, width=170)
+        self.subs_btn = W.add_button(bar, "⟳ Обновить подписки", self.refresh_subs, secondary=True, width=190)
 
         body = W.section(self, "Режим",
                          "«Весь трафик» — через VPN идут все программы, включая игры и Discord (виртуальный "
@@ -80,6 +81,29 @@ class VpnPage(GradientPage):
         self.port = ctk.CTkEntry(fr, width=100)
         self.port.pack(side="left")
         ctk.CTkButton(fr, text="Применить", width=100, command=self._port_changed).pack(side="left", padx=8)
+
+        body = W.section(self, "Программы мимо VPN",
+                         "Отмеченные программы ходят в интернет напрямую, даже когда VPN включён, — например, "
+                         "игры, в которых через VPN растёт пинг. Работает в режиме «Весь трафик»: в режиме "
+                         "«Системный прокси» игры и так идут мимо VPN.")
+        self.exclude_checks = {}
+        grid = ctk.CTkFrame(body, fg_color="transparent")
+        grid.pack(fill="x")
+        for i, title in enumerate(vpn.EXCLUDE_PRESETS):
+            cb = ctk.CTkCheckBox(grid, text=title, command=self._exclude_changed)
+            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=3)
+            self.exclude_checks[title] = cb
+        fr = ctk.CTkFrame(body, fg_color="transparent")
+        fr.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(fr, text="Другие программы", width=150, anchor="w").pack(side="left")
+        self.exclude_entry = ctk.CTkEntry(fr, placeholder_text="game.exe, other.exe")
+        self.exclude_entry.pack(side="left", fill="x", expand=True)
+        self.exclude_entry.bind("<Return>", lambda _e: self._exclude_changed())
+        ctk.CTkButton(fr, text="Выбрать…", width=100, command=self._exclude_pick).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(fr, text="Применить", width=100, command=self._exclude_changed).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(body, text="Имена файлов программ через запятую. «Выбрать…» — указать .exe игры в папке, "
+                                "куда она установлена.", text_color=W.GRAY, anchor="w", justify="left",
+                     wraplength=640, font=ctk.CTkFont(size=11)).pack(fill="x", pady=(4, 0))
 
         body = W.section(self, "AmneziaWG",
                          "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
@@ -106,6 +130,7 @@ class VpnPage(GradientPage):
         W.set_switch(self.ru_direct, s.get("vpn", "ru_direct"))
         W.set_switch(self.lan_access, s.get("vpn", "lan_access"))
         W.set_entry(self.port, s.get("vpn", "proxy_port"))
+        self._exclude_load()
         self.render()
 
     # ------------------------------------------------------------------ список серверов
@@ -120,15 +145,23 @@ class VpnPage(GradientPage):
         self.picker.render()
         subs = core.settings.get("vpn", "subscriptions") or []
         if subs:
-            ctk.CTkLabel(self.subs_frame, text="Подписки", anchor="w",
-                         font=ctk.CTkFont(size=13, weight="bold")).pack(fill="x", pady=(10, 2))
+            head = ctk.CTkFrame(self.subs_frame, fg_color="transparent")
+            head.pack(fill="x", pady=(10, 2))
+            ctk.CTkLabel(head, text="Подписки", anchor="w",
+                         font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+            ctk.CTkLabel(head, text="обновляются сами при запуске и каждые несколько часов", anchor="w",
+                         text_color=W.GRAY, font=ctk.CTkFont(size=11)).pack(side="left", padx=(10, 0))
         for url in subs:
             fr = ctk.CTkFrame(self.subs_frame, fg_color="transparent")
             fr.pack(fill="x", pady=1)
-            shown = url if len(url) <= 70 else url[:67] + "…"
+            shown = url if len(url) <= 60 else url[:57] + "…"
             ctk.CTkLabel(fr, text=shown, anchor="w", text_color=W.GRAY).pack(side="left", fill="x", expand=True)
             ctk.CTkButton(fr, text="✕", width=30, height=26, fg_color="transparent", text_color=W.P.muted,
                           hover_color=W.P.surface2, command=lambda u=url: self.remove_sub(u)).pack(side="right")
+            checked = core.vpn_sub_checked(url)
+            if checked:
+                ctk.CTkLabel(fr, text="обновлена " + _when(checked), text_color=W.GRAY,
+                             font=ctk.CTkFont(size=11)).pack(side="right", padx=(8, 4))
         self.subs_btn.configure(state="normal" if subs else "disabled")
         if not self.app.pages["home"][1]._pinging:
             self.ping_btn.configure(state="normal" if core.vpn_vless() else "disabled")
@@ -236,13 +269,15 @@ class VpnPage(GradientPage):
         self.app.run_task(work, done)
 
     def refresh_subs(self) -> None:
+        self.subs_btn.configure(state="disabled", text="Обновляю…")
+
         def done(result, err):
+            self.subs_btn.configure(state="normal", text="⟳ Обновить подписки")
             if err:
                 self.app.error(str(err), "Подписки")
                 return
             total, problems = result
-            self.render()
-            self.app.pages["home"][1].reload_vpn()
+            self.app.subscriptions_changed()
             text = f"Серверов в подписках: {total}"
             if problems:
                 text += "\n\n" + "\n".join("• " + x for x in problems[:8])
@@ -258,6 +293,38 @@ class VpnPage(GradientPage):
     def _ru_changed(self) -> None:
         self.app.core.settings.set("vpn", "ru_direct", bool(self.ru_direct.get()))
         self.app.pages["home"][1].apply_vpn("Применение настроек…")
+
+    def _exclude_load(self) -> None:
+        names = vpn.clean_exe_names(self.app.core.settings.get("vpn", "exclude_apps") or [])
+        in_presets = set()
+        for title, exes in vpn.EXCLUDE_PRESETS.items():
+            W.set_switch(self.exclude_checks[title], all(e in names for e in exes))
+            in_presets.update(exes)
+        W.set_entry(self.exclude_entry, ", ".join(n for n in names if n not in in_presets))
+
+    def _exclude_changed(self) -> None:
+        names = []
+        for title, exes in vpn.EXCLUDE_PRESETS.items():
+            if self.exclude_checks[title].get():
+                names += exes
+        names += [x for x in re.split(r"[,;\n]", self.exclude_entry.get()) if x.strip()]
+        names = vpn.clean_exe_names(names)
+        s = self.app.core.settings
+        if names == vpn.clean_exe_names(s.get("vpn", "exclude_apps") or []):
+            return
+        s.set("vpn", "exclude_apps", names)
+        self._exclude_load()
+        if s.get("vpn", "mode") == "tun":
+            self.app.pages["home"][1].apply_vpn("Применение настроек…")
+
+    def _exclude_pick(self) -> None:
+        path = filedialog.askopenfilename(parent=self.app, title="Программа мимо VPN",
+                                          filetypes=[("Программы", "*.exe"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        current = self.exclude_entry.get().strip()
+        W.set_entry(self.exclude_entry, (current + ", " if current else "") + vpn.clean_exe_names([path])[0])
+        self._exclude_changed()
 
     def _lan_changed(self) -> None:
         self.app.core.settings.set("vpn", "lan_access", bool(self.lan_access.get()))
@@ -293,6 +360,15 @@ class VpnPage(GradientPage):
 
     def on_vpn_status(self, vs: "VpnState") -> None:
         pass
+
+
+def _when(ts: float) -> str:
+    import time
+    now = time.localtime()
+    t = time.localtime(ts)
+    if t[:3] == now[:3]:
+        return "в " + time.strftime("%H:%M", t)
+    return time.strftime("%d.%m в %H:%M", t)
 
 
 def _rules_age(manager) -> str:

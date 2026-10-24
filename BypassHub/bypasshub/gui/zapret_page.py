@@ -197,7 +197,7 @@ class ZapretPage(GradientPage):
         else:
             text = "Служба zapret не установлена"
         text += " · winws.exe " + ("запущен" if zs.running else "не запущен")
-        self.service_label.configure(text=text)
+        W.update(self.service_label, text=text)
 
     # ------------------------------------------------------------------ helpers
     def _after_change(self, what: str) -> None:

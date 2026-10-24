@@ -153,10 +153,11 @@ class Core:
         subs = list(self.settings.get("vpn", "subscriptions") or [])
         for url in parsed.subscriptions:
             try:
-                keys, extra = vpn.fetch_subscription(url)
+                keys, extra, hours = vpn.fetch_subscription_info(url)
             except Exception as exc:
                 problems.append(f"подписка {url}: не удалось скачать ({exc})")
                 continue
+            self._mark_sub(url, hours)
             if not keys:
                 problems.append(f"в подписке {url} нет ключей VLESS")
             found += [vpn.vless_profile(k, url) for k in keys]
@@ -187,16 +188,24 @@ class Core:
                 p.name = name.strip()
         self._save_profiles(profiles)
 
-    def vpn_refresh_subscriptions(self) -> Tuple[int, List[str]]:
-        """Обновляет серверы из подписок: старые ключи подписки заменяются новыми."""
+    def vpn_refresh_subscriptions(self, only_due: bool = False) -> Tuple[int, List[str]]:
+        """Обновляет серверы из подписок: старые ключи подписки заменяются новыми.
+        only_due — только те, которым пора (раз в несколько часов, см. vpn.SUB_REFRESH_HOURS)."""
         problems: List[str] = []
         profiles = self.vpn_profiles()
+        active = self.vpn_active()
         total = 0
         for url in self.settings.get("vpn", "subscriptions") or []:
+            if only_due and not self._sub_due(url):
+                continue
             try:
-                keys, extra = vpn.fetch_subscription(url)
+                keys, extra, hours = vpn.fetch_subscription_info(url)
             except Exception as exc:
                 problems.append(f"{url}: {exc}")
+                continue
+            self._mark_sub(url, hours)
+            if not keys:  # пустой ответ (сбой сервиса) — старые серверы не трогаем
+                problems.append(f"{url}: в ответе нет ключей VLESS, оставлены прежние серверы")
                 continue
             problems += extra
             fresh = [vpn.vless_profile(k, url) for k in keys]
@@ -205,12 +214,33 @@ class Core:
                 p.name = names.get(p.id, p.name)
             profiles = [p for p in profiles if p.sub != url] + fresh
             total += len(fresh)
+            # у выбранного сервера сменился ключ — остаёмся на сервере с тем же названием
+            if active is not None and active.sub == url and all(p.id != active.id for p in fresh):
+                same = next((p for p in fresh if p.name == active.name), None)
+                if same is not None and not self.vpn_is_auto():
+                    self.vpn_select(same.id)
         self._save_profiles(profiles)
         return total, problems
+
+    def _sub_due(self, url: str) -> bool:
+        meta = (self.settings.get("vpn", "subs_meta") or {}).get(url) or {}
+        hours = float(meta.get("hours") or vpn.SUB_REFRESH_HOURS)
+        return time.time() - float(meta.get("checked") or 0) >= hours * 3600
+
+    def _mark_sub(self, url: str, hours: float) -> None:
+        meta = dict(self.settings.get("vpn", "subs_meta") or {})
+        meta[url] = {"checked": time.time(), "hours": hours}
+        self.settings.set("vpn", "subs_meta", meta, save=False)
+
+    def vpn_sub_checked(self, url: str) -> float:
+        """Когда подписка обновлялась последний раз (0 — неизвестно)."""
+        return float(((self.settings.get("vpn", "subs_meta") or {}).get(url) or {}).get("checked") or 0)
 
     def vpn_remove_subscription(self, url: str) -> None:
         subs = [u for u in self.settings.get("vpn", "subscriptions") or [] if u != url]
         self.settings.set("vpn", "subscriptions", subs, save=False)
+        meta = {u: m for u, m in (self.settings.get("vpn", "subs_meta") or {}).items() if u in subs}
+        self.settings.set("vpn", "subs_meta", meta, save=False)
         self._save_profiles([p for p in self.vpn_profiles() if p.sub != url])
 
     def vpn_running(self) -> bool:
@@ -247,10 +277,11 @@ class Core:
         mode = s.get("vpn", "mode")
         ru_direct = bool(s.get("vpn", "ru_direct"))
         port = int(s.get("vpn", "proxy_port"))
+        exclude = vpn.clean_exe_names(s.get("vpn", "exclude_apps") or []) if mode == "tun" else []
         if profile is not None and profile.kind == "awg":
             conf = awg.parse_conf(profile.data, profile.name)
-            # раздельное туннелирование и режим прокси — через sing-box поверх туннеля
-            split = ru_direct or mode == "proxy"
+            # раздельное туннелирование, режим прокси и программы мимо VPN — через sing-box поверх туннеля
+            split = ru_direct or mode == "proxy" or bool(exclude)
             self._ensure_engines(split, True, progress)
             self.singbox.stop()
             if not split:
@@ -259,7 +290,8 @@ class Core:
             bypass = awg.endpoint_ips(conf)
             self.awg.start(conf, split=True)
             try:
-                self.singbox.start(vpn.awg_outbound(awg.TUNNEL_NAME), profile.name, mode, ru_direct, port, bypass)
+                self.singbox.start(vpn.awg_outbound(awg.TUNNEL_NAME), profile.name, mode, ru_direct, port, bypass,
+                                   exclude)
             except Exception:
                 self.awg.stop()
                 raise
@@ -270,7 +302,8 @@ class Core:
             servers = [vpn.outbound(vpn.parse_vless(p.data), tag=p.id) for p in self.vpn_vless()]
             selected = vpn.AUTO_TAG if auto or profile is None else profile.id
             name = "Авто — лучший сервер" if selected == vpn.AUTO_TAG else profile.name
-            self.singbox.start(vpn.server_group(servers, selected), name, mode, ru_direct, port)
+            self.singbox.start(vpn.server_group(servers, selected), name, mode, ru_direct, port,
+                               exclude_apps=exclude)
 
     def vpn_enable(self, progress: Optional[ProgressCb] = None) -> None:
         with self.lock:
