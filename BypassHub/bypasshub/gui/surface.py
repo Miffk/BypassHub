@@ -18,6 +18,9 @@ from PIL import ImageTk
 from . import theme as T
 
 
+BAND_PX = 4  # высота полосы градиентного фона (логические пиксели)
+
+
 def _palette():
     from . import widgets as W  # отложенный импорт: widgets импортирует этот модуль
     return W.P
@@ -110,7 +113,7 @@ class _GradientMixin:
         в отличие от большой картинки."""
         if width < 2 or height < 2:
             return
-        step = max(2, T.px(4))
+        step = max(2, T.px(BAND_PX))
         key = (width, height, self._period, tuple(self._stops()))
         if key == self._band_key:
             return

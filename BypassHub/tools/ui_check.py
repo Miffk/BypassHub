@@ -2,7 +2,7 @@
 
 Открывает окно BypassHub с тестовыми данными (без сети и без изменений в системе), листает каждую
 страницу, переключает вкладки, печатает время одного шага прокрутки и сохраняет снимки окна.
-Вариант (аргумент): base — как есть; flat — без градиентного фона; nothumb — без полосы прокрутки.
+Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px.
 """
 from __future__ import annotations
 
@@ -45,8 +45,8 @@ if VARIANT == "flat":
         self._bands = []
         self.configure(bg=self.color_at(0))
     surface._GradientMixin._draw_background = flat
-elif VARIANT == "nothumb":
-    surface.GradientPage._place_thumb = lambda self: None
+elif VARIANT.startswith("band"):
+    surface.BAND_PX = int(VARIANT[4:])
 
 a = appmod.App(core)
 a.geometry("1040x720+0+0")
@@ -68,12 +68,18 @@ def run() -> None:
     a.update()
     time.sleep(0.5)
     shot("home")
-    for name in ("zapret", "tg", "vpn", "settings"):
-        t0 = time.perf_counter()
+    for rnd in (1, 2):
+        for name in ("zapret", "tg", "vpn", "settings", "home"):
+            t0 = time.perf_counter()
+            a.show_page(name)
+            a.update()
+            print(f"RESULT variant={VARIANT} round={rnd} switch={name} {(time.perf_counter() - t0) * 1000:.1f}ms",
+                  flush=True)
+            if rnd == 1:
+                shot(f"{name}-shown")
+    for name in ("zapret", "vpn", "settings"):
         a.show_page(name)
         a.update()
-        switch = (time.perf_counter() - t0) * 1000
-        shot(f"{name}-shown")
         page = a.pages[name][1]
         page._view.yview_moveto(0)
         a.update()
@@ -86,9 +92,23 @@ def run() -> None:
             if len(times) == 10:
                 shot(f"{name}-scrolling")
         times.sort()
-        print(f"RESULT variant={VARIANT} page={name} switch={switch:.1f}ms "
-              f"scroll_median={times[len(times) // 2]:.1f}ms scroll_p90={times[int(len(times) * 0.9)]:.1f}ms "
-              f"widgets={_count(page)}", flush=True)
+        print(f"RESULT variant={VARIANT} page={name} scroll_median={times[len(times) // 2]:.1f}ms "
+              f"scroll_p90={times[int(len(times) * 0.9)]:.1f}ms widgets={_count(page)}", flush=True)
+    if VARIANT == "base":
+        import cProfile
+        import pstats
+        a.show_page("home")
+        a.update()
+        prof = cProfile.Profile()
+        prof.enable()
+        for _ in range(3):
+            a.show_page("vpn")
+            a.update()
+            a.show_page("home")
+            a.update()
+        prof.disable()
+        pstats.Stats(prof).sort_stats("tottime").print_stats(18)
+        pstats.Stats(prof).sort_stats("cumulative").print_stats(25)
     a.show_page("home")
     shot("home-again")
     a.destroy()
