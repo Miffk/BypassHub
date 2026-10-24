@@ -101,6 +101,19 @@ def set_text(box: ctk.CTkTextbox, value: str, readonly: bool = False) -> None:
         box.configure(state="disabled")
 
 
+_MISSING = object()
+
+
+def update(widget, **kw) -> None:
+    """configure() только с изменившимися значениями. Перерисовка виджета CTk дорогая, а статус
+    обновляется каждые 3 секунды на всех страницах сразу — лишние перерисовки давали рывки."""
+    last = widget.__dict__.setdefault("_bh_last", {})
+    changed = {k: v for k, v in kw.items() if last.get(k, _MISSING) != v}
+    if changed:
+        widget.configure(**changed)
+        last.update(changed)
+
+
 def set_switch(sw, on: bool) -> None:
     if bool(sw.get()) != bool(on):
         sw.select() if on else sw.deselect()
@@ -117,7 +130,21 @@ class _ImageWidget(ctk.CTkLabel):
         self._img = T.to_ctk(img)  # ссылка, чтобы картинку не собрал GC
         super().configure(image=self._img)
 
+    def _show_cached(self, key, draw: Callable[[], Image.Image]) -> None:
+        """Картинка для состояния key — из кэша: при наведении мыши и обратно она не рисуется заново
+        (градиент и текст на каждое движение мыши заметно подтормаживали)."""
+        cache = self.__dict__.setdefault("_bh_images", {})
+        key = (id(P), key)
+        img = cache.get(key)
+        if img is None:
+            if len(cache) >= 12:
+                cache.clear()
+            img = cache[key] = T.to_ctk(draw())
+        self._img = img
+        super().configure(image=img)
+
     def restyle(self) -> None:
+        self.__dict__.pop("_bh_images", None)
         self._render()
 
 
@@ -149,6 +176,9 @@ class GradientButton(_ImageWidget):
             self._gcommand()
 
     def _render(self) -> None:
+        self._show_cached((self._gstate, self._ghover, self._gtext), self._paint)
+
+    def _paint(self) -> Image.Image:
         w, h = self._iw, self._ih
         if self._gstate == "disabled":
             img = T.pill((w, h), [P.surface2], 10)
@@ -160,7 +190,7 @@ class GradientButton(_ImageWidget):
                 img = Image.composite(Image.alpha_composite(img, overlay), img, img.getchannel("A"))
             color = T.readable_on(P.accents)
         T.draw_text(img, (w / 2, h / 2), self._gtext, 13, color, bold=True, anchor="mm")
-        self._show(img)
+        return img
 
     def configure(self, require_redraw=False, **kwargs):  # noqa: D401
         changed = False
@@ -226,6 +256,9 @@ class GradientSwitch(_ImageWidget):
             self.after(16, self._animate)
 
     def _render(self) -> None:
+        self._show_cached((self._pos, self._gstate), self._paint)
+
+    def _paint(self) -> Image.Image:
         w, h = self._iw, self._ih
         off = T.pill((w, h), [P.border], h // 2)
         on = T.pill((w, h), P.accents, h // 2)
@@ -237,7 +270,7 @@ class GradientSwitch(_ImageWidget):
         knob = img.height - 2 * pad
         x = pad + round((img.width - 2 * pad - knob) * self._pos)
         img.paste((255, 255, 255, 255), (x, pad), T.aa_mask((knob, knob), "ellipse"))
-        self._show(img)
+        return img
 
     def configure(self, require_redraw=False, **kwargs):
         if "state" in kwargs:
@@ -271,6 +304,9 @@ class NavItem(_ImageWidget):
         self._render()
 
     def _render(self) -> None:
+        self._show_cached((self._active, self._ghover), self._paint)
+
+    def _paint(self) -> Image.Image:
         w, h = self._iw, self._ih
         if self._active:
             img = T.pill((w, h), P.accents, 12)
@@ -285,7 +321,7 @@ class NavItem(_ImageWidget):
         if T.draw_icon(img, (x + 8, h / 2), self._icon, 15, color):
             x += 28
         T.draw_text(img, (x, h / 2), self._gtext, 13, color, bold=self._active)
-        self._show(img)
+        return img
 
 
 def wrap_text(text: str, width: float, size: int, max_lines: int = 3) -> list:
@@ -351,6 +387,10 @@ class PowerTile(_ImageWidget):
             self._render()
 
     def _render(self) -> None:
+        self._show_cached((max(self._width, 160), self._on, self._ghover, self._busy, self._title, self._status,
+                           self._details), self._paint)
+
+    def _paint(self) -> Image.Image:
         w, h = max(self._width, 160), self._ih
         s = T.SCALE
         if self._on:
@@ -385,7 +425,7 @@ class PowerTile(_ImageWidget):
         T.draw_text(img, (pad, 96), self._status, 15, status_color, bold=True)
         for i, line in enumerate(wrap_text(self._details, w - 2 * pad, 12, max_lines=4)):
             T.draw_text(img, (pad, 124 + i * 18), line, 12, sub)
-        self._show(img)
+        return img
 
 
 class GradientText(_ImageWidget):

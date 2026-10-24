@@ -243,3 +243,60 @@ def test_core_auto_mode(tmp_path):
     assert core.vpn_is_auto() and core.vpn_active() is None
     core.vpn_remove(core.vpn_vless()[0].id)       # остался один сервер VLESS — «авто» не имеет смысла
     assert not core.vpn_is_auto() and core.vpn_active().kind == "vless"
+
+
+def test_subscription_update_interval():
+    assert vpn.update_interval("12") == 12
+    assert vpn.update_interval("0.1") == 1          # не чаще раза в час
+    assert vpn.update_interval("100") == 24
+    assert vpn.update_interval(None) == vpn.SUB_REFRESH_HOURS
+    assert vpn.update_interval("abc") == vpn.SUB_REFRESH_HOURS
+
+
+def test_subscription_auto_refresh(tmp_path, monkeypatch):
+    """Подписка обновляется сама, когда пора: новые серверы появляются, выбранный сервер остаётся
+    выбранным, даже если сервис сменил ему ключ; пустой ответ не стирает список."""
+    sub = "https://sub.example.com/abc"
+    other_uuid = "11111111-2222-3333-4444-555555555555"
+    answers = {"keys": [REALITY]}
+    calls = []
+
+    def fake_fetch(url, timeout=20):
+        calls.append(url)
+        keys = [vpn.parse_vless(k) for k in answers["keys"]]
+        return keys, [], 6.0
+
+    monkeypatch.setattr(vpn, "fetch_subscription_info", fake_fetch)
+    core = Core(Paths(tmp_path))
+    added, _ = core.vpn_add(sub)
+    assert [p.name for p in added] == ["NL 🇳🇱"] and core.vpn_active().sub == sub
+    assert not core._sub_due(sub)
+    core.vpn_refresh_subscriptions(only_due=True)
+    assert len(calls) == 1                           # ещё рано — не скачивали
+
+    # сервис добавил сервер и сменил ключ у выбранного
+    answers["keys"] = [REALITY.replace(UUID, other_uuid), WS]
+    meta = core.settings.get("vpn", "subs_meta")
+    meta[sub]["checked"] -= 7 * 3600
+    assert core._sub_due(sub)
+    total, problems = core.vpn_refresh_subscriptions(only_due=True)
+    assert total == 2 and not problems
+    assert [p.name for p in core.vpn_profiles()] == ["NL 🇳🇱", "WS"]
+    assert core.vpn_active().name == "NL 🇳🇱" and other_uuid in core.vpn_active().data
+
+    answers["keys"] = []
+    total, problems = core.vpn_refresh_subscriptions()
+    assert len(core.vpn_profiles()) == 2 and problems  # сбой сервиса — серверы на месте
+
+
+def test_exclude_apps_rule():
+    assert vpn.clean_exe_names([r'"C:\Games\Dota 2\dota2.exe"', "CS2", "cs2.exe", "", "league of legends.exe"]) \
+        == ["dota2.exe", "cs2.exe", "league of legends.exe"]
+    ob = vpn.outbound(vpn.parse_vless(REALITY))
+    cfg = vpn.build_config(ob, "tun", False, exclude_apps=["dota2.exe"])
+    rules = cfg["route"]["rules"]
+    assert rules[0] == {"action": "sniff"} and rules[1]["action"] == "hijack-dns"
+    assert rules[2] == {"process_path_regex": ["(?i)(^|[\\\\/])dota2\\.exe$"], "outbound": "direct"}
+    proxy_cfg = vpn.build_config(ob, "proxy", False, exclude_apps=["dota2.exe"])
+    assert not any("process_path_regex" in r for r in proxy_cfg["route"]["rules"])
+    assert not any("process_path_regex" in r for r in vpn.build_config(ob, "tun", False)["route"]["rules"])

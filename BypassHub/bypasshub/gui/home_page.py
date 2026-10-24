@@ -51,13 +51,13 @@ class ServiceCard(ctk.CTkFrame):
         self.busy = busy
         self.switch.configure(state="disabled" if busy else "normal")
         if busy:
-            self.status.configure(text=text, text_color=W.YELLOW)
+            W.update(self.status, text=text, text_color=W.YELLOW)
 
     def set_state(self, on: bool, status: str, color, details: str) -> None:
         if not self.busy:
             W.set_switch(self.switch, on)
-            self.status.configure(text=status, text_color=color)
-        self.details.configure(text=details)
+            W.update(self.status, text=status, text_color=color)
+        W.update(self.details, text=details)
 
 
 class ServiceControl:
@@ -158,6 +158,10 @@ class HomePage(GradientPage):
         self.ping_note.pack(side="left", padx=(10, 0))
         self.ping_btn = W.add_button(head, "Проверить пинг", self.ping_servers, secondary=True, width=150)
         self.ping_btn.pack_configure(side="right", padx=0)
+        # подписки обновляются и сами, но новые серверы бывает нужны сразу
+        self.subs_btn = W.add_button(head, "⟳ Обновить серверы", lambda: self.app.pages["vpn"][1].refresh_subs(),
+                                     secondary=True, width=170)
+        self.subs_btn.pack_configure(side="right", padx=(0, 8))
         self.servers = ServerPicker(self.servers_card, app, compact=True)
         self.servers.pack(fill="x", padx=18, pady=(0, 14))
         self.pickers = [self.servers]
@@ -295,6 +299,12 @@ class HomePage(GradientPage):
             self.servers_card.pack_forget()
         for picker in self.pickers:
             picker.render()
+        has_subs = bool(core.settings.get("vpn", "subscriptions"))
+        if has_subs != bool(self.subs_btn.winfo_manager()):
+            if has_subs:
+                self.subs_btn.pack(side="right", padx=(0, 8), pady=2, after=self.ping_btn)
+            else:
+                self.subs_btn.pack_forget()
         if vs.running:
             how = "весь трафик" if vs.mode == "tun" else "системный прокси"
             proto = "AmneziaWG" if vs.kind == "awg" else "VLESS"

@@ -119,15 +119,15 @@ class ServerPicker(ctk.CTkFrame):
             profile = row["profile"]
             if rid == vpn.AUTO_TAG:
                 cur = vs.current if live and vs.selected == vpn.AUTO_TAG else ""
-                row["now"].configure(text=f"сейчас: {names.get(cur, cur)}" if cur else "")
+                W.update(row["now"], text=f"сейчас: {names.get(cur, cur)}" if cur else "")
                 ms = home.vpn_pings.get(cur) if cur else None
                 text, color = ping_text(ms, bool(cur) and cur in home.vpn_pings)
-                row["ping"].configure(text=text if cur else "", text_color=color)
+                W.update(row["ping"], text=text if cur else "", text_color=color)
                 continue
-            row["now"].configure(text="● сейчас" if live and vs.current == rid and vs.selected == vpn.AUTO_TAG
-                                 else "")
+            W.update(row["now"], text="● сейчас" if live and vs.current == rid and vs.selected == vpn.AUTO_TAG
+                     else "")
             if profile is not None and profile.kind == "awg":
-                row["ping"].configure(text="", text_color=W.GRAY)  # UDP-сервер посторонним не отвечает
+                W.update(row["ping"], text="", text_color=W.GRAY)  # UDP-сервер посторонним не отвечает
                 continue
             text, color = ping_text(home.vpn_pings.get(rid), rid in home.vpn_pings)
-            row["ping"].configure(text=text, text_color=color)
+            W.update(row["ping"], text=text, text_color=color)

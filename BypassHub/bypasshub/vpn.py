@@ -207,10 +207,31 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
     return keys, problems
 
 
-def fetch_subscription(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str]]:
+# Как часто обновлять подписку, если она сама не сказала (заголовок profile-update-interval, в часах —
+# его понимают Happ, v2rayN и др.): VPN-сервисы добавляют и меняют серверы, список должен успевать за ними.
+SUB_REFRESH_HOURS = 6.0
+
+
+def update_interval(header: Optional[str]) -> float:
+    try:
+        hours = float((header or "").strip())
+    except ValueError:
+        return SUB_REFRESH_HOURS
+    return min(max(hours, 1.0), 24.0) if hours > 0 else SUB_REFRESH_HOURS
+
+
+def fetch_subscription_info(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str], float]:
+    """Ключи подписки, предупреждения и через сколько часов её обновить."""
     with urlopen(github._request(url, "*/*"), timeout=timeout, context=tls.context()) as resp:
         body = resp.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
-    return parse_keys(body)
+        hours = update_interval(resp.headers.get("profile-update-interval"))
+    keys, problems = parse_keys(body)
+    return keys, problems, hours
+
+
+def fetch_subscription(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str]]:
+    keys, problems, _ = fetch_subscription_info(url, timeout)
+    return keys, problems
 
 
 # ====================================================================== профили (VLESS и AmneziaWG)
@@ -372,17 +393,54 @@ def server_group(servers: List[Dict[str, Any]], selected: str) -> List[Dict[str,
     ]
 
 
+# Программы, которые часто пускают мимо VPN: онлайн-игры (задержка до игрового сервера важнее всего)
+# и загрузки Steam. Имена .exe — без учёта регистра.
+EXCLUDE_PRESETS: Dict[str, List[str]] = {
+    "Dota 2": ["dota2.exe"],
+    "Counter-Strike 2": ["cs2.exe"],
+    "Valorant": ["valorant-win64-shipping.exe", "riotclientservices.exe"],
+    "League of Legends": ["league of legends.exe", "leagueclient.exe"],
+    "Fortnite": ["fortniteclient-win64-shipping.exe"],
+    "Steam (загрузки игр)": ["steam.exe", "steamwebhelper.exe", "steamservice.exe"],
+}
+
+
+def clean_exe_names(names: List[str]) -> List[str]:
+    """Имена программ: только имя файла, в нижнем регистре, с .exe, без повторов."""
+    out: List[str] = []
+    for raw in names:
+        name = re.split(r"[\\/]", str(raw).strip().strip('"'))[-1].strip().lower()
+        if not name:
+            continue
+        if not name.endswith(".exe"):
+            name += ".exe"
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def exclude_rule(names: List[str]) -> Optional[Dict[str, Any]]:
+    """Правило «эти программы — напрямую». По пути без учёта регистра: в Windows имя файла может быть
+    VALORANT-Win64-Shipping.exe, а process_name в sing-box сравнивает с учётом регистра."""
+    names = clean_exe_names(names)
+    if not names:
+        return None
+    return {"process_path_regex": ["(?i)(^|[\\\\/])" + re.escape(n) + "$" for n in names],
+            "outbound": "direct"}
+
+
 def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
                  proxy_port: int = DEFAULT_PROXY_PORT, rule_sets: Optional[Dict[str, Path]] = None,
                  bypass: Optional[List[str]] = None, log_level: str = "info",
-                 api: Optional[Tuple[int, str]] = None) -> Dict[str, Any]:
+                 api: Optional[Tuple[int, str]] = None, exclude_apps: Optional[List[str]] = None) -> Dict[str, Any]:
     """config.json для sing-box.
 
     proxy — исходящее «через VPN»: один outbound (VLESS-сервер или туннель AmneziaWG)
     или готовый список из server_group();
     api — (порт, secret) встроенного API для задержек и переключения серверов;
     ru_direct — российское напрямую: .ru/.su/.рф и базы roscomvpn (если скачаны);
-    bypass — адреса, которые всегда идут мимо (сервер AmneziaWG — иначе петля)."""
+    bypass — адреса, которые всегда идут мимо (сервер AmneziaWG — иначе петля);
+    exclude_apps — программы мимо VPN (имена .exe; только «Весь трафик» — в режиме прокси они и так мимо)."""
     rule_sets = {tag: p for tag, p in (rule_sets or {}).items() if p and Path(p).exists()} if ru_direct else {}
     has = [t for t in RULE_SETS if t in rule_sets]
     bypass = [b if "/" in b else (b + "/128" if ":" in b else b + "/32") for b in (bypass or [])]
@@ -391,6 +449,9 @@ def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
     route_rules: List[Dict[str, Any]] = [{"action": "sniff"}]
     if mode == "tun":
         route_rules.append({"protocol": "dns", "action": "hijack-dns"})
+        excluded = exclude_rule(exclude_apps or [])
+        if excluded:
+            route_rules.append(excluded)
     if bypass:
         route_rules.append({"ip_cidr": bypass, "outbound": "direct"})
     route_rules.append({"ip_is_private": True, "outbound": "direct"})
@@ -593,7 +654,7 @@ class VpnManager:
             raise RuntimeError(f"sing-box не принял настройки:\n{text}")
 
     def start(self, proxy: Any, name: str, mode: str, ru_direct: bool, proxy_port: int,
-              bypass: Optional[List[str]] = None) -> None:
+              bypass: Optional[List[str]] = None, exclude_apps: Optional[List[str]] = None) -> None:
         """proxy — исходящее «через VPN»: outbound(VlessKey), awg_outbound(…) или server_group(…)."""
         if not self.is_installed():
             raise RuntimeError("Движок VPN (sing-box) ещё не скачан")
@@ -602,7 +663,8 @@ class VpnManager:
             self.update_rule_sets(only_missing=True)
         import secrets
         api = (_free_port(), secrets.token_hex(16))
-        cfg = build_config(proxy, mode, ru_direct, proxy_port, self.rule_set_paths(), bypass, api=api)
+        cfg = build_config(proxy, mode, ru_direct, proxy_port, self.rule_set_paths(), bypass, api=api,
+                           exclude_apps=exclude_apps)
         self.write_config(cfg)
         self.check_config()
         if mode == "proxy" and winutil.port_listening(proxy_port):

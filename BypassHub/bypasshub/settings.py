@@ -38,6 +38,8 @@ DEFAULTS: Dict[str, Any] = {
         "profiles": [],            # [{"id", "kind": "vless"|"awg", "name", "data", "sub"}]
         "active": "",              # id выбранного сервера
         "subscriptions": [],       # ссылки на подписки
+        "subs_meta": {},           # {ссылка: {"checked": время обновления, "hours": интервал}}
+        "exclude_apps": [],        # программы мимо VPN (имена .exe), только режим «Весь трафик»
     },
     "updates": {
         "check_on_start": True,

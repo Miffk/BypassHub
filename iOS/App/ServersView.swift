@@ -63,7 +63,8 @@ struct ServersView: View {
                                 }
                             }
                         }
-                        BHButton("Обновить подписки", primary: false) {
+                        Text("Обновляются сами раз в несколько часов").font(.caption).foregroundColor(Theme.muted)
+                        BHButton("⟳ Обновить подписки", primary: false) {
                             Toast.shared.show("Обновляю…")
                             Task {
                                 let (n, problems) = await store.refreshSubscriptions()

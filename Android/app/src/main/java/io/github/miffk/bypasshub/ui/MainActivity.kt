@@ -213,6 +213,7 @@ class MainActivity : Activity() {
         main.post(poll)
         render()
         maybePing()
+        maybeRefreshSubs()
     }
 
     override fun onPause() {
@@ -810,6 +811,25 @@ class MainActivity : Activity() {
         Vpn.switchServer(this)
     }
 
+    /** Подписки — сами, раз в несколько часов: новые серверы VPN-сервиса появляются без кнопки. */
+    private fun maybeRefreshSubs() {
+        if (!Store.subsDue() || refreshingSubs) return
+        refreshingSubs = true
+        Vpn.io.execute {
+            val before = Store.profiles()
+            try {
+                Store.refreshSubscriptions()
+            } catch (e: Exception) {
+            }
+            main.post {
+                refreshingSubs = false
+                if (Store.profiles() != before) render()
+            }
+        }
+    }
+
+    private var refreshingSubs = false
+
     private fun maybePing() {
         if (System.currentTimeMillis() - lastPing > PING_MAX_AGE_MS && Store.vless().isNotEmpty()) {
             lastPing = System.currentTimeMillis()
@@ -863,7 +883,8 @@ class MainActivity : Activity() {
                 })
                 c.addView(row, Ui.lp(top = dp(8)))
             }
-            c.addView(Ui.button(this, "Обновить подписки", primary = false) {
+            c.addView(Ui.text(this, "Обновляются сами раз в несколько часов", 12f, Ui.MUTED), Ui.lp(top = dp(6)))
+            c.addView(Ui.button(this, "⟳ Обновить подписки", primary = false) {
                 Vpn.io.execute {
                     val (n, problems) = Store.refreshSubscriptions()
                     main.post {

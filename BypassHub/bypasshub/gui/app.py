@@ -221,14 +221,22 @@ class App(ctk.CTk):
     def show_page(self, key: str) -> None:
         self.current_page = key
         for k, (_, page) in self.pages.items():
-            if k == key:
-                page.grid(row=0, column=0, sticky="nsew")
-                self._recolor_page(k)
-                if hasattr(page, "on_show"):
-                    page.on_show()
-            else:
+            if k != key:
                 page.grid_forget()
             self.nav_items[k].set_active(k == key)
+        page = self.pages[key][1]
+        page.grid(row=0, column=0, sticky="nsew")
+        self._recolor_page(key)
+        if hasattr(page, "on_show"):
+            page.on_show()
+        # раскладка и цвета — сразу, до отрисовки окна: иначе страница на миг показывалась
+        # неразложенной и с цветами не на своих местах, а потом «прыгала»
+        if hasattr(page, "apply_layout"):
+            try:
+                self.update_idletasks()
+                page.apply_layout()
+            except tk.TclError:
+                pass
 
     def _on_wheel(self, event, delta: Optional[int] = None):
         try:
@@ -323,15 +331,38 @@ class App(ctk.CTk):
         need_install = not core.zapret.is_installed() or not core.tg.is_installed()
         if core.settings.get("updates", "check_on_start") or need_install:
             self.run_updates()
+        self._refresh_subs()
         threading.Thread(target=self._update_timer, daemon=True, name="update-timer").start()
 
     def _update_timer(self) -> None:
         while not self._closing:
             time.sleep(60)
+            self._refresh_subs()
             hours = float(self.core.settings.get("updates", "interval_hours") or 0)
             last = float(self.core.settings.get("updates", "last_check") or 0)
             if hours > 0 and time.time() - last >= hours * 3600:
                 self.run_updates(background=True)
+
+    def _refresh_subs(self) -> None:
+        """Подписки VPN обновляются сами (при запуске и раз в несколько часов, как в Happ):
+        серверы, которые добавил VPN-сервис, появляются в списке без нажатия кнопки."""
+        core = self.core
+        if not core.settings.get("vpn", "subscriptions"):
+            return
+        before = [p.to_dict() for p in core.vpn_profiles()]
+        try:
+            core.vpn_refresh_subscriptions(only_due=True)
+        except Exception as exc:
+            log.debug("Подписки VPN: %r", exc)
+            return
+        after = core.vpn_profiles()
+        if [p.to_dict() for p in after] != before:
+            log.info("Подписки VPN обновлены, серверов: %d", len(after))
+            self.call_ui(self.subscriptions_changed)
+
+    def subscriptions_changed(self) -> None:
+        self.pages["vpn"][1].render()
+        self.pages["home"][1].reload_vpn()
 
     def run_updates(self, force_install: bool = False, background: bool = False) -> None:
         self.call_ui(lambda: self._run_updates_ui(force_install, background))

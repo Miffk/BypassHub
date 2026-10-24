@@ -28,7 +28,11 @@ struct BypassHubApp: App {
                 .preferredColorScheme(.dark)
                 .onAppear { tunnel.load() }
                 .onChange(of: phase) { p in
-                    if p == .active { tunnel.load() }
+                    if p == .active {
+                        tunnel.load()
+                        // подписки — сами, раз в несколько часов: новые серверы появляются без кнопки
+                        if store.subsDue { Task { _ = await store.refreshSubscriptions() } }
+                    }
                 }
         }
     }

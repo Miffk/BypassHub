@@ -98,6 +98,16 @@ object Store {
         get() = jsonStrings(prefs.getString("subscriptions", "[]"))
         set(value) = prefs.edit().putString("subscriptions", JSONArray(value).toString()).apply()
 
+    /** Когда подписки обновлялись последний раз (мс). */
+    var subsChecked: Long
+        get() = prefs.getLong("subs_checked", 0)
+        set(value) = prefs.edit().putLong("subs_checked", value).apply()
+
+    /** Подписки обновляются сами раз в несколько часов (как в Happ): VPN-сервисы добавляют серверы. */
+    const val SUBS_REFRESH_MS = 6L * 3600 * 1000
+
+    fun subsDue() = subscriptions.isNotEmpty() && System.currentTimeMillis() - subsChecked >= SUBS_REFRESH_MS
+
     private fun jsonStrings(raw: String?): List<String> = try {
         val a = JSONArray(raw ?: "[]")
         (0 until a.length()).map { a.getString(it) }
@@ -178,20 +188,30 @@ object Store {
     fun refreshSubscriptions(): Pair<Int, List<String>> {
         val problems = mutableListOf<String>()
         var list = profiles()
+        val current = activeProfile()
         var total = 0
         for (url in subscriptions) {
             try {
                 val (keys, extra) = Keys.parseVlessList(Net.getAny(url))
+                if (keys.isEmpty()) {  // пустой ответ (сбой сервиса) — старые серверы не трогаем
+                    problems.add("$url: в ответе нет ключей VLESS, оставлены прежние серверы")
+                    continue
+                }
                 problems.addAll(extra)
                 val names = list.filter { it.sub == url }.associate { it.id to it.name }
                 val fresh = keys.map { Keys.vlessProfile(it, url) }.map { p -> names[p.id]?.let { p.copy(name = it) } ?: p }
                 list = list.filter { it.sub != url } + fresh
                 total += fresh.size
+                // у выбранного сервера сменился ключ — остаёмся на сервере с тем же названием
+                if (current != null && current.sub == url && active != AUTO && fresh.none { it.id == current.id }) {
+                    fresh.firstOrNull { it.name == current.name }?.let { active = it.id }
+                }
             } catch (e: Exception) {
                 problems.add("$url: ${e.message}")
             }
         }
         save(list)
+        subsChecked = System.currentTimeMillis()
         return total to problems
     }
 

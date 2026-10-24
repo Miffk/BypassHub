@@ -216,6 +216,8 @@ class GradientPage(tk.Canvas, _GradientMixin):
         self._thumb = None
         self._first = 0.0
         self._drag = None
+        self._scroll_left = 0   # сколько пикселей ещё докрутить (плавная прокрутка колёсиком)
+        self._scroll_job = None
         self.bind("<Configure>", self.schedule_layout, add="+")
         self._view.bind("<Configure>", self.schedule_layout, add="+")
         self.tag_bind("thumb", "<ButtonPress-1>", self._thumb_press)
@@ -258,9 +260,29 @@ class GradientPage(tk.Canvas, _GradientMixin):
 
     # ----------------------------------------------------------- прокрутка
     def scroll_units(self, delta_px: int) -> None:
-        self._view.yview_scroll(int(delta_px), "units")
+        """Плавная прокрутка: шаг колёсика растягивается на несколько кадров, а не прыгает сразу."""
+        delta_px = int(delta_px)
+        if (delta_px > 0) != (self._scroll_left > 0):
+            self._scroll_left = 0  # сменили направление — не докручиваем старое
+        self._scroll_left += delta_px
+        if self._scroll_job is None:
+            self._scroll_step()
+
+    def _scroll_step(self) -> None:
+        self._scroll_job = None
+        left = self._scroll_left
+        at_edge = (left < 0 and self._first <= 0.0) or (left > 0 and getattr(self, "_last", 1.0) >= 1.0)
+        if left == 0 or at_edge:
+            self._scroll_left = 0
+            return
+        step = int(left * 0.35) or (1 if left > 0 else -1)
+        self._scroll_left -= step
+        self._view.yview_scroll(step, "units")
+        if self._scroll_left:
+            self._scroll_job = self.after(12, self._scroll_step)
 
     def scroll_to_top(self) -> None:
+        self._scroll_left = 0
         self._view.yview_moveto(0)
 
     def _on_scroll(self, first, last) -> None:

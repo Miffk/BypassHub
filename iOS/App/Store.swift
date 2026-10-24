@@ -138,15 +138,28 @@ final class Store: ObservableObject {
         return (count, allProblems)
     }
 
+    /// Подписки обновляются сами раз в несколько часов (как в Happ): VPN-сервисы добавляют серверы.
+    static let subsRefreshInterval: TimeInterval = 6 * 3600
+
+    var subsDue: Bool {
+        !subscriptions.isEmpty && Date().timeIntervalSince1970 - d.double(forKey: "subsChecked") >= Self.subsRefreshInterval
+    }
+
     /// Обновить серверы из подписок (ключи подписки заменяются новыми, имена сохраняются).
     func refreshSubscriptions() async -> (Int, [String]) {
         var problems: [String] = []
         var list: [Profile] = await MainActor.run { self.profiles }
         var total = 0
         let urls: [String] = await MainActor.run { self.subscriptions }
+        let current: Profile? = await MainActor.run { self.isAuto ? nil : self.activeProfile }
+        var newActive: String?
         for url in urls {
             do {
                 let (keys, extra) = try await Self.fetchSubscription(url)
+                if keys.isEmpty { // пустой ответ (сбой сервиса) — старые серверы не трогаем
+                    problems.append("\(url): в ответе нет ключей VLESS, оставлены прежние серверы")
+                    continue
+                }
                 problems += extra
                 let names = Dictionary(list.filter { $0.sub == url }.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
                 let fresh = keys.map { p -> Profile in
@@ -156,12 +169,22 @@ final class Store: ObservableObject {
                 }
                 list = list.filter { $0.sub != url } + fresh
                 total += fresh.count
+                // у выбранного сервера сменился ключ — остаёмся на сервере с тем же названием
+                if let cur = current, cur.sub == url, !fresh.contains(where: { $0.id == cur.id }),
+                   let same = fresh.first(where: { $0.name == cur.name }) {
+                    newActive = same.id
+                }
             } catch {
                 problems.append("\(url): \(error.localizedDescription)")
             }
         }
         let result = list
-        await MainActor.run { self.profiles = result }
+        let selected = newActive
+        await MainActor.run {
+            self.profiles = result
+            if let id = selected { self.active = id }
+            self.d.set(Date().timeIntervalSince1970, forKey: "subsChecked")
+        }
         return (total, problems)
     }
 
