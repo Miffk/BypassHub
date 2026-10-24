@@ -24,7 +24,7 @@ jobs:
       - name: Run UI check
         shell: pwsh
         run: |
-          foreach ($v in "base", "flat", "band4", "band24") {
+          foreach ($v in "base", "composited", "band4") {
             python tools/ui_check.py $v ui-check
           }
       - uses: actions/upload-artifact@v4

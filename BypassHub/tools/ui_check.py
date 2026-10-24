@@ -2,7 +2,8 @@
 
 Открывает окно BypassHub с тестовыми данными (без сети и без изменений в системе), листает каждую
 страницу, переключает вкладки, печатает время одного шага прокрутки и сохраняет снимки окна.
-Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px.
+Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px;
+composited — контроль со стилем окна из 1.6.8 (проверка на остатки старой вкладки должна его поймать).
 """
 from __future__ import annotations
 
@@ -51,6 +52,42 @@ elif VARIANT.startswith("band"):
 a = appmod.App(core)
 a.geometry("1040x720+0+0")
 
+if VARIANT == "composited" and sys.platform == "win32":
+    # контроль: стиль из 1.6.8, при котором старая вкладка оставалась на экране, — проверка должна это поймать
+    import ctypes
+    _u = ctypes.windll.user32
+    _u.GetParent.restype = ctypes.c_void_p
+    a.update_idletasks()
+    _h = ctypes.c_void_p(_u.GetParent(a.winfo_id()))
+    _u.SetWindowLongW(_h, -20, _u.GetWindowLongW(_h, -20) | 0x02000000)
+
+
+def grab():
+    from PIL import ImageGrab
+    x, y, w, h = a.winfo_rootx(), a.winfo_rooty(), a.winfo_width(), a.winfo_height()
+    return ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True).convert("RGB")
+
+
+def stale_check(name: str) -> None:
+    """Нет ли на экране остатков прежней вкладки: снимок сразу после показа против снимка после
+    полной перерисовки окна. У 1.6.8 (WS_EX_COMPOSITED) старая страница оставалась поверх новой."""
+    from PIL import ImageChops
+    a.update()
+    time.sleep(0.15)
+    before = grab()
+    if sys.platform == "win32":
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        hwnd = user32.GetParent(a.winfo_id())
+        user32.RedrawWindow(ctypes.c_void_p(hwnd), None, None, 0x0001 | 0x0004 | 0x0080 | 0x0100)
+    a.update()
+    time.sleep(0.15)
+    after = grab()
+    diff = ImageChops.difference(before, after).convert("L").point(lambda v: 255 if v > 24 else 0)
+    changed = sum(1 for v in diff.getdata() if v) / (diff.width * diff.height) * 100
+    print(f"STALE variant={VARIANT} {name} differs={changed:.2f}%", flush=True)
+
 
 def shot(name: str) -> None:
     from PIL import ImageGrab
@@ -62,18 +99,7 @@ def shot(name: str) -> None:
     except Exception as exc:
         print("снимок не удался:", exc)
         return
-    if VARIANT == "base" and name in LOG_SHOTS:
-        # уменьшенный снимок — прямо в журнал сборки (артефакты не всегда можно скачать)
-        import base64
-        import io
-        buf = io.BytesIO()
-        img.convert("RGB").resize((img.width // 2, img.height // 2)).save(buf, "JPEG", quality=55)
-        data = base64.b64encode(buf.getvalue()).decode()
-        for i in range(0, len(data), 2000):
-            print(f"IMG {name} {i // 2000} {data[i:i + 2000]}", flush=True)
 
-
-LOG_SHOTS = {"tg-shown", "zapret-scrolling", "home-again"}
 
 
 def run() -> None:
@@ -91,6 +117,7 @@ def run() -> None:
                   flush=True)
             if rnd == 1:
                 shot(f"{name}-shown")
+                stale_check(name)
     for name in ("zapret", "vpn", "settings"):
         a.show_page(name)
         a.update()
