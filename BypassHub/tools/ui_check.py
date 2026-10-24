@@ -57,9 +57,23 @@ def shot(name: str) -> None:
     a.update()
     x, y, w, h = a.winfo_rootx(), a.winfo_rooty(), a.winfo_width(), a.winfo_height()
     try:
-        ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True).save(OUT / f"{VARIANT}-{name}.png")
+        img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+        img.save(OUT / f"{VARIANT}-{name}.png")
     except Exception as exc:
         print("снимок не удался:", exc)
+        return
+    if VARIANT == "base" and name in LOG_SHOTS:
+        # уменьшенный снимок — прямо в журнал сборки (артефакты не всегда можно скачать)
+        import base64
+        import io
+        buf = io.BytesIO()
+        img.convert("RGB").resize((img.width // 2, img.height // 2)).save(buf, "JPEG", quality=55)
+        data = base64.b64encode(buf.getvalue()).decode()
+        for i in range(0, len(data), 2000):
+            print(f"IMG {name} {i // 2000} {data[i:i + 2000]}", flush=True)
+
+
+LOG_SHOTS = {"tg-shown", "zapret-scrolling", "home-again"}
 
 
 def run() -> None:
@@ -118,5 +132,13 @@ def _count(w) -> int:
     return 1 + sum(_count(c) for c in w.winfo_children())
 
 
-a.after(800, run)
+def wait_prewarm() -> None:
+    # вкладки готовятся в фоне после запуска — меряем, как у пользователя через пару секунд
+    if getattr(a, "prewarmed", True):
+        a.after(300, run)
+    else:
+        a.after(100, wait_prewarm)
+
+
+a.after(800, wait_prewarm)
 a.mainloop()
