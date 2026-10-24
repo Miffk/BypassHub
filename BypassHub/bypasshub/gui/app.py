@@ -50,6 +50,34 @@ def set_dark_titlebar(window, dark: bool) -> None:
         log.debug("dark titlebar: %r", exc)
 
 
+def set_composited(window, on: bool) -> None:
+    """Windows: окно сначала рисуется целиком в памяти и выводится разом (WS_EX_COMPOSITED).
+    Каждый элемент интерфейса Tk — отдельное окно Windows, и при прокрутке Windows перерисовывала
+    их по одному: страница на глазах «рвалась» на куски."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        user32.GetParent.argtypes = [ctypes.c_void_p]
+        user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+        user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        GWL_EXSTYLE, WS_EX_COMPOSITED = -20, 0x02000000
+        window.update_idletasks()
+        hwnd = user32.GetParent(window.winfo_id())
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        new = (style | WS_EX_COMPOSITED) if on else (style & ~WS_EX_COMPOSITED)
+        if new != style:
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new)
+            # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED — применить стиль сразу
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020)
+    except Exception as exc:
+        log.debug("composited: %r", exc)
+
+
 def set_window_icon(window, ico_path: str) -> None:
     """Значки окна точного размера для текущего масштаба экрана.
 
@@ -100,6 +128,7 @@ class App(ctk.CTk):
             pass
         # после того как Tk выставит свой значок — заменить его на кадры точного размера
         self.after(400, lambda: set_window_icon(self, str(resource_path("assets/icon.ico"))))
+        self.after(450, lambda: set_composited(self, bool(core.settings.get("app", "smooth_render"))))
 
         self._queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self._closing = False
@@ -247,7 +276,9 @@ class App(ctk.CTk):
         page = self.pages.get(self.current_page, (None, None))[1]
         if hasattr(page, "scroll_units"):
             d = delta if delta is not None else event.delta
-            page.scroll_units(-60 if d > 0 else 60)
+            # 60 px на щелчок колёсика (delta 120); тачпад шлёт много мелких событий — сдвиг по ним пропорционален
+            px = int(d / 2) or (1 if d > 0 else -1)
+            page.scroll_units(-px)
         return None
 
     def report_callback_exception(self, exc, val, tb):

@@ -113,6 +113,10 @@ class SettingsPage(GradientPage):
         body = W.section(self, "Окно и выход")
         self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
         self._switch(body, "При выходе выключать zapret (режим «Программа») и прокси", "stop_on_exit")
+        sw = self._switch(body, "Сглаженная отрисовка окна (без рывков при прокрутке)", "smooth_render")
+        sw.configure(command=lambda: self._smooth_changed(bool(sw.get())))
+        ctk.CTkLabel(body, text="Если окно стало мерцать или медленно реагировать — выключите.", anchor="w",
+                     text_color=W.P.muted, font=ctk.CTkFont(size=11)).pack(fill="x")
 
         body = W.section(self, "Данные")
         ctk.CTkLabel(body, text=f"Папка: {app.core.paths.root}", anchor="w").pack(fill="x")
@@ -482,6 +486,11 @@ class SettingsPage(GradientPage):
         W.set_switch(sw, s.get("app", key))
         sw.pack(anchor="w", pady=3)
         return sw
+
+    def _smooth_changed(self, on: bool) -> None:
+        from .app import set_composited
+        self.app.core.settings.set("app", "smooth_render", on)
+        set_composited(self.app, on)
 
     def on_show(self) -> None:
         def done(enabled, err):

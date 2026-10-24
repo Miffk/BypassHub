@@ -54,6 +54,7 @@ DEFAULTS: Dict[str, Any] = {
         "close_to_tray": True,
         "restore_state": True,     # при запуске включать то, что было включено
         "stop_on_exit": True,      # выключать zapret (режим process) и прокси при выходе
+        "smooth_render": True,     # Windows: окно рисуется целиком в памяти (WS_EX_COMPOSITED)
     },
     "hotkeys": {
         "enabled": True,
