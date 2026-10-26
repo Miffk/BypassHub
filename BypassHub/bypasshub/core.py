@@ -373,7 +373,7 @@ class Core:
                 except ValueError:
                     pass
             delays = self.singbox.probe_delays(servers)
-            if delays is not None:
+            if delays:  # ни одного ответа — скорее сбой самой проверки: тогда как раньше, по TCP
                 for p in vless:
                     result[p.id] = float(delays[p.id]) if p.id in delays else None
                 real = True
