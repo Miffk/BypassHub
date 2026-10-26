@@ -517,11 +517,12 @@ def test_ping_through_servers_when_vpn_off(tmp_path, monkeypatch):
     result, real = core.vpn_ping()
     assert real and seen["types"] == ["vless", "hysteria2"] and result == {ids[0]: None, ids[1]: 42.0}
 
-    # движок не скачан — TCP-пинг для VLESS, Hysteria2 без замера («—»)
-    monkeypatch.setattr(core.singbox, "probe_delays", lambda servers, timeout_ms=5000: None)
+    # движок не скачан или ни один сервер не ответил через него — TCP-пинг для VLESS, Hysteria2 — «—»
     monkeypatch.setattr(vpn, "ping", lambda key, timeout=4.0: 12.0)
-    result, real = core.vpn_ping()
-    assert not real and result == {ids[0]: 12.0}
+    for answer in (None, {}):
+        monkeypatch.setattr(core.singbox, "probe_delays", lambda servers, timeout_ms=5000, a=answer: a)
+        result, real = core.vpn_ping()
+        assert not real and result == {ids[0]: 12.0}
 
 
 def test_probe_delays_runs_separate_singbox(tmp_path, monkeypatch):
@@ -552,8 +553,12 @@ def test_probe_delays_runs_separate_singbox(tmp_path, monkeypatch):
     monkeypatch.setattr(winutil, "popen_hidden", fake_popen)
     monkeypatch.setattr(winutil, "kill_pid_tree", lambda pid: killed.append(pid))
     monkeypatch.setattr(m, "api_request", fake_api)
+    monkeypatch.setattr(winutil, "set_system_proxy", lambda *a: pytest.fail("системный прокси не трогаем"))
     servers = [vpn.outbound(vpn.parse_vless(REALITY), "a"), vpn.outbound(vpn.parse_vless(HY2), "b")]
     assert m.probe_delays(servers) == {"a": 30}
     cfg = started[0]
-    assert "inbounds" not in cfg and cfg["experimental"]["clash_api"]["external_controller"].startswith("127.0.0.1:")
+    # конфиг как у VPN в режиме прокси: только локальный вход, без TUN; системный прокси не трогается
+    assert [(i["type"], i["listen"]) for i in cfg["inbounds"]] == [("mixed", "127.0.0.1")]
+    assert cfg["route"]["default_domain_resolver"] == "dns-local"
+    assert cfg["experimental"]["clash_api"]["external_controller"].startswith("127.0.0.1:")
     assert killed == [4242] and m._probe_pid == 0 and not (tmp_path / "probe.json").exists()

@@ -1121,10 +1121,12 @@ class VpnManager:
         if not self.is_installed() or not servers:
             return None
         import secrets
-        api = (f"127.0.0.1:{_free_port()}", secrets.token_hex(16))
-        cfg = {"log": {"level": "warn", "timestamp": True},
-               "outbounds": server_group(servers, AUTO_TAG) + [{"type": "direct", "tag": "direct"}],
-               "experimental": {"clash_api": {"external_controller": api[0], "secret": api[1]}}}
+        port, secret = _free_port(), secrets.token_hex(16)
+        api = (f"127.0.0.1:{port}", secret)
+        # тот же конфиг, что у включённого VPN (DNS, маршрутизация), в режиме прокси на свободном порту —
+        # но системный прокси не включается, так что через него никто не ходит
+        cfg = build_config(server_group(servers, AUTO_TAG), mode="proxy", ru_direct=False,
+                           proxy_port=_free_port(), api=(port, secret))
         probe = self.root / "probe.json"
         probe.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
         logf = open(self.root / "probe.log", "wb")
@@ -1136,8 +1138,7 @@ class VpnManager:
             deadline = time.time() + 5
             while True:  # ждём, пока поднимется API
                 if proc.poll() is not None:
-                    log.debug("Проверка задержек: sing-box завершился: %s",
-                              _clean_log((self.root / "probe.log").read_text(errors="replace"))[-500:])
+                    log.info("Проверка задержек: sing-box завершился:\n%s", self._probe_log_tail())
                     return None
                 try:
                     self.api_request("/version", api=api, timeout=1)
@@ -1148,9 +1149,13 @@ class VpnManager:
                     time.sleep(0.15)
             res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
                                    api=api, timeout=timeout_ms / 1000 + 3)
-            return {k: int(v) for k, v in (res or {}).items() if v}
+            delays = {k: int(v) for k, v in (res or {}).items() if v}
+            if not delays:
+                log.info("Проверка задержек: ни один сервер не ответил. Журнал sing-box:\n%s",
+                         self._probe_log_tail())
+            return delays
         except Exception as exc:
-            log.debug("Проверка задержек через sing-box: %r", exc)
+            log.info("Проверка задержек через sing-box не удалась: %r\n%s", exc, self._probe_log_tail())
             return None
         finally:
             if proc is not None:
@@ -1162,6 +1167,13 @@ class VpnManager:
             self._probe_pid = 0
             logf.close()
             probe.unlink(missing_ok=True)
+
+    def _probe_log_tail(self, n: int = 12) -> str:
+        try:
+            lines = (self.root / "probe.log").read_text(encoding="utf-8", errors="replace").splitlines()
+            return _clean_log("\n".join(lines[-n:]))
+        except OSError:
+            return ""
 
     def select_server(self, tag: str) -> None:
         """Переключить сервер на лету, без перезапуска."""
