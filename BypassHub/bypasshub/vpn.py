@@ -180,6 +180,7 @@ def _decode_base64(text: str) -> Optional[str]:
     return None
 
 
+_BROKEN_VLESS = "vless?"  # сервер VLESS, который не удалось разобрать
 _PROXY_PROTOCOLS = {"vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic", "wireguard", "socks", "http"}
 
 
@@ -206,11 +207,16 @@ def _xray_json_links(text: str, skipped: Optional[List[str]] = None) -> Optional
         for ob in cfg.get("outbounds") or []:
             if not isinstance(ob, dict) or ob.get("protocol") != "vless":
                 continue
+            settings = ob.get("settings") or {}
             try:
-                vnext = ob["settings"]["vnext"][0]
-                user = vnext["users"][0]
+                if settings.get("vnext"):
+                    vnext = settings["vnext"][0]
+                    user = vnext["users"][0]
+                else:  # упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+                    vnext = user = settings
                 host, port, uid = str(vnext["address"]), int(vnext["port"]), str(user["id"])
-            except (KeyError, IndexError, TypeError, ValueError):
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                others.insert(0, _BROKEN_VLESS)
                 continue
             ss = ob.get("streamSettings") or {}
             net = ss.get("network") or "tcp"
@@ -274,6 +280,10 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
         except ValueError as exc:
             name = unquote(line.rsplit("#", 1)[1]) if "#" in line else line[:40] + "…"
             problems.append(f"{name}: {exc}")
+    broken = json_skipped.count(_BROKEN_VLESS)
+    json_skipped = [x for x in json_skipped if x != _BROKEN_VLESS]
+    if broken:
+        problems.append(f"не удалось разобрать серверов VLESS в формате Xray JSON: {broken}")
     other += len(json_skipped)
     if other:
         kinds = f" ({', '.join(sorted(set(json_skipped)))})" if json_skipped else ""
@@ -318,6 +328,41 @@ def device_headers(hwid: str) -> Dict[str, str]:
             "x-device-model": "PC"}
 
 
+def describe_subscription(text: str) -> str:
+    """Что пришло в ответе подписки — для журнала: формат и сколько чего, без ключей и адресов."""
+    from collections import Counter
+    t = text.strip()
+    if t.startswith(("[", "{")):
+        try:
+            data = json.loads(t)
+        except ValueError:
+            return f"похоже на JSON, но не разбирается ({len(t)} байт)"
+        if isinstance(data, dict) and isinstance(data.get("outbounds"), list) and any(
+                isinstance(o, dict) and "type" in o for o in data["outbounds"]):
+            kinds = Counter(str(o.get("type")) for o in data["outbounds"] if isinstance(o, dict))
+            return "sing-box JSON, исходящие: " + ", ".join(f"{k}×{n}" for k, n in kinds.most_common())
+        configs = data if isinstance(data, list) else [data]
+        kinds = Counter()
+        for cfg in configs:
+            for o in (cfg.get("outbounds") or []) if isinstance(cfg, dict) else []:
+                if isinstance(o, dict):
+                    kinds[str(o.get("protocol"))] += 1
+        return (f"Xray JSON, конфигов {len(configs)}, исходящие: " +
+                ", ".join(f"{k}×{n}" for k, n in kinds.most_common()))
+    if t.lower().startswith(("<!doctype", "<html")):
+        return f"HTML-страница ({len(t)} байт)"
+    if re.search(r"^\s*proxies\s*:", t, re.M):
+        return f"Clash/Mihomo YAML ({len(t)} байт)"
+    fmt = "ссылки"
+    if "://" not in t:
+        decoded = _decode_base64(t)
+        if decoded is None:
+            return f"неизвестный формат ({len(t)} байт)"
+        t, fmt = decoded, "base64"
+    schemes = Counter(line.split("://", 1)[0].strip().lower() for line in t.splitlines() if "://" in line)
+    return f"{fmt}, схемы: " + (", ".join(f"{k}×{n}" for k, n in schemes.most_common()) or "нет")
+
+
 def fetch_subscription_info(url: str, timeout: float = 20,
                             hwid: str = "") -> Tuple[List[VlessKey], List[str], float]:
     """Ключи подписки, предупреждения и через сколько часов её обновить."""
@@ -338,12 +383,13 @@ def fetch_subscription_info(url: str, timeout: float = 20,
             if best is None:
                 raise  # сервис недоступен вовсе — другие попытки тоже не помогут
             break
-        found, problems = parse_keys(resp.body.decode("utf-8", errors="replace"))
+        body = resp.body.decode("utf-8", errors="replace")
+        found, problems = parse_keys(body)
         keys = [k for k in found if not is_placeholder(k)]
         stubs = [k.name for k in found if is_placeholder(k)]
         notices += [n for n in stubs if n not in notices]
-        log.info("Подписка %s от имени %s: серверов %d%s", host, ua, len(keys),
-                 f", сообщения сервиса: {stubs}" if stubs else "")
+        log.info("Подписка %s от имени %s: серверов %d%s; ответ: %s", host, ua, len(keys),
+                 f", сообщения сервиса: {stubs}" if stubs else "", describe_subscription(body))
         hours = update_interval(resp.headers.get("profile-update-interval"))
         if best is None or len(keys) > len(best[0]):
             best = (keys, problems, hours)

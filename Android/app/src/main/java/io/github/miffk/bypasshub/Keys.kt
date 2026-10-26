@@ -320,6 +320,8 @@ object Keys {
 
     fun isPlaceholder(k: VlessKey) = k.server.lowercase() in PLACEHOLDER_HOSTS || k.port <= 1
 
+    private const val BROKEN_VLESS = "vless?"  // сервер VLESS, который не удалось разобрать
+
     private val PROXY_PROTOCOLS = setOf("vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic",
         "wireguard", "socks", "http")
 
@@ -352,12 +354,18 @@ object Keys {
                     if (other.isEmpty() && proto in PROXY_PROTOCOLS) other = proto
                     continue
                 }
-                val srv = ob.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0) ?: continue
-                val user = srv.optJSONArray("users")?.optJSONObject(0) ?: continue
-                val host = srv.s("address")
-                val port = srv.optInt("port", -1)
-                val uid = user.s("id")
-                if (host.isEmpty() || uid.isEmpty() || port <= 0) continue
+                val settings = ob.optJSONObject("settings") ?: JSONObject()
+                val vnext = settings.optJSONArray("vnext")
+                // упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+                val srv = if (vnext != null && vnext.length() > 0) vnext.optJSONObject(0) else settings
+                val user = if (vnext != null && vnext.length() > 0) srv?.optJSONArray("users")?.optJSONObject(0) else settings
+                val host = srv?.s("address").orEmpty()
+                val port = srv?.optInt("port", -1) ?: -1
+                val uid = user?.s("id").orEmpty()
+                if (srv == null || user == null || host.isEmpty() || uid.isEmpty() || port <= 0) {
+                    other = BROKEN_VLESS
+                    continue
+                }
                 val ss = ob.optJSONObject("streamSettings") ?: JSONObject()
                 val net = ss.s("network").ifEmpty { "tcp" }
                 val sec = ss.s("security").ifEmpty { "none" }
@@ -432,6 +440,9 @@ object Keys {
                 problems.add("$name: ${e.message}")
             }
         }
+        val broken = jsonSkipped.count { it == BROKEN_VLESS }
+        jsonSkipped.removeAll { it == BROKEN_VLESS }
+        if (broken > 0) problems.add("не удалось разобрать серверов VLESS в формате Xray JSON: $broken")
         other += jsonSkipped.size
         if (other > 0) {
             val kinds = if (jsonSkipped.isNotEmpty()) " (${jsonSkipped.toSortedSet().joinToString(", ")})" else ""

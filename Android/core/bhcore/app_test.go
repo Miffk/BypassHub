@@ -134,7 +134,10 @@ func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
 	    "users": [{"id": "11111111-2222-3333-4444-555555555555"}]}]},
 	   "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "cdn.example.com"},
 	    "wsSettings": {"path": "/ws", "headers": {"Host": "cdn.example.com"}}}}]},
-	 {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]}
+	 {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]},
+	 {"remarks": "FI new", "outbounds": [{"protocol": "vless", "settings": {"address": "fi.example.com", "port": 443,
+	    "id": "11111111-2222-3333-4444-555555555555", "encryption": "none"},
+	   "streamSettings": {"network": "grpc", "security": "tls", "grpcSettings": {"serviceName": "g"}}}]}
 	]`
 	var s struct {
 		Profiles []Profile
@@ -142,7 +145,8 @@ func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
 		Notices  []string
 	}
 	_ = json.Unmarshal([]byte(ParseSubscription(cfg, "https://sub")), &s)
-	if len(s.Profiles) != 2 || s.Profiles[0].Name != "🇩🇪 Germany" || s.Profiles[1].Name != "NL WS" {
+	if len(s.Profiles) != 3 || s.Profiles[0].Name != "🇩🇪 Germany" || s.Profiles[1].Name != "NL WS" ||
+		s.Profiles[2].Name != "FI new" {
 		t.Fatalf("xray json: %+v", s)
 	}
 	if len(s.Problems) != 1 || s.Problems[0] != "пропущено ключей других типов (не VLESS) (trojan): 1" {

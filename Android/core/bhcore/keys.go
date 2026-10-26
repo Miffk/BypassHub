@@ -527,6 +527,8 @@ func isPlaceholder(k *vlessKey) bool {
 	return placeholderHosts[strings.ToLower(k.Server)] || k.Port <= 1
 }
 
+const brokenVless = "vless?" // сервер VLESS, который не удалось разобрать
+
 var proxyProtocols = map[string]bool{"vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true,
 	"hysteria2": true, "tuic": true, "wireguard": true, "socks": true, "http": true}
 
@@ -586,22 +588,25 @@ func xrayJSONLinks(text string) (links, skipped []string, ok bool) {
 				}
 				continue
 			}
-			vnext, _ := obj(ob, "settings")["vnext"].([]any)
-			if len(vnext) == 0 {
+			settings := obj(ob, "settings")
+			srv, user := settings, settings // упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+			if vnext, _ := settings["vnext"].([]any); len(vnext) > 0 {
+				srv, _ = vnext[0].(map[string]any)
+				user = nil
+				if srv != nil {
+					if users, _ := srv["users"].([]any); len(users) > 0 {
+						user, _ = users[0].(map[string]any)
+					}
+				}
+			}
+			if srv == nil || user == nil {
+				other = brokenVless
 				continue
 			}
-			srv, _ := vnext[0].(map[string]any)
-			if srv == nil {
-				continue
-			}
-			users, _ := srv["users"].([]any)
-			if len(users) == 0 {
-				continue
-			}
-			user, _ := users[0].(map[string]any)
 			host, uid := str(srv, "address"), str(user, "id")
 			port, err := strconv.Atoi(str(srv, "port"))
-			if user == nil || host == "" || uid == "" || err != nil {
+			if host == "" || uid == "" || err != nil {
+				other = brokenVless
 				continue
 			}
 			ss := obj(ob, "streamSettings")
@@ -730,6 +735,19 @@ func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices 
 			continue
 		}
 		keys = append(keys, vlessProfile(k, sub))
+	}
+	broken := 0
+	kept := jsonSkipped[:0]
+	for _, x := range jsonSkipped {
+		if x == brokenVless {
+			broken++
+		} else {
+			kept = append(kept, x)
+		}
+	}
+	jsonSkipped = kept
+	if broken > 0 {
+		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов VLESS в формате Xray JSON: %d", broken))
 	}
 	other += len(jsonSkipped)
 	if other > 0 {

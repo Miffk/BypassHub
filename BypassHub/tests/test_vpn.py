@@ -435,3 +435,19 @@ def test_github_requests_fall_back_to_doh(monkeypatch):
     monkeypatch.setattr(netfetch, "urlopen", no_dns)
     monkeypatch.setattr(netfetch, "_open_pinned", lambda url, headers, timeout: Fake(url))
     assert github.latest_release("a/b").tag == "v1.2.3"
+
+
+def test_xray_json_simplified_vless_and_description():
+    """Новая запись Xray (адрес, порт и id прямо в settings) — тоже сервер; в журнал — формат ответа."""
+    cfg = [{"remarks": "FI", "outbounds": [
+        {"protocol": "vless", "settings": {"address": "fi.example.com", "port": 443, "id": UUID, "encryption": "none"},
+         "streamSettings": {"network": "grpc", "security": "tls", "grpcSettings": {"serviceName": "g"}}},
+        {"protocol": "freedom"}]},
+        {"remarks": "bad", "outbounds": [{"protocol": "vless", "settings": {"port": 443}}]}]
+    text = json.dumps(cfg)
+    keys, problems = vpn.parse_keys(text)
+    assert [(k.name, k.server, k.transport) for k in keys] == [("FI", "fi.example.com", "grpc")]
+    assert problems == ["не удалось разобрать серверов VLESS в формате Xray JSON: 1"]
+    assert vpn.describe_subscription(text) == "Xray JSON, конфигов 2, исходящие: vless×2, freedom×1"
+    links = base64.b64encode(f"{REALITY}\nhysteria2://x@h:1#a\nhysteria2://y@h:2#b".encode()).decode()
+    assert vpn.describe_subscription(links) == "base64, схемы: hysteria2×2, vless×1"
