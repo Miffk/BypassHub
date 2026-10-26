@@ -141,6 +141,15 @@ class Core:
         fallback = next((p for p in profiles if p.kind == "vless"), profiles[0] if profiles else None)
         return next((p for p in profiles if p.id == active), fallback)
 
+    def _hwid(self) -> str:
+        """Код этого устройства для подписок (см. vpn.device_headers): создаётся один раз."""
+        hwid = self.settings.get("vpn", "hwid")
+        if not hwid:
+            import uuid
+            hwid = uuid.uuid4().hex[:16]
+            self.settings.set("vpn", "hwid", hwid)
+        return hwid
+
     def vpn_select(self, profile_id: str) -> None:
         self.settings.set("vpn", "active", profile_id)
 
@@ -153,7 +162,7 @@ class Core:
         subs = list(self.settings.get("vpn", "subscriptions") or [])
         for url in parsed.subscriptions:
             try:
-                keys, extra, hours = vpn.fetch_subscription_info(url)
+                keys, extra, hours = vpn.fetch_subscription_info(url, hwid=self._hwid())
             except Exception as exc:
                 problems.append(f"подписка {url}: не удалось скачать ({exc})")
                 continue
@@ -199,15 +208,15 @@ class Core:
             if only_due and not self._sub_due(url):
                 continue
             try:
-                keys, extra, hours = vpn.fetch_subscription_info(url)
+                keys, extra, hours = vpn.fetch_subscription_info(url, hwid=self._hwid())
             except Exception as exc:
                 problems.append(f"{url}: {exc}")
                 continue
             self._mark_sub(url, hours)
+            problems += extra
             if not keys:  # пустой ответ (сбой сервиса) — старые серверы не трогаем
                 problems.append(f"{url}: в ответе нет ключей VLESS, оставлены прежние серверы")
                 continue
-            problems += extra
             fresh = [vpn.vless_profile(k, url) for k in keys]
             names = {p.id: p.name for p in profiles if p.sub == url}
             for p in fresh:  # сохранить переименования

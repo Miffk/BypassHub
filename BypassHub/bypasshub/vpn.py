@@ -181,9 +181,13 @@ def _decode_base64(text: str) -> Optional[str]:
     return None
 
 
-def _xray_json_links(text: str) -> Optional[List[str]]:
+_PROXY_PROTOCOLS = {"vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic", "wireguard", "socks", "http"}
+
+
+def _xray_json_links(text: str, skipped: Optional[List[str]] = None) -> Optional[List[str]]:
     """Подписка в формате Xray JSON (так её отдают Happ и Streisand): список готовых конфигов Xray.
-    Из каждого берётся исходящее VLESS и пересобирается в ссылку vless://. None — это не JSON."""
+    Из каждого берётся исходящее VLESS и пересобирается в ссылку vless://. None — это не JSON.
+    В skipped попадают протоколы конфигов без VLESS (их серверы пропущены)."""
     stripped = text.strip()
     if not stripped.startswith(("[", "{")):
         return None
@@ -197,6 +201,9 @@ def _xray_json_links(text: str) -> Optional[List[str]]:
         if not isinstance(cfg, dict):
             continue
         name = str(cfg.get("remarks") or "")
+        before = len(links)
+        others = [str(ob.get("protocol")) for ob in cfg.get("outbounds") or []
+                  if isinstance(ob, dict) and ob.get("protocol") in _PROXY_PROTOCOLS]
         for ob in cfg.get("outbounds") or []:
             if not isinstance(ob, dict) or ob.get("protocol") != "vless":
                 continue
@@ -237,13 +244,16 @@ def _xray_json_links(text: str) -> Optional[List[str]]:
             hostpart = f"[{host}]" if ":" in host else host
             links.append(f"vless://{quote(uid)}@{hostpart}:{port}?{query}#{quote(name or host)}")
             break  # в конфиге одно исходящее «proxy», остальные — direct/block
+        if len(links) == before and others and skipped is not None:
+            skipped.append(others[0])
     return links
 
 
 def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
     """Ключи из вставленного текста или ответа подписки (ссылки, base64 или Xray JSON).
     Возвращает (ключи VLESS, сообщения о пропущенных строках)."""
-    links = _xray_json_links(text)
+    json_skipped: List[str] = []
+    links = _xray_json_links(text, json_skipped)
     if links is not None:
         text = "\n".join(links)
     if "://" not in text:
@@ -265,8 +275,10 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
         except ValueError as exc:
             name = unquote(line.rsplit("#", 1)[1]) if "#" in line else line[:40] + "…"
             problems.append(f"{name}: {exc}")
+    other += len(json_skipped)
     if other:
-        problems.append(f"пропущено ключей других типов (не VLESS): {other}")
+        kinds = f" ({', '.join(sorted(set(json_skipped)))})" if json_skipped else ""
+        problems.append(f"пропущено ключей других типов (не VLESS){kinds}: {other}")
     return keys, problems
 
 
@@ -288,14 +300,38 @@ def update_interval(header: Optional[str]) -> float:
 # достаётся урезанный. Поэтому подписка запрашивается от имени каждого и берётся самый полный ответ.
 SUB_USER_AGENTS = [github.USER_AGENT, "v2rayN/7.15.4", "Happ/3.9.0"]
 
+# Адреса, на которых сервис присылает не сервер, а сообщение в названии «ключа» (Remnawave так отвечает,
+# когда достигнут лимит устройств, программа не прислала код устройства, подписка истекла и т.п.)
+_PLACEHOLDER_HOSTS = {"0.0.0.0", "127.0.0.1", "::", "::1", "localhost"}
 
-def fetch_subscription_info(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str], float]:
+
+def is_placeholder(key: VlessKey) -> bool:
+    return key.server.strip("[]").lower() in _PLACEHOLDER_HOSTS or key.port <= 1
+
+
+def device_headers(hwid: str) -> Dict[str, str]:
+    """Код устройства, как его присылают Happ и v2RayTun. Панели с лимитом устройств (Remnawave и др.)
+    без него отдают вместо серверов заглушку. Код случайный и хранится в настройках, имя ПК не уходит."""
+    if not hwid:
+        return {}
+    import platform
+    return {"x-hwid": hwid, "x-device-os": "Windows", "x-ver-os": platform.release() or "10",
+            "x-device-model": "PC"}
+
+
+def fetch_subscription_info(url: str, timeout: float = 20,
+                            hwid: str = "") -> Tuple[List[VlessKey], List[str], float]:
     """Ключи подписки, предупреждения и через сколько часов её обновить."""
     best: Optional[Tuple[List[VlessKey], List[str], float]] = None
+    notices: List[str] = []  # сообщения сервиса вместо серверов
+    host = urlsplit(url).hostname or "?"
     for ua in SUB_USER_AGENTS:
+        headers = {"User-Agent": ua, "Accept": "*/*", "Cache-Control": "no-cache"}
+        headers.update(device_headers(hwid))
         try:
-            resp = netfetch.fetch(url, {"User-Agent": ua, "Accept": "*/*", "Cache-Control": "no-cache"}, timeout)
-        except HTTPError:
+            resp = netfetch.fetch(url, headers, timeout)
+        except HTTPError as exc:
+            log.info("Подписка %s от имени %s: HTTP %s", host, ua, exc.code)
             if ua == SUB_USER_AGENTS[-1] and best is None:
                 raise
             continue  # этому клиенту сервис не отвечает — пробуем от имени следующего
@@ -303,16 +339,24 @@ def fetch_subscription_info(url: str, timeout: float = 20) -> Tuple[List[VlessKe
             if best is None:
                 raise  # сервис недоступен вовсе — другие попытки тоже не помогут
             break
-        keys, problems = parse_keys(resp.body.decode("utf-8", errors="replace"))
+        found, problems = parse_keys(resp.body.decode("utf-8", errors="replace"))
+        keys = [k for k in found if not is_placeholder(k)]
+        stubs = [k.name for k in found if is_placeholder(k)]
+        notices += [n for n in stubs if n not in notices]
+        log.info("Подписка %s от имени %s: серверов %d%s", host, ua, len(keys),
+                 f", сообщения сервиса: {stubs}" if stubs else "")
         hours = update_interval(resp.headers.get("profile-update-interval"))
         if best is None or len(keys) > len(best[0]):
             best = (keys, problems, hours)
     assert best is not None
-    return best
+    keys, problems, hours = best
+    if notices and len(keys) <= 1:
+        problems = problems + [f"сервис подписки сообщает: «{n}»" for n in notices]
+    return keys, problems, hours
 
 
-def fetch_subscription(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str]]:
-    keys, problems, _ = fetch_subscription_info(url, timeout)
+def fetch_subscription(url: str, timeout: float = 20, hwid: str = "") -> Tuple[List[VlessKey], List[str]]:
+    keys, problems, _ = fetch_subscription_info(url, timeout, hwid)
     return keys, problems
 
 

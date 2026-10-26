@@ -40,6 +40,7 @@ DEFAULTS: Dict[str, Any] = {
         "subscriptions": [],       # ссылки на подписки
         "subs_meta": {},           # {ссылка: {"checked": время обновления, "hours": интервал}}
         "exclude_apps": [],        # программы мимо VPN (имена .exe), только режим «Весь трафик»
+        "hwid": "",                # код устройства для подписок с лимитом устройств (создаётся сам)
     },
     "updates": {
         "check_on_start": True,
