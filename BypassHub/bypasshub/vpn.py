@@ -24,10 +24,11 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.error import HTTPError
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 from urllib.request import urlopen
 
-from . import github, tls, winutil
+from . import github, netfetch, tls, winutil
 from .log import log
 
 REPO = "SagerNet/sing-box"
@@ -180,9 +181,71 @@ def _decode_base64(text: str) -> Optional[str]:
     return None
 
 
+def _xray_json_links(text: str) -> Optional[List[str]]:
+    """Подписка в формате Xray JSON (так её отдают Happ и Streisand): список готовых конфигов Xray.
+    Из каждого берётся исходящее VLESS и пересобирается в ссылку vless://. None — это не JSON."""
+    stripped = text.strip()
+    if not stripped.startswith(("[", "{")):
+        return None
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return None
+    configs = data if isinstance(data, list) else [data]
+    links: List[str] = []
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
+        name = str(cfg.get("remarks") or "")
+        for ob in cfg.get("outbounds") or []:
+            if not isinstance(ob, dict) or ob.get("protocol") != "vless":
+                continue
+            try:
+                vnext = ob["settings"]["vnext"][0]
+                user = vnext["users"][0]
+                host, port, uid = str(vnext["address"]), int(vnext["port"]), str(user["id"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            ss = ob.get("streamSettings") or {}
+            net = ss.get("network") or "tcp"
+            sec = ss.get("security") or "none"
+            q: Dict[str, str] = {"encryption": str(user.get("encryption") or "none"), "type": net, "security": sec}
+            if user.get("flow"):
+                q["flow"] = str(user["flow"])
+            if sec == "reality":
+                r = ss.get("realitySettings") or {}
+                q.update(sni=r.get("serverName", ""), pbk=r.get("publicKey", ""), sid=r.get("shortId", ""),
+                         fp=r.get("fingerprint", ""), spx=r.get("spiderX", ""))
+            elif sec == "tls":
+                t = ss.get("tlsSettings") or {}
+                q.update(sni=t.get("serverName", ""), fp=t.get("fingerprint", ""),
+                         alpn=",".join(t.get("alpn") or []))
+                if t.get("allowInsecure"):
+                    q["allowInsecure"] = "1"
+            if net == "ws":
+                w = ss.get("wsSettings") or {}
+                q.update(path=w.get("path", ""), host=(w.get("headers") or {}).get("Host", "") or w.get("host", ""))
+            elif net == "grpc":
+                q["serviceName"] = (ss.get("grpcSettings") or {}).get("serviceName", "")
+            elif net == "httpupgrade":
+                h = ss.get("httpupgradeSettings") or {}
+                q.update(path=h.get("path", ""), host=h.get("host", ""))
+            elif net == "xhttp":
+                x = ss.get("xhttpSettings") or {}
+                q.update(path=x.get("path", ""), host=x.get("host", ""))
+            query = urlencode({k: v for k, v in q.items() if v not in ("", None)})
+            hostpart = f"[{host}]" if ":" in host else host
+            links.append(f"vless://{quote(uid)}@{hostpart}:{port}?{query}#{quote(name or host)}")
+            break  # в конфиге одно исходящее «proxy», остальные — direct/block
+    return links
+
+
 def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
-    """Ключи из вставленного текста или ответа подписки (просто ссылки или base64).
+    """Ключи из вставленного текста или ответа подписки (ссылки, base64 или Xray JSON).
     Возвращает (ключи VLESS, сообщения о пропущенных строках)."""
+    links = _xray_json_links(text)
+    if links is not None:
+        text = "\n".join(links)
     if "://" not in text:
         decoded = _decode_base64(text)
         if decoded:
@@ -220,13 +283,32 @@ def update_interval(header: Optional[str]) -> float:
     return min(max(hours, 1.0), 24.0) if hours > 0 else SUB_REFRESH_HOURS
 
 
+# Сервисы подписок (Remnawave, Marzban и др.) смотрят, какая программа спрашивает, и разным клиентам
+# отдают разное: полный список часто получают только известные (Happ, v2rayN), а незнакомой программе
+# достаётся урезанный. Поэтому подписка запрашивается от имени каждого и берётся самый полный ответ.
+SUB_USER_AGENTS = [github.USER_AGENT, "v2rayN/7.15.4", "Happ/3.9.0"]
+
+
 def fetch_subscription_info(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str], float]:
     """Ключи подписки, предупреждения и через сколько часов её обновить."""
-    with urlopen(github._request(url, "*/*"), timeout=timeout, context=tls.context()) as resp:
-        body = resp.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+    best: Optional[Tuple[List[VlessKey], List[str], float]] = None
+    for ua in SUB_USER_AGENTS:
+        try:
+            resp = netfetch.fetch(url, {"User-Agent": ua, "Accept": "*/*", "Cache-Control": "no-cache"}, timeout)
+        except HTTPError:
+            if ua == SUB_USER_AGENTS[-1] and best is None:
+                raise
+            continue  # этому клиенту сервис не отвечает — пробуем от имени следующего
+        except Exception:
+            if best is None:
+                raise  # сервис недоступен вовсе — другие попытки тоже не помогут
+            break
+        keys, problems = parse_keys(resp.body.decode("utf-8", errors="replace"))
         hours = update_interval(resp.headers.get("profile-update-interval"))
-    keys, problems = parse_keys(body)
-    return keys, problems, hours
+        if best is None or len(keys) > len(best[0]):
+            best = (keys, problems, hours)
+    assert best is not None
+    return best
 
 
 def fetch_subscription(url: str, timeout: float = 20) -> Tuple[List[VlessKey], List[str]]:
