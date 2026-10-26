@@ -82,7 +82,7 @@ class ServerPicker(QWidget):
             return
         if auto_ok:
             self._row(vpn.AUTO_TAG, "⚡ Авто — лучший сервер",
-                      "Сам выбирает самый быстрый сервер VLESS и переключается, если он перестал отвечать",
+                      "Сам выбирает самый быстрый сервер (VLESS или Hysteria2) и переключается, если он перестал отвечать",
                       selected == vpn.AUTO_TAG, None)
         for p in profiles:
             badge = ("Hysteria2" if p.data.lower().startswith(vpn.HYSTERIA2_SCHEMES) else

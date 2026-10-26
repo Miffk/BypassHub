@@ -928,6 +928,7 @@ class VpnManager:
         self.root = root
         self.log_file = log_file
         self._proc = None
+        self._probe_pid = 0  # временный sing-box для проверки задержек (не считается включённым VPN)
 
     @property
     def exe(self) -> Path:
@@ -964,7 +965,8 @@ class VpnManager:
 
     # ---------------------------------------------------------- статус
     def _own_processes(self) -> List[winutil.ProcInfo]:
-        return [p for p in winutil.find_processes(EXE_NAME) if p.exe and winutil.same_path(p.exe, self.exe)]
+        return [p for p in winutil.find_processes(EXE_NAME)
+                if p.exe and winutil.same_path(p.exe, self.exe) and p.pid != self._probe_pid]
 
     def running_mode(self) -> str:
         try:
@@ -976,6 +978,8 @@ class VpnManager:
     def status(self) -> VpnStatus:
         st = VpnStatus(installed=self.is_installed(), version=self.local_version())
         for p in winutil.find_processes(EXE_NAME):
+            if p.pid == self._probe_pid:
+                continue
             if p.exe and winutil.same_path(p.exe, self.exe):
                 st.pids.append(p.pid)
             else:
@@ -1061,9 +1065,9 @@ class VpnManager:
             return None
 
     def api_request(self, path: str, method: str = "GET", body: Optional[dict] = None,
-                    timeout: float = 3.0) -> Any:
+                    timeout: float = 3.0, api: Optional[Tuple[str, str]] = None) -> Any:
         from urllib.request import ProxyHandler, Request, build_opener
-        api = self._api()
+        api = api or self._api()
         if api is None:
             raise RuntimeError("API sing-box недоступно")
         data = json.dumps(body).encode() if body is not None else None
@@ -1108,6 +1112,56 @@ class VpnManager:
         res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
                                timeout=timeout_ms / 1000 + 3)
         return {k: int(v) for k, v in (res or {}).items() if v}
+
+    def probe_delays(self, servers: List[Dict[str, Any]], timeout_ms: int = 5000) -> Optional[Dict[str, int]]:
+        """Задержка серверов при выключенном VPN — через сами серверы, как во включённом: ненадолго
+        запускается отдельный sing-box без TUN и прокси, только со встроенным API. Так меряются и
+        серверы Hysteria2 (UDP), до которых обычное TCP-подключение ничего не покажет.
+        None — проверить так не получилось (движок не скачан, не запустился)."""
+        if not self.is_installed() or not servers:
+            return None
+        import secrets
+        api = (f"127.0.0.1:{_free_port()}", secrets.token_hex(16))
+        cfg = {"log": {"level": "warn", "timestamp": True},
+               "outbounds": server_group(servers, AUTO_TAG) + [{"type": "direct", "tag": "direct"}],
+               "experimental": {"clash_api": {"external_controller": api[0], "secret": api[1]}}}
+        probe = self.root / "probe.json"
+        probe.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        logf = open(self.root / "probe.log", "wb")
+        proc = None
+        try:
+            proc = winutil.popen_hidden([str(self.exe), "run", "-c", str(probe), "-D", str(self.root)],
+                                        cwd=self.root, stdout=logf)
+            self._probe_pid = proc.pid
+            deadline = time.time() + 5
+            while True:  # ждём, пока поднимется API
+                if proc.poll() is not None:
+                    log.debug("Проверка задержек: sing-box завершился: %s",
+                              _clean_log((self.root / "probe.log").read_text(errors="replace"))[-500:])
+                    return None
+                try:
+                    self.api_request("/version", api=api, timeout=1)
+                    break
+                except Exception:
+                    if time.time() > deadline:
+                        return None
+                    time.sleep(0.15)
+            res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
+                                   api=api, timeout=timeout_ms / 1000 + 3)
+            return {k: int(v) for k, v in (res or {}).items() if v}
+        except Exception as exc:
+            log.debug("Проверка задержек через sing-box: %r", exc)
+            return None
+        finally:
+            if proc is not None:
+                winutil.kill_pid_tree(proc.pid)
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+            self._probe_pid = 0
+            logf.close()
+            probe.unlink(missing_ok=True)
 
     def select_server(self, tag: str) -> None:
         """Переключить сервер на лету, без перезапуска."""
