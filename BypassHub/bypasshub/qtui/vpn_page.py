@@ -56,7 +56,7 @@ class VpnPage(Page):
                                "small", wrap=True))
 
         body = W.section(self.lay, "Серверы", "Нажмите на сервер, чтобы выбрать его. Если VPN включён, он "
-                                              "переключится сразу. «Авто» сам выбирает самый быстрый сервер VLESS.")
+                                              "переключится сразу. «Авто» сам выбирает самый быстрый сервер VLESS или Hysteria2.")
         from .server_list import ServerPicker
         self.picker = ServerPicker(app, compact=False, on_rename=self.rename, on_remove=self.remove)
         body.addWidget(self.picker)

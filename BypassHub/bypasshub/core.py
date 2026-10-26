@@ -365,7 +365,19 @@ class Core:
                 real = True
             except Exception as exc:
                 log.debug("VPN: проверка задержек через sing-box: %r", exc)
-        # Hysteria2 работает по UDP: время TCP-подключения к нему ничего не скажет, оставляем «—»
+        if not real and vless:  # VPN выключен — меряем через сами серверы отдельным sing-box
+            servers = []
+            for p in vless:
+                try:
+                    servers.append(vpn.outbound(vpn.parse_vless(p.data), tag=p.id))
+                except ValueError:
+                    pass
+            delays = self.singbox.probe_delays(servers)
+            if delays is not None:
+                for p in vless:
+                    result[p.id] = float(delays[p.id]) if p.id in delays else None
+                real = True
+        # без sing-box — время TCP-подключения; Hysteria2 работает по UDP, ему оставляем «—»
         rest = [p for p in vless if p.id not in result
                 and not p.data.lower().startswith(vpn.HYSTERIA2_SCHEMES)]
         if rest:

@@ -499,3 +499,61 @@ def test_hysteria_in_server_group_config():
     cfg = vpn.build_config(vpn.server_group(servers, vpn.AUTO_TAG), mode="tun")
     types = {ob["tag"]: ob["type"] for ob in cfg["outbounds"]}
     assert types["a"] == "vless" and types["b"] == "hysteria2"
+
+
+def test_ping_through_servers_when_vpn_off(tmp_path, monkeypatch):
+    """VPN выключен: задержка меряется через сами серверы (и Hysteria2), а не TCP-подключением."""
+    core = Core(Paths(tmp_path))
+    core.vpn_add(f"{REALITY}\n{HY2}")
+    ids = [p.id for p in core.vpn_vless()]
+    seen = {}
+
+    def probe(servers, timeout_ms=5000):
+        seen["types"] = [s["type"] for s in servers]
+        return {ids[1]: 42}
+
+    monkeypatch.setattr(core.singbox, "probe_delays", probe)
+    monkeypatch.setattr(vpn, "ping", lambda key, timeout=4.0: pytest.fail("TCP-пинг не нужен"))
+    result, real = core.vpn_ping()
+    assert real and seen["types"] == ["vless", "hysteria2"] and result == {ids[0]: None, ids[1]: 42.0}
+
+    # движок не скачан — TCP-пинг для VLESS, Hysteria2 без замера («—»)
+    monkeypatch.setattr(core.singbox, "probe_delays", lambda servers, timeout_ms=5000: None)
+    monkeypatch.setattr(vpn, "ping", lambda key, timeout=4.0: 12.0)
+    result, real = core.vpn_ping()
+    assert not real and result == {ids[0]: 12.0}
+
+
+def test_probe_delays_runs_separate_singbox(tmp_path, monkeypatch):
+    from bypasshub import winutil
+    m = vpn.VpnManager(tmp_path, tmp_path / "vpn.log")
+    m.exe.write_bytes(b"x")
+    started, killed, calls = [], [], []
+
+    class Proc:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, cwd=None, stdout=None, detached=False):
+        cfg = json.loads((tmp_path / "probe.json").read_text(encoding="utf-8"))
+        started.append(cfg)
+        return Proc()
+
+    def fake_api(path, method="GET", body=None, timeout=3.0, api=None):
+        calls.append(path)
+        assert api is not None and m._probe_pid == 4242
+        return {"a": 30, "b": 0} if path.startswith("/group/") else {"version": "x"}
+
+    monkeypatch.setattr(winutil, "popen_hidden", fake_popen)
+    monkeypatch.setattr(winutil, "kill_pid_tree", lambda pid: killed.append(pid))
+    monkeypatch.setattr(m, "api_request", fake_api)
+    servers = [vpn.outbound(vpn.parse_vless(REALITY), "a"), vpn.outbound(vpn.parse_vless(HY2), "b")]
+    assert m.probe_delays(servers) == {"a": 30}
+    cfg = started[0]
+    assert "inbounds" not in cfg and cfg["experimental"]["clash_api"]["external_controller"].startswith("127.0.0.1:")
+    assert killed == [4242] and m._probe_pid == 0 and not (tmp_path / "probe.json").exists()

@@ -373,7 +373,7 @@ class HomePage(Page):
                 btn.setEnabled(True)
             if not err and result:
                 self.vpn_pings, self.vpn_pings_real = dict(result[0]), result[1]
-            self.ping_note.setText(("через VPN" if self.vpn_pings_real else "до сервера") if self.vpn_pings else "")
+            self.ping_note.setText(("через сервер" if self.vpn_pings_real else "до сервера") if self.vpn_pings else "")
             self._render_vpn()
         self.app.run_task(core.vpn_ping, done)
 
