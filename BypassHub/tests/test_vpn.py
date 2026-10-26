@@ -1,6 +1,7 @@
 import base64
 import json
 import zlib
+from urllib.parse import quote
 
 import pytest
 
@@ -261,7 +262,8 @@ def test_subscription_auto_refresh(tmp_path, monkeypatch):
     answers = {"keys": [REALITY]}
     calls = []
 
-    def fake_fetch(url, timeout=20):
+    def fake_fetch(url, timeout=20, hwid=""):
+        assert hwid  # код устройства уходит в каждую подписку
         calls.append(url)
         keys = [vpn.parse_vless(k) for k in answers["keys"]]
         return keys, [], 6.0
@@ -319,7 +321,8 @@ def test_xray_json_subscription():
         {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]},
     ]
     keys, problems = vpn.parse_keys(json.dumps(cfg, ensure_ascii=False))
-    assert [k.name for k in keys] == ["🇩🇪 Germany", "🇳🇱 WS"] and not problems
+    assert [k.name for k in keys] == ["🇩🇪 Germany", "🇳🇱 WS"]
+    assert problems == ["пропущено ключей других типов (не VLESS) (trojan): 1"]
     de, ws = keys
     assert (de.server, de.security, de.public_key, de.sni, de.flow) == \
         ("de.example.com", "reality", PBK, "www.microsoft.com", "xtls-rprx-vision")
@@ -340,6 +343,22 @@ def test_subscription_asks_as_known_clients(monkeypatch):
     monkeypatch.setattr(netfetch, "fetch", fake_fetch)
     keys, problems, hours = vpn.fetch_subscription_info("https://sub.example.com/x")
     assert len(keys) == 2 and hours == 3 and seen == vpn.SUB_USER_AGENTS
+
+
+def test_subscription_sends_device_id_and_shows_notice(monkeypatch):
+    """Панель с лимитом устройств: без кода устройства — заглушка с сообщением вместо серверов."""
+    from bypasshub import netfetch
+    stub = f"vless://{UUID}@0.0.0.0:1?type=tcp&security=none#" + quote("Приложение не поддерживается")
+
+    def fake_fetch(url, headers, timeout=20, limit=0):
+        body = f"{REALITY}\n{WS}" if headers.get("x-hwid") == "abc123" else stub
+        return netfetch.Response(body.encode(), {}, url)
+
+    monkeypatch.setattr(netfetch, "fetch", fake_fetch)
+    keys, problems, _ = vpn.fetch_subscription_info("https://sub.example.com/x", hwid="abc123")
+    assert len(keys) == 2 and not problems
+    keys, problems, _ = vpn.fetch_subscription_info("https://sub.example.com/x")
+    assert keys == [] and problems == ["сервис подписки сообщает: «Приложение не поддерживается»"]
 
 
 def test_fetch_falls_back_to_doh(monkeypatch):
