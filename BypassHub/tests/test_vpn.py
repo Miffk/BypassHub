@@ -300,3 +300,65 @@ def test_exclude_apps_rule():
     proxy_cfg = vpn.build_config(ob, "proxy", False, exclude_apps=["dota2.exe"])
     assert not any("process_path_regex" in r for r in proxy_cfg["route"]["rules"])
     assert not any("process_path_regex" in r for r in vpn.build_config(ob, "tun", False)["route"]["rules"])
+
+
+def test_xray_json_subscription():
+    """Подписка в формате Xray JSON (как её получает Happ) — серверы VLESS из исходящих."""
+    cfg = [
+        {"remarks": "🇩🇪 Germany", "outbounds": [
+            {"protocol": "vless", "tag": "proxy", "settings": {"vnext": [{"address": "de.example.com", "port": 443,
+             "users": [{"id": UUID, "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+             "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
+                 "serverName": "www.microsoft.com", "publicKey": PBK, "shortId": "ab12", "fingerprint": "chrome"}}},
+            {"protocol": "freedom", "tag": "direct"}]},
+        {"remarks": "🇳🇱 WS", "outbounds": [
+            {"protocol": "vless", "settings": {"vnext": [{"address": "1.2.3.4", "port": 8443,
+             "users": [{"id": UUID}]}]},
+             "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "cdn.example.com"},
+                                "wsSettings": {"path": "/ws", "headers": {"Host": "cdn.example.com"}}}}]},
+        {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]},
+    ]
+    keys, problems = vpn.parse_keys(json.dumps(cfg, ensure_ascii=False))
+    assert [k.name for k in keys] == ["🇩🇪 Germany", "🇳🇱 WS"] and not problems
+    de, ws = keys
+    assert (de.server, de.security, de.public_key, de.sni, de.flow) == \
+        ("de.example.com", "reality", PBK, "www.microsoft.com", "xtls-rprx-vision")
+    assert (ws.transport, ws.path, ws.host, ws.sni) == ("ws", "/ws", "cdn.example.com", "cdn.example.com")
+
+
+def test_subscription_asks_as_known_clients(monkeypatch):
+    """Сервис отдаёт незнакомой программе один сервер, а Happ — все: берётся самый полный ответ."""
+    from bypasshub import netfetch
+    seen = []
+
+    def fake_fetch(url, headers, timeout=20, limit=0):
+        ua = headers["User-Agent"]
+        seen.append(ua)
+        body = REALITY if not ua.startswith("Happ") else f"{REALITY}\n{WS}"
+        return netfetch.Response(body.encode(), {"profile-update-interval": "3"}, url)
+
+    monkeypatch.setattr(netfetch, "fetch", fake_fetch)
+    keys, problems, hours = vpn.fetch_subscription_info("https://sub.example.com/x")
+    assert len(keys) == 2 and hours == 3 and seen == vpn.SUB_USER_AGENTS
+
+
+def test_fetch_falls_back_to_doh(monkeypatch):
+    """Системный DNS не нашёл адрес — запрос идёт через DNS по HTTPS."""
+    import socket
+    from urllib.error import URLError
+    from bypasshub import netfetch
+
+    def no_dns(*a, **kw):
+        raise URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    calls = []
+    monkeypatch.setattr(netfetch, "urlopen", no_dns)
+    monkeypatch.setattr(netfetch, "_fetch_pinned",
+                        lambda url, headers, timeout, limit: calls.append(url) or netfetch.Response(b"ok", {}, url))
+    assert netfetch.fetch("https://sub.example.com/x", {}).body == b"ok" and calls == ["https://sub.example.com/x"]
+
+    def refused(*a, **kw):
+        raise URLError(ConnectionRefusedError())
+    monkeypatch.setattr(netfetch, "urlopen", refused)
+    with pytest.raises(URLError):
+        netfetch.fetch("https://sub.example.com/x", {})   # не DNS — запасной путь не нужен
