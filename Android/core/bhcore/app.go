@@ -773,18 +773,25 @@ func SelectServer(id string) bool {
 	return true
 }
 
-// TestDelays — задержки серверов VLESS через сами серверы: JSON {id: мс}.
+// TestDelays — задержки серверов через сами серверы: JSON {id: мс}. Спрашиваем у переключателя
+// «proxy», а не у «auto»: «auto» сам проверяет серверы (сразу после запуска и раз в минуту) и, пока
+// занят, отвечает пустым списком; переключатель проверяет каждый сервер напрямую.
 func TestDelays() string {
-	b, err := apiCall("GET", "/group/"+autoTag+"/delay?url="+urltestURL+"&timeout=5000", "", 8*time.Second)
-	if err != nil {
-		return "{}"
-	}
-	var m map[string]int
-	_ = json.Unmarshal(b, &m)
 	out := map[string]int{}
-	for k, v := range m {
-		if v > 0 {
-			out[k] = v
+	for attempt := 0; attempt < 2 && len(out) == 0; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		b, err := apiCall("GET", "/group/proxy/delay?url="+urltestURL+"&timeout=5000", "", 8*time.Second)
+		if err != nil {
+			return "{}"
+		}
+		var m map[string]int
+		_ = json.Unmarshal(b, &m)
+		for k, v := range m {
+			if v > 0 && k != autoTag && k != "proxy" {
+				out[k] = v
+			}
 		}
 	}
 	return toJSON(out)

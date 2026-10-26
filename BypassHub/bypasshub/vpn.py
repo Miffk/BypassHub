@@ -1107,11 +1107,25 @@ class VpnManager:
                 delays[tag] = int(hist[-1]["delay"])
         return selected, actual, delays
 
+    def _group_delays(self, timeout_ms: int, api: Optional[Tuple[str, str]] = None,
+                      attempts: int = 2) -> Dict[str, int]:
+        """Задержка каждого сервера через него самого. Спрашиваем у переключателя «proxy», а не у
+        «auto»: «auto» сам проверяет серверы (сразу после запуска и раз в минуту) и, пока занят,
+        на запрос отвечает пустым списком. Переключатель проверяет каждый сервер напрямую."""
+        delays: Dict[str, int] = {}
+        for attempt in range(attempts):
+            res = self.api_request(f"/group/proxy/delay?url={URLTEST_URL}&timeout={timeout_ms}",
+                                   api=api, timeout=timeout_ms / 1000 + 3)
+            delays = {k: int(v) for k, v in (res or {}).items() if v and k not in (AUTO_TAG, "proxy")}
+            if delays:
+                break
+            if attempt + 1 < attempts:
+                time.sleep(1)
+        return delays
+
     def test_delays(self, timeout_ms: int = 5000) -> Dict[str, int]:
         """Проверить задержку всех серверов группы через сами серверы (реальная задержка)."""
-        res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
-                               timeout=timeout_ms / 1000 + 3)
-        return {k: int(v) for k, v in (res or {}).items() if v}
+        return self._group_delays(timeout_ms)
 
     def probe_delays(self, servers: List[Dict[str, Any]], timeout_ms: int = 5000) -> Optional[Dict[str, int]]:
         """Задержка серверов при выключенном VPN — через сами серверы, как во включённом: ненадолго
@@ -1147,9 +1161,7 @@ class VpnManager:
                     if time.time() > deadline:
                         return None
                     time.sleep(0.15)
-            res = self.api_request(f"/group/{AUTO_TAG}/delay?url={URLTEST_URL}&timeout={timeout_ms}",
-                                   api=api, timeout=timeout_ms / 1000 + 3)
-            delays = {k: int(v) for k, v in (res or {}).items() if v}
+            delays = self._group_delays(timeout_ms, api=api)
             if not delays:
                 log.info("Проверка задержек: ни один сервер не ответил. Журнал sing-box:\n%s",
                          self._probe_log_tail())

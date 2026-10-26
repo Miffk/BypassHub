@@ -548,7 +548,8 @@ def test_probe_delays_runs_separate_singbox(tmp_path, monkeypatch):
     def fake_api(path, method="GET", body=None, timeout=3.0, api=None):
         calls.append(path)
         assert api is not None and m._probe_pid == 4242
-        return {"a": 30, "b": 0} if path.startswith("/group/") else {"version": "x"}
+        # «auto» в ответе — сама группа; спрашиваем переключатель «proxy», он проверяет каждый сервер
+        return {"a": 30, "b": 0, "auto": 30} if path.startswith("/group/proxy/") else {"version": "x"}
 
     monkeypatch.setattr(winutil, "popen_hidden", fake_popen)
     monkeypatch.setattr(winutil, "kill_pid_tree", lambda pid: killed.append(pid))
@@ -562,3 +563,14 @@ def test_probe_delays_runs_separate_singbox(tmp_path, monkeypatch):
     assert cfg["route"]["default_domain_resolver"] == "dns-local"
     assert cfg["experimental"]["clash_api"]["external_controller"].startswith("127.0.0.1:")
     assert killed == [4242] and m._probe_pid == 0 and not (tmp_path / "probe.json").exists()
+
+
+def test_group_delays_retry_when_busy(tmp_path, monkeypatch):
+    """Сразу после запуска sing-box занят своей проверкой и отвечает пустым списком — спрашиваем ещё раз."""
+    m = vpn.VpnManager(tmp_path, tmp_path / "vpn.log")
+    answers = iter([{}, {"a": 25, "auto": 25}])
+    paths = []
+    monkeypatch.setattr(m, "api_request", lambda path, **kw: paths.append(path) or next(answers))
+    monkeypatch.setattr(vpn.time, "sleep", lambda s: None)
+    assert m.test_delays() == {"a": 25}
+    assert all(p.startswith("/group/proxy/delay") for p in paths) and len(paths) == 2
