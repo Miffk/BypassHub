@@ -11,6 +11,7 @@ on:
 jobs:
   ui:
     runs-on: windows-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: BypassHub
@@ -24,7 +25,7 @@ jobs:
       - name: Run UI check
         shell: pwsh
         run: |
-          foreach ($v in "base", "composited", "band4") {
+          foreach ($v in "base", "band4") {
             python tools/ui_check.py $v ui-check
           }
       - uses: actions/upload-artifact@v4

@@ -2,8 +2,8 @@
 
 Открывает окно BypassHub с тестовыми данными (без сети и без изменений в системе), листает каждую
 страницу, переключает вкладки, печатает время одного шага прокрутки и сохраняет снимки окна.
-Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px;
-composited — контроль со стилем окна из 1.6.8 (проверка на остатки старой вкладки должна его поймать).
+Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px.
+Окно со стилем WS_EX_COMPOSITED (как в 1.6.8) на Windows зависает намертво — так его и не проверить.
 """
 from __future__ import annotations
 
@@ -51,16 +51,6 @@ elif VARIANT.startswith("band"):
 
 a = appmod.App(core)
 a.geometry("1040x720+0+0")
-
-if VARIANT == "composited" and sys.platform == "win32":
-    # контроль: стиль из 1.6.8, при котором старая вкладка оставалась на экране, — проверка должна это поймать
-    import ctypes
-    _u = ctypes.windll.user32
-    _u.GetParent.restype = ctypes.c_void_p
-    a.update_idletasks()
-    _h = ctypes.c_void_p(_u.GetParent(a.winfo_id()))
-    _u.SetWindowLongW(_h, -20, _u.GetWindowLongW(_h, -20) | 0x02000000)
-
 
 def grab():
     from PIL import ImageGrab
