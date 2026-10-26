@@ -18,6 +18,12 @@ from PIL import ImageTk
 from . import theme as T
 
 
+# Высота полосы градиентного фона (логические пиксели). Каждая полоса — отдельный прямоугольник холста,
+# и при прокрутке Windows перерисовывает их все: с полосами по 4 px шаг прокрутки стоил 20–25 мс,
+# по 16 px — около 15 (замер на Windows в GitHub Actions, tools/ui_check.py); на глаз разницы нет.
+BAND_PX = 16
+
+
 def _palette():
     from . import widgets as W  # отложенный импорт: widgets импортирует этот модуль
     return W.P
@@ -96,7 +102,8 @@ class _GradientMixin:
         return T.gradient_at(self._stops(), phase if phase <= 1 else 2 - phase)
 
     def schedule_layout(self, *_):
-        if self._job is None:
+        # скрытая вкладка (лежит под текущей) раскладывается, когда её покажут
+        if self._job is None and not getattr(self, "_bh_hidden", False):
             self._job = self.after(40, self.apply_layout)
 
     def restyle(self) -> None:
@@ -110,7 +117,7 @@ class _GradientMixin:
         в отличие от большой картинки."""
         if width < 2 or height < 2:
             return
-        step = max(2, T.px(4))
+        step = max(2, T.px(BAND_PX))
         key = (width, height, self._period, tuple(self._stops()))
         if key == self._band_key:
             return

@@ -175,6 +175,8 @@ class App(ctk.CTk):
         W.NavItem(self.nav, "Поддержать проект", "heart",
                   command=lambda: winutil.open_url(SUPPORT_URL)).pack(side="bottom", padx=16, pady=(0, 6))
         self.show_page(self.current_page)
+        self.prewarmed = False
+        self.after(700, lambda: self._prewarm([k for k in self.pages if k != self.current_page]))
 
     def apply_appearance(self, animate: bool = True) -> None:
         """Сменить оформление без пересоздания окна: цвета заменяются на месте.
@@ -218,14 +220,27 @@ class App(ctk.CTk):
         if hasattr(page, "on_palette"):
             page.on_palette()
 
+    @staticmethod
+    def _page_widget(page):
+        return getattr(page, "_outer", page)  # у прокручиваемой страницы геометрией управляет внешняя рамка
+
+    def _raise_page(self, page) -> None:
+        w = self._page_widget(page)
+        w.tk.call("raise", w._w)  # не Canvas.tkraise — тот поднимает элементы холста, а не сам виджет
+
     def show_page(self, key: str) -> None:
+        """Все вкладки лежат в одной клетке друг на друге, показ — подъём наверх. Убирать и заново
+        выкладывать вкладку (grid_forget/grid) на Windows дорого: первое открытие стоило до 0,5 с."""
         self.current_page = key
-        for k, (_, page) in self.pages.items():
-            if k != key:
-                page.grid_forget()
-            self.nav_items[k].set_active(k == key)
         page = self.pages[key][1]
-        page.grid(row=0, column=0, sticky="nsew")
+        if not self._page_widget(page).winfo_manager():
+            page.grid(row=0, column=0, sticky="nsew")
+        page._bh_hidden = False
+        self._raise_page(page)
+        for k, (_, other) in self.pages.items():
+            self.nav_items[k].set_active(k == key)
+            if k != key:
+                other._bh_hidden = True
         self._recolor_page(key)
         if hasattr(page, "on_show"):
             page.on_show()
@@ -237,6 +252,31 @@ class App(ctk.CTk):
                 page.apply_layout()
             except tk.TclError:
                 pass
+
+    def _prewarm(self, keys: List[str]) -> None:
+        """Вкладки готовятся заранее, по одной, пока окно простаивает: выкладываются под текущей
+        (Windows создаёт их окна) и раскладываются. Тогда первое открытие вкладки — без рывка."""
+        if self._closing:
+            return
+        if not keys:
+            self.prewarmed = True
+            return
+        key, rest = keys[0], keys[1:]
+        page = self.pages[key][1]
+        if key != self.current_page and not self._page_widget(page).winfo_manager():
+            page._bh_hidden = True
+            page.grid(row=0, column=0, sticky="nsew")
+            self._raise_page(self.pages[self.current_page][1])  # текущая — поверх, до любой отрисовки
+            try:
+                self.update_idletasks()
+                if hasattr(page, "apply_layout"):
+                    page._bh_hidden = False
+                    page.apply_layout()
+            except tk.TclError:
+                pass
+            finally:
+                page._bh_hidden = key != self.current_page
+        self.after(120, lambda: self._prewarm(rest))
 
     def _on_wheel(self, event, delta: Optional[int] = None):
         try:
