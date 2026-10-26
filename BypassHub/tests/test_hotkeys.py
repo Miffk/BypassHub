@@ -55,3 +55,13 @@ def test_combo_from_tk_windows_states(monkeypatch):
     assert combo_from_tk(0x4 | 0x20000 | 0x8, "Cyrillic_ya", 0x5A) == "Ctrl+Alt+Z"
     assert combo_from_tk(0x4 | 0x8, "z", 0x5A) == "Ctrl+Z"  # NumLock не считается за Alt
     assert combo_from_tk(0x20000, "F5", 0x74) == "Alt+F5"
+
+
+def test_combo_from_qt():
+    from bypasshub.hotkeys import combo_from_qt
+    # русская раскладка: Qt отдаёт кириллическую букву, но виртуальный код клавиши — латинский Z
+    assert combo_from_qt(True, True, False, 0x042F, native_vk=0x5A) == "Ctrl+Alt+Z"
+    assert combo_from_qt(True, False, True, 0x01000031) == "Ctrl+Shift+F2"
+    assert combo_from_qt(False, True, False, 0x01000016) == "Alt+Pageup"   # так же пишет normalize()
+    assert combo_from_qt(True, True, False, 0x01000021) is None      # только Ctrl
+    assert combo_from_qt(False, False, True, 0x41) is None           # Shift+A — не сочетание

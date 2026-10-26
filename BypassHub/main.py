@@ -28,6 +28,7 @@ def main() -> int:
     ap.add_argument("--minimized", action="store_true", help="запуск свёрнутым в трей")
     ap.add_argument("--data-dir", type=Path, default=None, help="папка данных (по умолчанию C:\\ProgramData\\BypassHub)")
     ap.add_argument("--wait-pid", type=int, default=0, help=argparse.SUPPRESS)  # после самообновления
+    ap.add_argument("--classic-ui", action="store_true", help="старый интерфейс (Tk) вместо Qt")
     args = ap.parse_args()
 
     if args.wait_pid:
@@ -55,10 +56,17 @@ def main() -> int:
     log.info("%s %s запущен, данные: %s", APP_NAME, __version__, paths.root)
 
     from bypasshub.core import Core
-    from bypasshub.gui.app import App
 
     core = Core(paths)
     minimized = args.minimized or bool(core.settings.get("app", "start_minimized"))
+    if not args.classic_ui:
+        try:
+            from bypasshub.qtui.app import run
+        except Exception as exc:  # Qt не загрузился — открываем прежнее окно, а не падаем
+            log.error("Интерфейс Qt не запустился, открываю старый: %r", exc)
+        else:
+            return run(core, start_minimized=minimized)
+    from bypasshub.gui.app import App
     app = App(core, start_minimized=minimized)
     app.mainloop()
     return 0

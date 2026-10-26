@@ -49,6 +49,23 @@ jobs:
           --hidden-import pystray._win32
           main.py
 
+      - name: Smoke test exe
+        shell: pwsh
+        run: |
+          # собранный exe запускается и открывает окно Qt (а не запасное старое)
+          $data = Join-Path $env:RUNNER_TEMP "bh-data"
+          $p = Start-Process dist\BypassHub.exe -ArgumentList "--data-dir", $data, "--minimized" -PassThru
+          Start-Sleep -Seconds 25
+          $logFile = Join-Path $data "logs\bypasshub.log"
+          $log = if (Test-Path $logFile) { Get-Content $logFile -Raw -Encoding utf8 } else { "" }
+          Write-Output $log
+          taskkill /T /F /PID $p.Id | Out-Null
+          $global:LASTEXITCODE = 0
+          if ($log -notmatch "Qt 6\.") {
+            Write-Output "::error::Окно Qt не запустилось в собранном exe"
+            exit 1
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: BypassHub-windows

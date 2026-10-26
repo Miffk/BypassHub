@@ -76,6 +76,17 @@ build.bat
 
 Запуск без сборки: `pip install -r requirements.txt` и `python main.py`. Тесты: `python -m pytest`.
 
+## Интерфейс
+
+- Окно написано на Qt (PySide6): `bypasshub/qtui/` — `app.py` (главное окно, трей, фоновые задачи),
+  `style.py` (таблица стилей из палитры темы), `widgets.py` (карточки, переключатели, плитки),
+  страницы `home.py`, `zapret_page.py`, `tg_page.py`, `vpn_page.py`, `updates_page.py`, `settings_page.py`,
+  `log_page.py` и окна `dialogs.py`. Цвета тем — `bypasshub/palette.py` (общие для обоих интерфейсов).
+- Прежнее окно на customtkinter (`bypasshub/gui/`) осталось запасным: оно открывается, если Qt не смог
+  загрузиться, или при запуске с ключом `--classic-ui`.
+- Проверка плавности на настоящей Windows — workflow `ui-check.yml` (`tools/ui_check.py`): время переключения
+  вкладок и шага прокрутки, снимки окна.
+
 ## VPN
 
 - `bypasshub/vpn.py` — ключи VLESS (`parse_vless`), подписки, профили (`Profile`, `parse_input`), сборка config.json
