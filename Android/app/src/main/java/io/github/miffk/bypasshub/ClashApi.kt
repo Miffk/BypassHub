@@ -33,10 +33,19 @@ class ClashApi(private val port: Int, private val secret: String) {
         return GroupState(selected, current, delays)
     }
 
-    /** Проверить задержку всех серверов группы через сами серверы. */
+    /** Проверить задержку всех серверов группы через сами серверы. Спрашиваем у переключателя «proxy»,
+     *  а не у «auto»: «auto» сам проверяет серверы (сразу после запуска и раз в минуту) и, пока занят,
+     *  отвечает пустым списком; переключатель проверяет каждый сервер напрямую. */
     fun testDelays(timeoutMs: Int = 5000): Map<String, Int> {
-        val res = get("/group/$AUTO/delay?url=${Config.URLTEST_URL}&timeout=$timeoutMs", timeoutMs + 3000)
-        return res.keys().asSequence().associateWith { res.optInt(it) }.filterValues { it > 0 }
+        var out = emptyMap<String, Int>()
+        for (attempt in 0 until 2) {
+            if (attempt > 0) Thread.sleep(1000)
+            val res = get("/group/proxy/delay?url=${Config.URLTEST_URL}&timeout=$timeoutMs", timeoutMs + 3000)
+            out = res.keys().asSequence().associateWith { res.optInt(it) }
+                .filter { (k, v) -> v > 0 && k != AUTO && k != "proxy" }
+            if (out.isNotEmpty()) break
+        }
+        return out
     }
 
     fun select(tag: String) {
