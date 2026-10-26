@@ -115,7 +115,7 @@ final class Store: ObservableObject {
         var subs = subscriptions
         for url in parsed.subscriptions {
             do {
-                let (keys, extra) = try await Self.fetchSubscription(url)
+                let (keys, extra) = try await Self.fetchSubscription(url, hwid: Self.hwid)
                 if keys.isEmpty { problems.append("в подписке нет ключей VLESS") }
                 found += keys
                 problems += extra
@@ -155,12 +155,12 @@ final class Store: ObservableObject {
         var newActive: String?
         for url in urls {
             do {
-                let (keys, extra) = try await Self.fetchSubscription(url)
+                let (keys, extra) = try await Self.fetchSubscription(url, hwid: Self.hwid)
+                problems += extra
                 if keys.isEmpty { // пустой ответ (сбой сервиса) — старые серверы не трогаем
                     problems.append("\(url): в ответе нет ключей VLESS, оставлены прежние серверы")
                     continue
                 }
-                problems += extra
                 let names = Dictionary(list.filter { $0.sub == url }.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
                 let fresh = keys.map { p -> Profile in
                     var p = p
@@ -197,20 +197,62 @@ final class Store: ObservableObject {
     private struct ParsedSub: Decodable {
         var profiles: [Profile]
         var problems: [String]
+        var notices: [String]? // сообщения сервиса вместо серверов (заглушки)
     }
 
     static func decode<T: Decodable>(_ t: T.Type, _ json: String) -> T? {
         try? JSONDecoder().decode(t, from: Data(json.utf8))
     }
 
-    private static func fetchSubscription(_ url: String) async throws -> ([Profile], [String]) {
+    /// Код устройства для подписок, как его присылают Happ и v2RayTun: панели с лимитом устройств
+    /// (Remnawave и др.) без него отдают вместо серверов заглушку. Случайный, создаётся один раз.
+    static var hwid: String {
+        let d = UserDefaults.standard
+        if let id = d.string(forKey: "hwid"), !id.isEmpty { return id }
+        let id = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16))
+        d.set(id, forKey: "hwid")
+        return id
+    }
+
+    /// Сервисы подписок разным программам отдают разное: полный список часто получают только известные
+    /// (Happ, v2rayN). Подписка запрашивается от имени каждой и берётся самый полный ответ.
+    static let subUserAgents = ["BypassHub-iOS/\(appVersion)", "v2rayN/7.15.4", "Happ/3.9.0"]
+
+    private static func fetchSubscription(_ url: String, hwid: String) async throws -> ([Profile], [String]) {
         guard let u = URL(string: url) else { throw TextError("неверная ссылка") }
-        var req = URLRequest(url: u, timeoutInterval: 20)
-        req.setValue("BypassHub", forHTTPHeaderField: "User-Agent")
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        if let h = resp as? HTTPURLResponse, h.statusCode / 100 != 2 { throw TextError("HTTP \(h.statusCode)") }
-        let parsed = decode(ParsedSub.self, BhcoreParseSubscription(String(decoding: data, as: UTF8.self), url))
-        return (parsed?.profiles ?? [], parsed?.problems ?? [])
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        var best: ParsedSub?
+        var notices: [String] = []
+        var lastError: Error?
+        for ua in subUserAgents {
+            var req = URLRequest(url: u, timeoutInterval: 20)
+            req.setValue(ua, forHTTPHeaderField: "User-Agent")
+            req.setValue("*/*", forHTTPHeaderField: "Accept")
+            req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            req.setValue(hwid, forHTTPHeaderField: "x-hwid")
+            req.setValue("iOS", forHTTPHeaderField: "x-device-os")
+            req.setValue("\(os.majorVersion).\(os.minorVersion)", forHTTPHeaderField: "x-ver-os")
+            req.setValue("iPhone", forHTTPHeaderField: "x-device-model")
+            let data: Data
+            do {
+                let (body, resp) = try await URLSession.shared.data(for: req)
+                if let h = resp as? HTTPURLResponse, h.statusCode / 100 != 2 {
+                    lastError = TextError("HTTP \(h.statusCode)")
+                    continue // этому клиенту сервис не отвечает — пробуем от имени следующего
+                }
+                data = body
+            } catch {
+                if best == nil { throw error } // сервис недоступен вовсе — другие попытки не помогут
+                break
+            }
+            guard let parsed = decode(ParsedSub.self, BhcoreParseSubscription(String(decoding: data, as: UTF8.self), url))
+            else { continue }
+            for n in parsed.notices ?? [] where !notices.contains(n) { notices.append(n) }
+            if best == nil || parsed.profiles.count > best!.profiles.count { best = parsed }
+        }
+        guard let result = best else { throw lastError ?? TextError("нет ответа") }
+        let stubs = result.profiles.count <= 1 ? notices.map { "сервис подписки сообщает: «\($0)»" } : []
+        return (result.profiles, result.problems + stubs)
     }
 
     // ---------------------------------------------------------------- запрос для ядра

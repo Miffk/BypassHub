@@ -311,12 +311,111 @@ object Keys {
         null
     }
 
-    /** Ключи VLESS из текста или ответа подписки (просто ссылки или base64). */
-    fun parseVlessList(text: String): Pair<List<VlessKey>, List<String>> {
+    /** Разобранная подписка: ключи, предупреждения и сообщения сервиса вместо серверов. */
+    data class SubParse(val keys: List<VlessKey>, val problems: List<String>, val notices: List<String>)
+
+    // Адреса, на которых сервис присылает не сервер, а сообщение в названии «ключа» (Remnawave так отвечает,
+    // когда достигнут лимит устройств, программа не прислала код устройства, подписка истекла и т.п.)
+    private val PLACEHOLDER_HOSTS = setOf("0.0.0.0", "127.0.0.1", "::", "::1", "localhost")
+
+    fun isPlaceholder(k: VlessKey) = k.server.lowercase() in PLACEHOLDER_HOSTS || k.port <= 1
+
+    private val PROXY_PROTOCOLS = setOf("vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic",
+        "wireguard", "socks", "http")
+
+    /** Строка из JSON; пусто, если поля нет или там null (org.json отдал бы «null»). */
+    private fun JSONObject.s(key: String): String = if (isNull(key)) "" else optString(key, "")
+
+    private fun enc(s: String): String = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
+
+    /** Подписка в формате Xray JSON (так её отдают Happ и Streisand): из каждого конфига берётся исходящее
+     *  VLESS и пересобирается в ссылку vless://. null — это не JSON. В skipped — протоколы конфигов без VLESS. */
+    fun xrayJsonLinks(text: String, skipped: MutableList<String>): List<String>? {
+        val t = text.trim()
+        if (!t.startsWith("[") && !t.startsWith("{")) return null
+        val configs: List<JSONObject> = try {
+            if (t.startsWith("[")) JSONArray(t).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
+            else listOf(JSONObject(t))
+        } catch (e: Exception) {
+            return null
+        }
+        val links = mutableListOf<String>()
+        for (cfg in configs) {
+            val name = cfg.s("remarks")
+            val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
+            var found = false
+            var other = ""
+            for (i in 0 until outbounds.length()) {
+                val ob = outbounds.optJSONObject(i) ?: continue
+                val proto = ob.s("protocol")
+                if (proto != "vless") {
+                    if (other.isEmpty() && proto in PROXY_PROTOCOLS) other = proto
+                    continue
+                }
+                val srv = ob.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0) ?: continue
+                val user = srv.optJSONArray("users")?.optJSONObject(0) ?: continue
+                val host = srv.s("address")
+                val port = srv.optInt("port", -1)
+                val uid = user.s("id")
+                if (host.isEmpty() || uid.isEmpty() || port <= 0) continue
+                val ss = ob.optJSONObject("streamSettings") ?: JSONObject()
+                val net = ss.s("network").ifEmpty { "tcp" }
+                val sec = ss.s("security").ifEmpty { "none" }
+                val q = linkedMapOf("encryption" to user.s("encryption").ifEmpty { "none" },
+                    "type" to net, "security" to sec, "flow" to user.s("flow"))
+                if (sec == "reality") {
+                    val r = ss.optJSONObject("realitySettings") ?: JSONObject()
+                    q["sni"] = r.s("serverName")
+                    q["pbk"] = r.s("publicKey")
+                    q["sid"] = r.s("shortId")
+                    q["fp"] = r.s("fingerprint")
+                    q["spx"] = r.s("spiderX")
+                } else if (sec == "tls") {
+                    val tl = ss.optJSONObject("tlsSettings") ?: JSONObject()
+                    q["sni"] = tl.s("serverName")
+                    q["fp"] = tl.s("fingerprint")
+                    val alpn = tl.optJSONArray("alpn")
+                    if (alpn != null) q["alpn"] = (0 until alpn.length()).joinToString(",") { alpn.optString(it) }
+                    if (tl.optBoolean("allowInsecure", false)) q["allowInsecure"] = "1"
+                }
+                when (net) {
+                    "ws" -> {
+                        val w = ss.optJSONObject("wsSettings") ?: JSONObject()
+                        q["path"] = w.s("path")
+                        q["host"] = w.optJSONObject("headers")?.s("Host").orEmpty().ifEmpty { w.s("host") }
+                    }
+                    "grpc" -> q["serviceName"] = ss.optJSONObject("grpcSettings")?.s("serviceName").orEmpty()
+                    "httpupgrade" -> {
+                        val h = ss.optJSONObject("httpupgradeSettings") ?: JSONObject()
+                        q["path"] = h.s("path")
+                        q["host"] = h.s("host")
+                    }
+                    "xhttp" -> {
+                        val x = ss.optJSONObject("xhttpSettings") ?: JSONObject()
+                        q["path"] = x.s("path")
+                        q["host"] = x.s("host")
+                    }
+                }
+                val query = q.filterValues { it.isNotEmpty() }.entries.joinToString("&") { "${it.key}=${enc(it.value)}" }
+                val hostPart = if (host.contains(":")) "[$host]" else host
+                links.add("vless://${enc(uid)}@$hostPart:$port?$query#${enc(name.ifEmpty { host })}")
+                found = true
+                break  // в конфиге одно исходящее «proxy», остальные — direct/block
+            }
+            if (!found && other.isNotEmpty()) skipped.add(other)
+        }
+        return links
+    }
+
+    /** Ключи VLESS из ответа подписки (ссылки, base64 или Xray JSON). Заглушки сервиса — в notices. */
+    fun parseSubscription(text: String): SubParse {
         var t = text
+        val jsonSkipped = mutableListOf<String>()
+        xrayJsonLinks(t, jsonSkipped)?.let { t = it.joinToString("\n") }
         if (!t.contains("://")) decodeBase64Text(t)?.let { t = it }
         val keys = mutableListOf<VlessKey>()
         val problems = mutableListOf<String>()
+        val notices = mutableListOf<String>()
         var other = 0
         for (rawLine in t.lines()) {
             val line = rawLine.trim()
@@ -326,14 +425,25 @@ object Keys {
                 continue
             }
             try {
-                keys.add(parseVless(line))
+                val k = parseVless(line)
+                if (isPlaceholder(k)) notices.add(k.name) else keys.add(k)
             } catch (e: KeyException) {
                 val name = if (line.contains("#")) decode(line.substringAfterLast("#")) else line.take(40) + "…"
                 problems.add("$name: ${e.message}")
             }
         }
-        if (other > 0) problems.add("пропущено ключей других типов (не VLESS): $other")
-        return keys to problems
+        other += jsonSkipped.size
+        if (other > 0) {
+            val kinds = if (jsonSkipped.isNotEmpty()) " (${jsonSkipped.toSortedSet().joinToString(", ")})" else ""
+            problems.add("пропущено ключей других типов (не VLESS)$kinds: $other")
+        }
+        return SubParse(keys, problems, notices)
+    }
+
+    /** Ключи VLESS из вставленного текста: сообщения сервиса идут в предупреждения. */
+    fun parseVlessList(text: String): Pair<List<VlessKey>, List<String>> {
+        val p = parseSubscription(text)
+        return p.keys to (p.problems + p.notices.map { "сервис подписки сообщает: «$it»" })
     }
 
     /** Что угодно из буфера обмена: vless://, vpn://, .conf, ссылка на подписку. */

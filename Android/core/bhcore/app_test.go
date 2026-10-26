@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,50 @@ func TestOutboundsAndConfigs(t *testing.T) {
 	conf, ip, err := resolveAWGEndpoint(testConf)
 	if err != nil || ip != "192.0.2.10" || !strings.Contains(conf, "Endpoint = 192.0.2.10:51820\n") {
 		t.Fatalf("endpoint: %v %q", err, conf)
+	}
+}
+
+func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
+	cfg := `[
+	 {"remarks": "🇩🇪 Germany", "outbounds": [
+	  {"protocol": "vless", "settings": {"vnext": [{"address": "de.example.com", "port": 443,
+	    "users": [{"id": "11111111-2222-3333-4444-555555555555", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+	   "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
+	    "serverName": "www.microsoft.com", "publicKey": "Zk3T2lWJ2a6o8QIhZ8m7rQ6dR4y7vE1Lr4m2aGxXqFk", "shortId": "ab12", "fingerprint": "chrome"}}},
+	  {"protocol": "freedom", "tag": "direct"}]},
+	 {"remarks": "NL WS", "outbounds": [
+	  {"protocol": "vless", "settings": {"vnext": [{"address": "1.2.3.4", "port": 8443,
+	    "users": [{"id": "11111111-2222-3333-4444-555555555555"}]}]},
+	   "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "cdn.example.com"},
+	    "wsSettings": {"path": "/ws", "headers": {"Host": "cdn.example.com"}}}}]},
+	 {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]}
+	]`
+	var s struct {
+		Profiles []Profile
+		Problems []string
+		Notices  []string
+	}
+	_ = json.Unmarshal([]byte(ParseSubscription(cfg, "https://sub")), &s)
+	if len(s.Profiles) != 2 || s.Profiles[0].Name != "🇩🇪 Germany" || s.Profiles[1].Name != "NL WS" {
+		t.Fatalf("xray json: %+v", s)
+	}
+	if len(s.Problems) != 1 || s.Problems[0] != "пропущено ключей других типов (не VLESS) (trojan): 1" {
+		t.Fatalf("problems: %v", s.Problems)
+	}
+	de, err := parseVless(s.Profiles[0].Data)
+	if err != nil || de.Security != "reality" || de.PublicKey == "" || de.Flow != "xtls-rprx-vision" {
+		t.Fatalf("reality: %+v %v", de, err)
+	}
+	ws, err := parseVless(s.Profiles[1].Data)
+	if err != nil || ws.Transport != "ws" || ws.Path != "/ws" || ws.Host != "cdn.example.com" {
+		t.Fatalf("ws: %+v %v", ws, err)
+	}
+	// заглушка сервиса: «сервер» на 0.0.0.0 с сообщением в названии
+	stub := "vless://11111111-2222-3333-4444-555555555555@0.0.0.0:1?type=tcp&security=none#" +
+		url.PathEscape("Лимит устройств")
+	s.Notices = nil
+	_ = json.Unmarshal([]byte(ParseSubscription(stub, "https://sub")), &s)
+	if len(s.Profiles) != 0 || len(s.Notices) != 1 || s.Notices[0] != "Лимит устройств" {
+		t.Fatalf("stub: %+v", s)
 	}
 }

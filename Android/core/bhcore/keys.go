@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -518,16 +519,191 @@ func awgProfile(c *awgConf) Profile {
 	return Profile{ID: profileID("awg", c.Conf), Kind: "awg", Name: c.Name, Data: c.Conf, Summary: c.summary()}
 }
 
-// parseVlessList — ключи VLESS из текста или ответа подписки (просто ссылки или base64).
-func parseVlessList(text, sub string) ([]Profile, []string) {
+// Адреса, на которых сервис присылает не сервер, а сообщение в названии «ключа» (Remnawave так отвечает,
+// когда достигнут лимит устройств, программа не прислала код устройства, подписка истекла и т.п.)
+var placeholderHosts = map[string]bool{"0.0.0.0": true, "127.0.0.1": true, "::": true, "::1": true, "localhost": true}
+
+func isPlaceholder(k *vlessKey) bool {
+	return placeholderHosts[strings.ToLower(k.Server)] || k.Port <= 1
+}
+
+var proxyProtocols = map[string]bool{"vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true,
+	"hysteria2": true, "tuic": true, "wireguard": true, "socks": true, "http": true}
+
+// xrayJSONLinks — подписка в формате Xray JSON (так её отдают Happ и Streisand): из каждого конфига
+// берётся исходящее VLESS и пересобирается в ссылку vless://. ok=false — это не JSON. skipped —
+// протоколы конфигов без VLESS (их серверы пропущены).
+func xrayJSONLinks(text string) (links, skipped []string, ok bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "{") {
+		return nil, nil, false
+	}
+	var data any
+	if json.Unmarshal([]byte(t), &data) != nil {
+		return nil, nil, false
+	}
+	configs, isList := data.([]any)
+	if !isList {
+		configs = []any{data}
+	}
+	str := func(m map[string]any, key string) string {
+		if v, ok := m[key]; ok && v != nil {
+			switch x := v.(type) {
+			case string:
+				return x
+			case float64:
+				return strconv.FormatFloat(x, 'f', -1, 64)
+			case bool:
+				return strconv.FormatBool(x)
+			}
+		}
+		return ""
+	}
+	obj := func(m map[string]any, key string) map[string]any {
+		v, _ := m[key].(map[string]any)
+		if v == nil {
+			v = map[string]any{}
+		}
+		return v
+	}
+	for _, c := range configs {
+		cfg, _ := c.(map[string]any)
+		if cfg == nil {
+			continue
+		}
+		name := str(cfg, "remarks")
+		outbounds, _ := cfg["outbounds"].([]any)
+		found, other := false, ""
+		for _, o := range outbounds {
+			ob, _ := o.(map[string]any)
+			if ob == nil {
+				continue
+			}
+			proto := str(ob, "protocol")
+			if proto != "vless" {
+				if other == "" && proxyProtocols[proto] {
+					other = proto
+				}
+				continue
+			}
+			vnext, _ := obj(ob, "settings")["vnext"].([]any)
+			if len(vnext) == 0 {
+				continue
+			}
+			srv, _ := vnext[0].(map[string]any)
+			if srv == nil {
+				continue
+			}
+			users, _ := srv["users"].([]any)
+			if len(users) == 0 {
+				continue
+			}
+			user, _ := users[0].(map[string]any)
+			host, uid := str(srv, "address"), str(user, "id")
+			port, err := strconv.Atoi(str(srv, "port"))
+			if user == nil || host == "" || uid == "" || err != nil {
+				continue
+			}
+			ss := obj(ob, "streamSettings")
+			netw, sec := str(ss, "network"), str(ss, "security")
+			if netw == "" {
+				netw = "tcp"
+			}
+			if sec == "" {
+				sec = "none"
+			}
+			enc := str(user, "encryption")
+			if enc == "" {
+				enc = "none"
+			}
+			q := url.Values{}
+			set := func(k, v string) {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			set("encryption", enc)
+			set("type", netw)
+			set("security", sec)
+			set("flow", str(user, "flow"))
+			switch sec {
+			case "reality":
+				r := obj(ss, "realitySettings")
+				set("sni", str(r, "serverName"))
+				set("pbk", str(r, "publicKey"))
+				set("sid", str(r, "shortId"))
+				set("fp", str(r, "fingerprint"))
+				set("spx", str(r, "spiderX"))
+			case "tls":
+				tl := obj(ss, "tlsSettings")
+				set("sni", str(tl, "serverName"))
+				set("fp", str(tl, "fingerprint"))
+				if alpn, _ := tl["alpn"].([]any); len(alpn) > 0 {
+					parts := make([]string, 0, len(alpn))
+					for _, a := range alpn {
+						if s, ok := a.(string); ok {
+							parts = append(parts, s)
+						}
+					}
+					set("alpn", strings.Join(parts, ","))
+				}
+				if b, _ := tl["allowInsecure"].(bool); b {
+					set("allowInsecure", "1")
+				}
+			}
+			switch netw {
+			case "ws":
+				w := obj(ss, "wsSettings")
+				set("path", str(w, "path"))
+				h := str(obj(w, "headers"), "Host")
+				if h == "" {
+					h = str(w, "host")
+				}
+				set("host", h)
+			case "grpc":
+				set("serviceName", str(obj(ss, "grpcSettings"), "serviceName"))
+			case "httpupgrade":
+				h := obj(ss, "httpupgradeSettings")
+				set("path", str(h, "path"))
+				set("host", str(h, "host"))
+			case "xhttp":
+				x := obj(ss, "xhttpSettings")
+				set("path", str(x, "path"))
+				set("host", str(x, "host"))
+			}
+			hostPart := host
+			if strings.Contains(host, ":") {
+				hostPart = "[" + host + "]"
+			}
+			label := name
+			if label == "" {
+				label = host
+			}
+			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", url.PathEscape(uid), hostPart, port,
+				q.Encode(), url.PathEscape(label)))
+			found = true
+			break // в конфиге одно исходящее «proxy», остальные — direct/block
+		}
+		if !found && other != "" {
+			skipped = append(skipped, other)
+		}
+	}
+	return links, skipped, true
+}
+
+// parseSubscriptionText — ключи VLESS из текста или ответа подписки (ссылки, base64 или Xray JSON).
+// notices — сообщения сервиса вместо серверов (заглушки на 0.0.0.0), в ключи они не попадают.
+func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices []string) {
 	t := text
+	links, jsonSkipped, isJSON := xrayJSONLinks(t)
+	if isJSON {
+		t = strings.Join(links, "\n")
+	}
 	if !strings.Contains(t, "://") {
 		if b, err := b64decode(t); err == nil && strings.Contains(string(b), "://") {
 			t = string(b)
 		}
 	}
-	var keys []Profile
-	var problems []string
 	other := 0
 	for _, raw := range strings.Split(t, "\n") {
 		line := strings.TrimSpace(raw)
@@ -549,10 +725,37 @@ func parseVlessList(text, sub string) ([]Profile, []string) {
 			problems = append(problems, name+": "+err.Error())
 			continue
 		}
+		if isPlaceholder(k) {
+			notices = append(notices, k.Name)
+			continue
+		}
 		keys = append(keys, vlessProfile(k, sub))
 	}
+	other += len(jsonSkipped)
 	if other > 0 {
-		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS): %d", other))
+		kinds := ""
+		if len(jsonSkipped) > 0 {
+			seen := map[string]bool{}
+			var uniq []string
+			for _, s := range jsonSkipped {
+				if !seen[s] {
+					seen[s] = true
+					uniq = append(uniq, s)
+				}
+			}
+			sort.Strings(uniq)
+			kinds = " (" + strings.Join(uniq, ", ") + ")"
+		}
+		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS)%s: %d", kinds, other))
+	}
+	return keys, problems, notices
+}
+
+// parseVlessList — то же для вставленного текста: сообщения сервиса идут в предупреждения.
+func parseVlessList(text, sub string) ([]Profile, []string) {
+	keys, problems, notices := parseSubscriptionText(text, sub)
+	for _, n := range notices {
+		problems = append(problems, "сервис подписки сообщает: «"+n+"»")
 	}
 	return keys, problems
 }
@@ -616,16 +819,20 @@ func toJSON(v any) string {
 // Возвращает JSON ParsedInput.
 func ParseInput(text string) string { return toJSON(parseInput(text)) }
 
-// ParseSubscription разбирает ответ подписки (ссылки или base64). Возвращает JSON {profiles, problems}.
+// ParseSubscription разбирает ответ подписки (ссылки, base64 или Xray JSON).
+// Возвращает JSON {profiles, problems, notices}; notices — сообщения сервиса вместо серверов.
 func ParseSubscription(body, url string) string {
-	p, problems := parseVlessList(body, url)
+	p, problems, notices := parseSubscriptionText(body, url)
 	if p == nil {
 		p = []Profile{}
 	}
 	if problems == nil {
 		problems = []string{}
 	}
-	return toJSON(map[string]any{"profiles": p, "problems": problems})
+	if notices == nil {
+		notices = []string{}
+	}
+	return toJSON(map[string]any{"profiles": p, "problems": problems, "notices": notices})
 }
 
 // VlessEndpoint — адрес и порт сервера из ключа vless:// (для пинга); пусто, если ключ не разобрать.

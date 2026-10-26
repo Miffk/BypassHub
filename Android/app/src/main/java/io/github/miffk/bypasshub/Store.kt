@@ -156,6 +156,45 @@ object Store {
 
     fun remove(id: String) = save(profiles().filter { it.id != id })
 
+    /** Код устройства для подписок, как его присылают Happ и v2RayTun: панели с лимитом устройств
+     *  (Remnawave и др.) без него отдают вместо серверов заглушку. Случайный, создаётся один раз. */
+    private val hwid: String
+        get() = prefs.getString("hwid", "").orEmpty().ifEmpty {
+            java.util.UUID.randomUUID().toString().replace("-", "").take(16).also {
+                prefs.edit().putString("hwid", it).apply()
+            }
+        }
+
+    /** Сервисы подписок разным программам отдают разное: полный список часто получают только известные
+     *  (Happ, v2rayNG). Подписка запрашивается от имени каждой и берётся самый полный ответ. */
+    private val SUB_USER_AGENTS = listOf("BypassHub-Android/${BuildConfig.VERSION_NAME}", "v2rayNG/1.10.2", "Happ/3.9.0")
+
+    /** Скачать подписку: (ключи VLESS, предупреждения). Вызывать не в UI-потоке. */
+    fun fetchSubscription(url: String): Pair<List<VlessKey>, List<String>> {
+        val device = mapOf("x-hwid" to hwid, "x-device-os" to "Android",
+            "x-ver-os" to android.os.Build.VERSION.RELEASE, "x-device-model" to android.os.Build.MODEL,
+            "Accept" to "*/*", "Cache-Control" to "no-cache")
+        var best: Keys.SubParse? = null
+        val notices = linkedSetOf<String>()
+        var lastError: Exception? = null
+        for (ua in SUB_USER_AGENTS) {
+            val body = try {
+                Net.getAny(url, headers = device + ("User-Agent" to ua))
+            } catch (e: Exception) {
+                lastError = e
+                if (e.message?.startsWith("HTTP") == true) continue  // этому клиенту не отвечает — пробуем следующего
+                if (best == null) throw e  // сервис недоступен вовсе — другие попытки не помогут
+                break
+            }
+            val p = Keys.parseSubscription(body)
+            notices.addAll(p.notices)
+            if (best == null || p.keys.size > best.keys.size) best = p
+        }
+        val b = best ?: throw (lastError ?: java.io.IOException("нет ответа"))
+        val stubs = if (b.keys.size <= 1) notices.map { "сервис подписки сообщает: «$it»" } else emptyList()
+        return b.keys to (b.problems + stubs)
+    }
+
     /** Добавляет серверы из текста; подписки скачиваются сразу (вызывать не в UI-потоке).
      *  Возвращает (новые серверы, предупреждения). */
     fun add(text: String): Pair<List<Profile>, List<String>> {
@@ -165,7 +204,7 @@ object Store {
         val subs = subscriptions.toMutableList()
         for (url in parsed.subscriptions) {
             try {
-                val (keys, extra) = Keys.parseVlessList(Net.getAny(url))
+                val (keys, extra) = fetchSubscription(url)
                 if (keys.isEmpty()) problems.add("в подписке нет ключей VLESS")
                 found.addAll(keys.map { Keys.vlessProfile(it, url) })
                 problems.addAll(extra)
@@ -192,12 +231,12 @@ object Store {
         var total = 0
         for (url in subscriptions) {
             try {
-                val (keys, extra) = Keys.parseVlessList(Net.getAny(url))
+                val (keys, extra) = fetchSubscription(url)
+                problems.addAll(extra)
                 if (keys.isEmpty()) {  // пустой ответ (сбой сервиса) — старые серверы не трогаем
                     problems.add("$url: в ответе нет ключей VLESS, оставлены прежние серверы")
                     continue
                 }
-                problems.addAll(extra)
                 val names = list.filter { it.sub == url }.associate { it.id to it.name }
                 val fresh = keys.map { Keys.vlessProfile(it, url) }.map { p -> names[p.id]?.let { p.copy(name = it) } ?: p }
                 list = list.filter { it.sub != url } + fresh
