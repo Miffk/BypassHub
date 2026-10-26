@@ -1,9 +1,8 @@
 """Проверка плавности окна на Windows (запускается в GitHub Actions, workflow ui-check).
 
-Открывает окно BypassHub с тестовыми данными (без сети и без изменений в системе), листает каждую
-страницу, переключает вкладки, печатает время одного шага прокрутки и сохраняет снимки окна.
-Вариант (аргумент): base — как есть; flat — без градиентного фона; bandN — полосы фона по N px.
-Окно со стилем WS_EX_COMPOSITED (как в 1.6.8) на Windows зависает намертво — так его и не проверить.
+Открывает окно BypassHub (Qt) с тестовыми данными (без сети и без изменений в системе), листает
+страницы, переключает вкладки, печатает время одного шага прокрутки и сохраняет снимки окна.
+Аргументы: вариант (метка в выводе) и папка для снимков.
 """
 from __future__ import annotations
 
@@ -25,9 +24,12 @@ paths = Paths(Path(tempfile.mkdtemp()) / "data")
 paths.ensure()
 setup_logging(paths.log_file)
 
+from PySide6.QtCore import Qt, QTimer  # noqa: E402
+from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
+
 from bypasshub.core import Core  # noqa: E402
-from bypasshub.gui import app as appmod  # noqa: E402
-from bypasshub.gui import surface  # noqa: E402
+from bypasshub.qtui import app as appmod  # noqa: E402
+from bypasshub.qtui import style as S  # noqa: E402
 
 core = Core(paths)
 core.settings.set("vpn", "profiles", [
@@ -39,40 +41,41 @@ appmod.App._startup = lambda self: None          # без загрузок и в
 appmod.App._status_loop = lambda self: None
 appmod.App._init_tray = lambda self: None
 
-if VARIANT == "flat":
-    def flat(self, width, height):
-        for item in self._bands:
-            self.delete(item)
-        self._bands = []
-        self.configure(bg=self.color_at(0))
-    surface._GradientMixin._draw_background = flat
-elif VARIANT.startswith("band"):
-    surface.BAND_PX = int(VARIANT[4:])
-
+QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+qa = QApplication([])
+qa.setFont(S.base_font())
 a = appmod.App(core)
-a.geometry("1040x720+0+0")
+a.setGeometry(0, 30, 1040, 720)
+a.show()
+
+
+def update() -> None:
+    a.repaint()
+    qa.processEvents()
+
 
 def grab():
-    from PIL import ImageGrab
-    x, y, w, h = a.winfo_rootx(), a.winfo_rooty(), a.winfo_width(), a.winfo_height()
-    return ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True).convert("RGB")
+    """Снимок того, что реально на экране (а не перерисовка виджета заново)."""
+    from PIL import Image
+    img = a.screen().grabWindow(0, a.x(), a.y(), a.frameGeometry().width(), a.frameGeometry().height()).toImage()
+    img = img.convertToFormat(img.Format.Format_RGB888)
+    return Image.frombytes("RGB", (img.width(), img.height()), bytes(img.constBits()), "raw", "RGB",
+                           img.bytesPerLine())
 
 
 def stale_check(name: str) -> None:
     """Нет ли на экране остатков прежней вкладки: снимок сразу после показа против снимка после
-    полной перерисовки окна. У 1.6.8 (WS_EX_COMPOSITED) старая страница оставалась поверх новой."""
+    полной перерисовки окна."""
     from PIL import ImageChops
-    a.update()
+    update()
     time.sleep(0.15)
+    qa.processEvents()
     before = grab()
-    if sys.platform == "win32":
-        import ctypes
-        user32 = ctypes.windll.user32
-        user32.GetParent.restype = ctypes.c_void_p
-        hwnd = user32.GetParent(a.winfo_id())
-        user32.RedrawWindow(ctypes.c_void_p(hwnd), None, None, 0x0001 | 0x0004 | 0x0080 | 0x0100)
-    a.update()
+    for w in a.findChildren(QWidget):
+        w.update()
+    update()
     time.sleep(0.15)
+    qa.processEvents()
     after = grab()
     diff = ImageChops.difference(before, after).convert("L").point(lambda v: 255 if v > 24 else 0)
     changed = sum(1 for v in diff.getdata() if v) / (diff.width * diff.height) * 100
@@ -80,29 +83,24 @@ def stale_check(name: str) -> None:
 
 
 def shot(name: str) -> None:
-    from PIL import ImageGrab
-    a.update()
-    x, y, w, h = a.winfo_rootx(), a.winfo_rooty(), a.winfo_width(), a.winfo_height()
+    update()
     try:
-        img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
-        img.save(OUT / f"{VARIANT}-{name}.png")
+        grab().save(OUT / f"{VARIANT}-{name}.png")
     except Exception as exc:
         print("снимок не удался:", exc)
-        return
-
 
 
 def run() -> None:
-    a.lift()
-    a.attributes("-topmost", True)
-    a.update()
+    a.raise_()
+    a.activateWindow()
+    update()
     time.sleep(0.5)
     shot("home")
     for rnd in (1, 2):
         for name in ("zapret", "tg", "vpn", "settings", "home"):
             t0 = time.perf_counter()
             a.show_page(name)
-            a.update()
+            update()
             print(f"RESULT variant={VARIANT} round={rnd} switch={name} {(time.perf_counter() - t0) * 1000:.1f}ms",
                   flush=True)
             if rnd == 1:
@@ -110,52 +108,36 @@ def run() -> None:
                 stale_check(name)
     for name in ("zapret", "vpn", "settings"):
         a.show_page(name)
-        a.update()
+        update()
         page = a.pages[name][1]
-        page._view.yview_moveto(0)
-        a.update()
+        bar = page.verticalScrollBar()
+        bar.setValue(0)
+        update()
         times = []
         for d in [60] * 20 + [-60] * 20:
             t0 = time.perf_counter()
-            page._view.yview_scroll(d, "units")
-            a.update()
+            bar.setValue(bar.value() + d)
+            update()
             times.append((time.perf_counter() - t0) * 1000)
             if len(times) == 10:
                 shot(f"{name}-scrolling")
         times.sort()
         print(f"RESULT variant={VARIANT} page={name} scroll_median={times[len(times) // 2]:.1f}ms "
-              f"scroll_p90={times[int(len(times) * 0.9)]:.1f}ms widgets={_count(page)}", flush=True)
-    if VARIANT == "base":
-        import cProfile
-        import pstats
-        a.show_page("home")
-        a.update()
-        prof = cProfile.Profile()
-        prof.enable()
-        for _ in range(3):
-            a.show_page("vpn")
-            a.update()
-            a.show_page("home")
-            a.update()
-        prof.disable()
-        pstats.Stats(prof).sort_stats("tottime").print_stats(18)
-        pstats.Stats(prof).sort_stats("cumulative").print_stats(25)
+              f"scroll_p90={times[int(len(times) * 0.9)]:.1f}ms widgets={len(page.findChildren(object))}",
+              flush=True)
+    for mode in ("light", "dark"):
+        core.settings.data["appearance"]["mode"] = mode
+        t0 = time.perf_counter()
+        a.apply_appearance()
+        update()
+        print(f"RESULT variant={VARIANT} theme={mode} {(time.perf_counter() - t0) * 1000:.1f}ms", flush=True)
+        a.show_page("vpn")
+        shot(f"vpn-{mode}")
+        stale_check(f"vpn-{mode}")
     a.show_page("home")
     shot("home-again")
-    a.destroy()
+    a.quit_app()
 
 
-def _count(w) -> int:
-    return 1 + sum(_count(c) for c in w.winfo_children())
-
-
-def wait_prewarm() -> None:
-    # вкладки готовятся в фоне после запуска — меряем, как у пользователя через пару секунд
-    if getattr(a, "prewarmed", True):
-        a.after(300, run)
-    else:
-        a.after(100, wait_prewarm)
-
-
-a.after(800, wait_prewarm)
-a.mainloop()
+QTimer.singleShot(800, run)
+qa.exec()

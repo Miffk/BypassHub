@@ -5,7 +5,7 @@ cd /d "%~dp0"
 python -m pip install -r requirements.txt pyinstaller || exit /b 1
 python -m PyInstaller --noconfirm --onefile --windowed --uac-admin ^
   --name BypassHub --icon assets\icon.ico ^
-  --add-data "assets;assets" --collect-data customtkinter ^
+  --add-data "assets;assets" --collect-data customtkinter --collect-data certifi ^
   --hidden-import pystray._win32 ^
   main.py || exit /b 1
 echo.

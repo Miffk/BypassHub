@@ -121,6 +121,34 @@ def combo_from_tk(state: int, keysym: str, keycode: int) -> Optional[str]:
     return normalize("+".join(mods + [key])) or None
 
 
+# Qt: код клавиши (Qt.Key) → наше имя клавиши; клавиши-модификаторы сами по себе сочетанием не считаются
+_QT_KEYS = {0x20: "Space", 0x01000010: "Home", 0x01000011: "End", 0x01000006: "Insert", 0x01000007: "Delete",
+            0x01000016: "PageUp", 0x01000017: "PageDown", 0x01000008: "Pause", 0x01000013: "Up",
+            0x01000015: "Down", 0x01000012: "Left", 0x01000014: "Right"}
+_QT_MODIFIER_KEYS = {0x01000020, 0x01000021, 0x01000022, 0x01000023, 0x01001103}
+
+
+def combo_from_qt(ctrl: bool, alt: bool, shift: bool, qt_key: int, native_vk: int = 0) -> Optional[str]:
+    """Сочетание из нажатия в окне Qt. Буквы и цифры — по виртуальному коду клавиши Windows,
+    чтобы русская раскладка давала те же сочетания, что и английская."""
+    if qt_key in _QT_MODIFIER_KEYS:
+        return None
+    mods = [name for name, on in (("Ctrl", ctrl), ("Alt", alt), ("Shift", shift)) if on]
+    if 0x41 <= native_vk <= 0x5A or 0x30 <= native_vk <= 0x39:
+        key = chr(native_vk)
+    elif 0x70 <= native_vk <= 0x87:
+        key = f"F{native_vk - 0x6F}"
+    elif 0x41 <= qt_key <= 0x5A or 0x30 <= qt_key <= 0x39:
+        key = chr(qt_key)
+    elif 0x01000030 <= qt_key <= 0x01000047:
+        key = f"F{qt_key - 0x01000030 + 1}"
+    else:
+        key = _QT_KEYS.get(qt_key)
+    if not key:
+        return None
+    return normalize("+".join(mods + [key])) or None
+
+
 class HotkeyManager:
     """Регистрирует сочетания в отдельном потоке со своим циклом сообщений."""
 
