@@ -26,9 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
-from urllib.request import urlopen
 
-from . import github, netfetch, tls, winutil
+from . import github, netfetch, winutil
 from .log import log
 
 REPO = "SagerNet/sing-box"
@@ -93,10 +92,23 @@ class VlessKey:
     path: str = ""
     host: str = ""
     service_name: str = ""
+    # Hysteria2 (protocol = "hysteria2"): пароль — в uuid; маскировка salamander, смена портов, скорость
+    protocol: str = "vless"
+    obfs_password: str = ""
+    server_ports: str = ""         # диапазон портов для «прыжков», например 20000-50000
+    hop_interval: int = 0          # с
+    up_mbps: int = 0
+    down_mbps: int = 0
+
+    @property
+    def label(self) -> str:
+        return "Hysteria2" if self.protocol == "hysteria2" else "VLESS"
 
     @property
     def summary(self) -> str:
         """Коротко для списка: «nl.example.com:443 · Reality · TCP»."""
+        if self.protocol == "hysteria2":
+            return f"{self.server}:{self.port} · Hysteria2" + (" · salamander" if self.obfs_password else "")
         sec = {"reality": "Reality", "tls": "TLS", "none": "без шифрования TLS"}.get(self.security, self.security)
         tr = {"tcp": "TCP", "ws": "WebSocket", "grpc": "gRPC", "http": "HTTP/2",
               "httpupgrade": "HTTPUpgrade"}.get(self.transport, self.transport)
@@ -111,9 +123,62 @@ def _is_ip(text: str) -> bool:
         return False
 
 
-def parse_vless(uri: str) -> VlessKey:
-    """Разбор ключа vless://uuid@host:port?параметры#имя (формат Xray / v2rayN)."""
+HYSTERIA2_SCHEMES = ("hysteria2://", "hy2://")
+KEY_SCHEMES = ("vless://",) + HYSTERIA2_SCHEMES
+
+
+def _int(text: str) -> int:
+    m = re.match(r"\s*(\d+)", str(text or ""))
+    return int(m.group(1)) if m else 0
+
+
+def parse_hysteria2(uri: str) -> VlessKey:
+    """Разбор ключа hysteria2://пароль@host:port/?sni=…&obfs=salamander&obfs-password=…#имя
+    (формат Hysteria 2; порт может быть списком «443,20000-50000», mport — диапазон для прыжков)."""
     uri = uri.strip()
+    body, _, fragment = uri.partition("#")
+    rest = body.split("://", 1)[1]
+    netloc, _, tail = rest.partition("/")
+    if "?" in netloc:
+        netloc, _, query = netloc.partition("?")
+    else:
+        query = tail.partition("?")[2]
+    auth, at, hostport = netloc.rpartition("@")
+    if not at or not auth:
+        raise ValueError("В ключе Hysteria2 нет пароля")
+    if hostport.startswith("["):
+        server, _, ports = hostport[1:].partition("]")
+        ports = ports.lstrip(":")
+    else:
+        server, _, ports = hostport.partition(":")
+    q = {k: v.strip() for k, v in parse_qsl(query, keep_blank_values=True)}
+    ports = ports or "443"
+    first = re.split(r"[,-]", ports)[0]
+    port = _int(first)
+    hop = q.get("mport", "")
+    if not hop and ("," in ports or "-" in ports):
+        hop = ports.split(",", 1)[1] if "," in ports else ports
+    if not server or not 0 < port <= 65535:
+        raise ValueError("В ключе Hysteria2 нет адреса сервера или порта")
+    obfs = q.get("obfs", "")
+    if obfs and obfs.lower() != "salamander":
+        raise ValueError(f"Маскировка Hysteria2 «{obfs}» не поддерживается")
+    name = unquote(fragment).strip() or f"{server}:{port}"
+    return VlessKey(uri=uri, name=name, server=server, port=port, uuid=unquote(auth), security="tls",
+                    transport="", sni=q.get("sni") or q.get("peer") or "",
+                    alpn=[a.strip() for a in q.get("alpn", "").split(",") if a.strip()],
+                    insecure=q.get("insecure", q.get("allowInsecure", "")).lower() in ("1", "true"),
+                    protocol="hysteria2", obfs_password=q.get("obfs-password", "") if obfs else "",
+                    server_ports=hop.replace(":", "-"), hop_interval=_int(q.get("hopinterval", "")),
+                    up_mbps=_int(q.get("upmbps", "")), down_mbps=_int(q.get("downmbps", "")))
+
+
+def parse_vless(uri: str) -> VlessKey:
+    """Разбор ключа сервера для sing-box: vless://uuid@host:port?параметры#имя (формат Xray / v2rayN)
+    или hysteria2://… (см. parse_hysteria2)."""
+    uri = uri.strip()
+    if uri.lower().startswith(HYSTERIA2_SCHEMES):
+        return parse_hysteria2(uri)
     if not uri.lower().startswith("vless://"):
         raise ValueError("Это не ключ VLESS — он должен начинаться с vless://")
     try:
@@ -181,7 +246,80 @@ def _decode_base64(text: str) -> Optional[str]:
     return None
 
 
+_BROKEN_VLESS = "vless?"  # сервер VLESS, который не удалось разобрать
+_BROKEN_HYSTERIA = "hysteria?"
 _PROXY_PROTOCOLS = {"vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic", "wireguard", "socks", "http"}
+
+
+def _walk(obj: Any):
+    """Все словари внутри JSON (для полей, место которых в разных версиях Xray разное)."""
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk(v)
+
+
+def _skeleton(obj: Any, depth: int = 0) -> Any:
+    """Устройство JSON без значений — для журнала, когда сервер не удалось разобрать."""
+    if depth > 4:
+        return "…"
+    if isinstance(obj, dict):
+        return {k: _skeleton(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_skeleton(obj[0], depth + 1)] if obj else []
+    return type(obj).__name__
+
+
+def _xray_hysteria_link(ob: Dict[str, Any], name: str) -> Optional[str]:
+    """Исходящее Hysteria (Xray 26+: protocol hysteria, version 2) → ключ hysteria2://."""
+    settings = ob.get("settings") or {}
+    ss = ob.get("streamSettings") or {}
+    hs = ss.get("hysteriaSettings") or {}
+    srv = settings
+    for key in ("servers", "vnext"):
+        if isinstance(settings.get(key), list) and settings[key]:
+            srv = settings[key][0]
+    version = _int(hs.get("version") or settings.get("version") or 2)
+    if version != 2:
+        return None  # Hysteria 1 у Xray нет; sing-box её умеет, но такие подписки не встречались
+    host, port = str(srv.get("address") or ""), _int(srv.get("port"))
+    auth = str(hs.get("auth") or hs.get("password") or srv.get("password") or settings.get("password") or "")
+    if not auth:
+        users = srv.get("users") or []
+        auth = str((users[0] or {}).get("password") or "") if users and isinstance(users[0], dict) else ""
+    if not host or not port or not auth:
+        return None
+    tls = ss.get("tlsSettings") or {}
+    q: Dict[str, str] = {"sni": str(tls.get("serverName") or "")}
+    if tls.get("allowInsecure"):
+        q["insecure"] = "1"
+    if tls.get("alpn"):
+        q["alpn"] = ",".join(str(a) for a in tls["alpn"])
+    for d in _walk(ss):  # маскировка salamander: в finalmask/udpmasks или прямо в настройках
+        kind = str(d.get("type") or d.get("name") or "").lower()
+        if kind == "salamander":
+            pw = d.get("password") or (d.get("settings") or {}).get("password")
+            if pw:
+                q.update({"obfs": "salamander", "obfs-password": str(pw)})
+                break
+    else:
+        obfs = hs.get("obfs")
+        if isinstance(obfs, str) and obfs:
+            q.update({"obfs": "salamander", "obfs-password": obfs})
+    hop = hs.get("udphop") or hs.get("hop") or {}
+    if isinstance(hop, dict) and hop.get("port"):
+        q["mport"] = str(hop["port"]).replace(":", "-")
+        if hop.get("interval"):
+            q["hopinterval"] = str(_int(hop["interval"]))
+    for k in ("up", "down"):
+        if _int(hs.get(k)):
+            q[f"{k}mbps"] = str(_int(hs.get(k)))
+    query = urlencode({k: v for k, v in q.items() if v})
+    hostpart = f"[{host}]" if ":" in host else host
+    return f"hysteria2://{quote(auth, safe='')}@{hostpart}:{port}/?{query}#{quote(name or host)}"
 
 
 def _xray_json_links(text: str, skipped: Optional[List[str]] = None) -> Optional[List[str]]:
@@ -205,13 +343,27 @@ def _xray_json_links(text: str, skipped: Optional[List[str]] = None) -> Optional
         others = [str(ob.get("protocol")) for ob in cfg.get("outbounds") or []
                   if isinstance(ob, dict) and ob.get("protocol") in _PROXY_PROTOCOLS]
         for ob in cfg.get("outbounds") or []:
+            if isinstance(ob, dict) and ob.get("protocol") in ("hysteria", "hysteria2"):
+                link = _xray_hysteria_link(ob, name)
+                if link:
+                    links.append(link)
+                    break
+                log.info("Подписка: сервер Hysteria «%s» не разобран, устройство: %s",
+                         name, json.dumps(_skeleton(ob), ensure_ascii=False))
+                others.insert(0, _BROKEN_HYSTERIA)
+                continue
             if not isinstance(ob, dict) or ob.get("protocol") != "vless":
                 continue
+            settings = ob.get("settings") or {}
             try:
-                vnext = ob["settings"]["vnext"][0]
-                user = vnext["users"][0]
+                if settings.get("vnext"):
+                    vnext = settings["vnext"][0]
+                    user = vnext["users"][0]
+                else:  # упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+                    vnext = user = settings
                 host, port, uid = str(vnext["address"]), int(vnext["port"]), str(user["id"])
-            except (KeyError, IndexError, TypeError, ValueError):
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                others.insert(0, _BROKEN_VLESS)
                 continue
             ss = ob.get("streamSettings") or {}
             net = ss.get("network") or "tcp"
@@ -267,7 +419,7 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
         line = line.strip()
         if not line or "://" not in line:
             continue
-        if not line.lower().startswith("vless://"):
+        if not line.lower().startswith(KEY_SCHEMES):
             other += 1
             continue
         try:
@@ -275,10 +427,15 @@ def parse_keys(text: str) -> Tuple[List[VlessKey], List[str]]:
         except ValueError as exc:
             name = unquote(line.rsplit("#", 1)[1]) if "#" in line else line[:40] + "…"
             problems.append(f"{name}: {exc}")
+    for marker, label in ((_BROKEN_VLESS, "VLESS"), (_BROKEN_HYSTERIA, "Hysteria")):
+        broken = json_skipped.count(marker)
+        json_skipped = [x for x in json_skipped if x != marker]
+        if broken:
+            problems.append(f"не удалось разобрать серверов {label} в формате Xray JSON: {broken}")
     other += len(json_skipped)
     if other:
         kinds = f" ({', '.join(sorted(set(json_skipped)))})" if json_skipped else ""
-        problems.append(f"пропущено ключей других типов (не VLESS){kinds}: {other}")
+        problems.append(f"пропущено ключей других типов (не VLESS и не Hysteria2){kinds}: {other}")
     return keys, problems
 
 
@@ -319,6 +476,41 @@ def device_headers(hwid: str) -> Dict[str, str]:
             "x-device-model": "PC"}
 
 
+def describe_subscription(text: str) -> str:
+    """Что пришло в ответе подписки — для журнала: формат и сколько чего, без ключей и адресов."""
+    from collections import Counter
+    t = text.strip()
+    if t.startswith(("[", "{")):
+        try:
+            data = json.loads(t)
+        except ValueError:
+            return f"похоже на JSON, но не разбирается ({len(t)} байт)"
+        if isinstance(data, dict) and isinstance(data.get("outbounds"), list) and any(
+                isinstance(o, dict) and "type" in o for o in data["outbounds"]):
+            kinds = Counter(str(o.get("type")) for o in data["outbounds"] if isinstance(o, dict))
+            return "sing-box JSON, исходящие: " + ", ".join(f"{k}×{n}" for k, n in kinds.most_common())
+        configs = data if isinstance(data, list) else [data]
+        kinds = Counter()
+        for cfg in configs:
+            for o in (cfg.get("outbounds") or []) if isinstance(cfg, dict) else []:
+                if isinstance(o, dict):
+                    kinds[str(o.get("protocol"))] += 1
+        return (f"Xray JSON, конфигов {len(configs)}, исходящие: " +
+                ", ".join(f"{k}×{n}" for k, n in kinds.most_common()))
+    if t.lower().startswith(("<!doctype", "<html")):
+        return f"HTML-страница ({len(t)} байт)"
+    if re.search(r"^\s*proxies\s*:", t, re.M):
+        return f"Clash/Mihomo YAML ({len(t)} байт)"
+    fmt = "ссылки"
+    if "://" not in t:
+        decoded = _decode_base64(t)
+        if decoded is None:
+            return f"неизвестный формат ({len(t)} байт)"
+        t, fmt = decoded, "base64"
+    schemes = Counter(line.split("://", 1)[0].strip().lower() for line in t.splitlines() if "://" in line)
+    return f"{fmt}, схемы: " + (", ".join(f"{k}×{n}" for k, n in schemes.most_common()) or "нет")
+
+
 def fetch_subscription_info(url: str, timeout: float = 20,
                             hwid: str = "") -> Tuple[List[VlessKey], List[str], float]:
     """Ключи подписки, предупреждения и через сколько часов её обновить."""
@@ -339,12 +531,13 @@ def fetch_subscription_info(url: str, timeout: float = 20,
             if best is None:
                 raise  # сервис недоступен вовсе — другие попытки тоже не помогут
             break
-        found, problems = parse_keys(resp.body.decode("utf-8", errors="replace"))
+        body = resp.body.decode("utf-8", errors="replace")
+        found, problems = parse_keys(body)
         keys = [k for k in found if not is_placeholder(k)]
         stubs = [k.name for k in found if is_placeholder(k)]
         notices += [n for n in stubs if n not in notices]
-        log.info("Подписка %s от имени %s: серверов %d%s", host, ua, len(keys),
-                 f", сообщения сервиса: {stubs}" if stubs else "")
+        log.info("Подписка %s от имени %s: серверов %d%s; ответ: %s", host, ua, len(keys),
+                 f", сообщения сервиса: {stubs}" if stubs else "", describe_subscription(body))
         hours = update_interval(resp.headers.get("profile-update-interval"))
         if best is None or len(keys) > len(best[0]):
             best = (keys, problems, hours)
@@ -364,7 +557,7 @@ def fetch_subscription(url: str, timeout: float = 20, hwid: str = "") -> Tuple[L
 
 @dataclass
 class Profile:
-    """Сервер в списке VPN. kind: vless — data хранит ключ vless://…; awg — текст .conf."""
+    """Сервер в списке VPN. kind: vless — сервер для sing-box, data хранит ключ vless://… или hysteria2://…; awg — текст .conf."""
     id: str
     kind: str
     name: str
@@ -445,14 +638,41 @@ def parse_input(text: str) -> ParsedInput:
         out.profiles += [vless_profile(k) for k in keys]
         out.problems += problems
         if not keys and not problems and not out.profiles and not out.subscriptions:
-            out.problems.append("Не нашёл ключей. Подходят vless://…, vpn://… (AmneziaVPN), "
+            out.problems.append("Не нашёл ключей. Подходят vless://…, hysteria2://…, vpn://… (AmneziaVPN), "
                                 "конфиг AmneziaWG (.conf) или ссылка на подписку.")
     return out
 
 
 # ====================================================================== конфиг sing-box
 
+def hysteria2_outbound(key: VlessKey, tag: str) -> Dict[str, Any]:
+    tls: Dict[str, Any] = {"enabled": True}
+    server_name = key.sni or ("" if _is_ip(key.server) else key.server)
+    if server_name:
+        tls["server_name"] = server_name
+    if key.alpn:
+        tls["alpn"] = key.alpn
+    if key.insecure:
+        tls["insecure"] = True
+    ob: Dict[str, Any] = {"type": "hysteria2", "tag": tag, "server": key.server, "server_port": key.port,
+                          "password": key.uuid, "tls": tls}
+    if key.obfs_password:
+        ob["obfs"] = {"type": "salamander", "password": key.obfs_password}
+    ports = [p.strip().replace("-", ":") for p in key.server_ports.split(",") if p.strip()]
+    if ports:
+        ob["server_ports"] = [p if ":" in p else f"{p}:{p}" for p in ports]
+        if key.hop_interval:
+            ob["hop_interval"] = f"{key.hop_interval}s"
+    if key.up_mbps:
+        ob["up_mbps"] = key.up_mbps
+    if key.down_mbps:
+        ob["down_mbps"] = key.down_mbps
+    return ob
+
+
 def outbound(key: VlessKey, tag: str = "proxy") -> Dict[str, Any]:
+    if key.protocol == "hysteria2":
+        return hysteria2_outbound(key, tag)
     ob: Dict[str, Any] = {"type": "vless", "tag": tag, "server": key.server, "server_port": key.port,
                           "uuid": key.uuid, "packet_encoding": "xudp"}
     if key.flow:
@@ -680,9 +900,8 @@ def pick_release(data: List[Dict[str, Any]]) -> Optional[github.Release]:
 
 def latest_release() -> github.Release:
     try:
-        req = github._request(f"https://api.github.com/repos/{REPO}/releases?per_page=40",
-                              "application/vnd.github+json")
-        with urlopen(req, timeout=15, context=tls.context()) as resp:
+        with github._open(f"https://api.github.com/repos/{REPO}/releases?per_page=40", 15,
+                          "application/vnd.github+json") as resp:
             rel = pick_release(json.loads(resp.read().decode("utf-8")))
         if rel is not None:
             return rel

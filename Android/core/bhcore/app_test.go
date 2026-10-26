@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,103 @@ func TestOutboundsAndConfigs(t *testing.T) {
 	conf, ip, err := resolveAWGEndpoint(testConf)
 	if err != nil || ip != "192.0.2.10" || !strings.Contains(conf, "Endpoint = 192.0.2.10:51820\n") {
 		t.Fatalf("endpoint: %v %q", err, conf)
+	}
+}
+
+func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
+	cfg := `[
+	 {"remarks": "🇩🇪 Germany", "outbounds": [
+	  {"protocol": "vless", "settings": {"vnext": [{"address": "de.example.com", "port": 443,
+	    "users": [{"id": "11111111-2222-3333-4444-555555555555", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+	   "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
+	    "serverName": "www.microsoft.com", "publicKey": "Zk3T2lWJ2a6o8QIhZ8m7rQ6dR4y7vE1Lr4m2aGxXqFk", "shortId": "ab12", "fingerprint": "chrome"}}},
+	  {"protocol": "freedom", "tag": "direct"}]},
+	 {"remarks": "NL WS", "outbounds": [
+	  {"protocol": "vless", "settings": {"vnext": [{"address": "1.2.3.4", "port": 8443,
+	    "users": [{"id": "11111111-2222-3333-4444-555555555555"}]}]},
+	   "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "cdn.example.com"},
+	    "wsSettings": {"path": "/ws", "headers": {"Host": "cdn.example.com"}}}}]},
+	 {"remarks": "trojan", "outbounds": [{"protocol": "trojan", "settings": {}}]},
+	 {"remarks": "FI new", "outbounds": [{"protocol": "vless", "settings": {"address": "fi.example.com", "port": 443,
+	    "id": "11111111-2222-3333-4444-555555555555", "encryption": "none"},
+	   "streamSettings": {"network": "grpc", "security": "tls", "grpcSettings": {"serviceName": "g"}}}]}
+	]`
+	var s struct {
+		Profiles []Profile
+		Problems []string
+		Notices  []string
+	}
+	_ = json.Unmarshal([]byte(ParseSubscription(cfg, "https://sub")), &s)
+	if len(s.Profiles) != 3 || s.Profiles[0].Name != "🇩🇪 Germany" || s.Profiles[1].Name != "NL WS" ||
+		s.Profiles[2].Name != "FI new" {
+		t.Fatalf("xray json: %+v", s)
+	}
+	if len(s.Problems) != 1 || s.Problems[0] != "пропущено ключей других типов (не VLESS и не Hysteria2) (trojan): 1" {
+		t.Fatalf("problems: %v", s.Problems)
+	}
+	de, err := parseVless(s.Profiles[0].Data)
+	if err != nil || de.Security != "reality" || de.PublicKey == "" || de.Flow != "xtls-rprx-vision" {
+		t.Fatalf("reality: %+v %v", de, err)
+	}
+	ws, err := parseVless(s.Profiles[1].Data)
+	if err != nil || ws.Transport != "ws" || ws.Path != "/ws" || ws.Host != "cdn.example.com" {
+		t.Fatalf("ws: %+v %v", ws, err)
+	}
+	// заглушка сервиса: «сервер» на 0.0.0.0 с сообщением в названии
+	stub := "vless://11111111-2222-3333-4444-555555555555@0.0.0.0:1?type=tcp&security=none#" +
+		url.PathEscape("Лимит устройств")
+	s.Notices = nil
+	_ = json.Unmarshal([]byte(ParseSubscription(stub, "https://sub")), &s)
+	if len(s.Profiles) != 0 || len(s.Notices) != 1 || s.Notices[0] != "Лимит устройств" {
+		t.Fatalf("stub: %+v", s)
+	}
+}
+
+const keyHY2 = "hysteria2://p%40ss@de.example.com:443/?sni=de.example.com&obfs=salamander&obfs-password=salt&mport=20000-50000#DE%20Hysteria"
+
+func TestHysteria2(t *testing.T) {
+	k, err := parseVless(keyHY2)
+	if err != nil || k.Protocol != "hysteria2" || k.UUID != "p@ss" || k.ObfsPassword != "salt" ||
+		k.ServerPorts != "20000-50000" || k.Name != "DE Hysteria" || k.Port != 443 {
+		t.Fatalf("hy2: %+v %v", k, err)
+	}
+	k2, err := parseVless("hy2://secret@1.2.3.4:443,5000-6000?insecure=1#x")
+	if err != nil || k2.Port != 443 || k2.ServerPorts != "5000-6000" || !k2.Insecure {
+		t.Fatalf("hy2 short: %+v %v", k2, err)
+	}
+	if VlessEndpoint(keyHY2) != "" {
+		t.Fatal("UDP-сервер не пингуется по TCP")
+	}
+	vr, _ := parseVless(keyReality)
+	servers := []map[string]any{vr.outbound("a"), k.outbound("b"), k2.outbound("c")}
+	cfg := buildVPNConfig(serverGroup(servers, autoTag), true, map[string]string{}, 9090, "s", nil, nil)
+	if err := CheckConfig(cfg); err != nil {
+		t.Fatalf("VPN с Hysteria2: %v\n%s", err, cfg)
+	}
+	if !strings.Contains(cfg, `"type":"hysteria2"`) || !strings.Contains(cfg, `"20000:50000"`) {
+		t.Fatalf("нет hysteria2 в конфиге: %s", cfg)
+	}
+	// Hysteria в Xray JSON (как его отдаёт Remnawave для Happ)
+	sub := `[{"remarks": "DE Hysteria", "outbounds": [
+	  {"protocol": "hysteria", "settings": {"version": 2, "address": "de.example.com", "port": 443},
+	   "streamSettings": {"network": "hysteria", "security": "tls",
+	    "tlsSettings": {"serverName": "de.example.com", "alpn": ["h3"]},
+	    "hysteriaSettings": {"version": 2, "auth": "pw", "udphop": {"port": "20000-30000", "interval": 30}},
+	    "finalmask": {"udp": [{"type": "salamander", "settings": {"password": "salt"}}]}}},
+	  {"protocol": "freedom"}]},
+	 {"remarks": "broken", "outbounds": [{"protocol": "hysteria", "settings": {"version": 2}}]}]`
+	var s struct {
+		Profiles []Profile
+		Problems []string
+	}
+	_ = json.Unmarshal([]byte(ParseSubscription(sub, "https://sub")), &s)
+	if len(s.Profiles) != 1 || len(s.Problems) != 1 ||
+		s.Problems[0] != "не удалось разобрать серверов Hysteria в формате Xray JSON: 1" {
+		t.Fatalf("xray hysteria: %+v", s)
+	}
+	h, err := parseVless(s.Profiles[0].Data)
+	if err != nil || h.UUID != "pw" || h.ObfsPassword != "salt" || h.ServerPorts != "20000-30000" ||
+		h.HopInterval != 30 || h.SNI != "de.example.com" || h.Name != "DE Hysteria" {
+		t.Fatalf("xray hysteria key: %+v %v", h, err)
 	}
 }

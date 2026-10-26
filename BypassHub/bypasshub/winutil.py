@@ -249,10 +249,22 @@ def parse_service_state(sc_output: str) -> str:
     return m.group(1) if m else "UNKNOWN"
 
 
+def parse_service_pid(sc_output: str) -> int:
+    """PID процесса службы из вывода `sc queryex` (0 — не запущена)."""
+    m = re.search(r"\bPID\s*:\s*(\d+)", sc_output)
+    return int(m.group(1)) if m else 0
+
+
 def service_stop_delete(name: str) -> None:
     if service_state(name) is None:
         return
     run_logged(["net", "stop", name], timeout=30)
+    if service_state(name) not in (None, "STOPPED"):
+        # служба зависла (например, в START_PENDING) и не останавливается — завершаем её процесс,
+        # иначе она может «дозапуститься» позже, уже без нас
+        pid = parse_service_pid(run(["sc", "queryex", name], encoding="cp437").stdout)
+        if pid:
+            run_logged(["taskkill", "/F", "/PID", str(pid)], timeout=15)
     run_logged(["sc", "delete", name])
 
 

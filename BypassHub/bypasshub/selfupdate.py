@@ -12,9 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
-from urllib.request import urlopen
 
-from . import __version__, github, tls, winutil
+from . import __version__, github, winutil
 from .log import log
 
 REPO = "Miffk/BypassHub"
@@ -28,9 +27,8 @@ def is_frozen() -> bool:
 
 def latest_release() -> github.Release:
     """Последний релиз именно BypassHub (в репозитории могут быть и другие)."""
-    req = github._request(f"https://api.github.com/repos/{REPO}/releases?per_page=30",
-                          "application/vnd.github+json")
-    with urlopen(req, timeout=15, context=tls.context()) as resp:
+    with github._open(f"https://api.github.com/repos/{REPO}/releases?per_page=30", 15,
+                      "application/vnd.github+json") as resp:
         data = json.loads(resp.read().decode("utf-8"))
     best: Optional[github.Release] = None
     for rel in data:

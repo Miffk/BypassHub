@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -41,6 +42,12 @@ type vlessKey struct {
 	ALPN                []string
 	Insecure            bool
 	Path, Host, Service string
+	// Hysteria2 (Protocol = "hysteria2"): пароль — в UUID; маскировка salamander, «прыжки» по портам, скорость
+	Protocol         string
+	ObfsPassword     string
+	ServerPorts      string // диапазон портов, например 20000-50000
+	HopInterval      int    // с
+	UpMbps, DownMbps int
 }
 
 var (
@@ -63,6 +70,13 @@ func urlDecode(s string) string {
 }
 
 func (k *vlessKey) summary() string {
+	if k.Protocol == "hysteria2" {
+		s := fmt.Sprintf("%s:%d · Hysteria2", k.Server, k.Port)
+		if k.ObfsPassword != "" {
+			s += " · salamander"
+		}
+		return s
+	}
 	sec := map[string]string{"reality": "Reality", "tls": "TLS", "none": "без TLS"}[k.Security]
 	if sec == "" {
 		sec = k.Security
@@ -75,8 +89,103 @@ func (k *vlessKey) summary() string {
 	return fmt.Sprintf("%s:%d · %s · %s", k.Server, k.Port, sec, tr)
 }
 
+var reLeadInt = regexp.MustCompile(`^\s*(\d+)`)
+
+func leadInt(s string) int {
+	if m := reLeadInt.FindStringSubmatch(s); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+// isKeyLine — ключ сервера для sing-box: vless:// или hysteria2:// (hy2://).
+func isKeyLine(line string) bool {
+	l := strings.ToLower(line)
+	return strings.HasPrefix(l, "vless://") || strings.HasPrefix(l, "hysteria2://") || strings.HasPrefix(l, "hy2://")
+}
+
+// parseHysteria2 — ключ hysteria2://пароль@host:port/?sni=…&obfs=salamander&obfs-password=…#имя
+// (порт может быть списком «443,20000-50000», mport — диапазон для «прыжков»).
+func parseHysteria2(raw string) (*vlessKey, error) {
+	body, fragment, _ := strings.Cut(raw, "#")
+	rest := body[strings.Index(body, "://")+3:]
+	netloc, tail, _ := strings.Cut(rest, "/")
+	query := ""
+	if i := strings.Index(netloc, "?"); i >= 0 {
+		netloc, query = netloc[:i], netloc[i+1:]
+	} else if _, q, ok := strings.Cut(tail, "?"); ok {
+		query = q
+	}
+	at := strings.LastIndex(netloc, "@")
+	if at <= 0 {
+		return nil, errors.New("В ключе Hysteria2 нет пароля")
+	}
+	auth, hostPort := netloc[:at], netloc[at+1:]
+	server, ports := hostPort, ""
+	if strings.HasPrefix(hostPort, "[") {
+		if end := strings.Index(hostPort, "]"); end > 0 {
+			server, ports = hostPort[1:end], strings.TrimPrefix(hostPort[end+1:], ":")
+		}
+	} else if i := strings.Index(hostPort, ":"); i >= 0 {
+		server, ports = hostPort[:i], hostPort[i+1:]
+	}
+	if ports == "" {
+		ports = "443"
+	}
+	q := map[string]string{}
+	for _, part := range strings.Split(query, "&") {
+		if part == "" {
+			continue
+		}
+		key, val, _ := strings.Cut(part, "=")
+		q[urlDecode(key)] = strings.TrimSpace(urlDecode(val))
+	}
+	port := leadInt(strings.FieldsFunc(ports, func(r rune) bool { return r == ',' || r == '-' })[0])
+	hop := q["mport"]
+	if hop == "" && strings.ContainsAny(ports, ",-") {
+		if _, after, ok := strings.Cut(ports, ","); ok {
+			hop = after
+		} else {
+			hop = ports
+		}
+	}
+	if server == "" || port <= 0 || port > 65535 {
+		return nil, errors.New("В ключе Hysteria2 нет адреса сервера или порта")
+	}
+	obfs := q["obfs"]
+	if obfs != "" && !strings.EqualFold(obfs, "salamander") {
+		return nil, fmt.Errorf("Маскировка Hysteria2 «%s» не поддерживается", obfs)
+	}
+	k := &vlessKey{URI: raw, Server: server, Port: port, UUID: urlDecode(auth), Security: "tls",
+		Protocol: "hysteria2", ServerPorts: strings.ReplaceAll(hop, ":", "-"), HopInterval: leadInt(q["hopinterval"]),
+		UpMbps: leadInt(q["upmbps"]), DownMbps: leadInt(q["downmbps"])}
+	k.SNI = q["sni"]
+	if k.SNI == "" {
+		k.SNI = q["peer"]
+	}
+	if obfs != "" {
+		k.ObfsPassword = q["obfs-password"]
+	}
+	for _, a := range strings.Split(q["alpn"], ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			k.ALPN = append(k.ALPN, a)
+		}
+	}
+	ins := strings.ToLower(q["insecure"])
+	k.Insecure = ins == "1" || ins == "true"
+	k.Name = strings.TrimSpace(urlDecode(fragment))
+	if k.Name == "" {
+		k.Name = fmt.Sprintf("%s:%d", k.Server, k.Port)
+	}
+	return k, nil
+}
+
 func parseVless(text string) (*vlessKey, error) {
 	raw := strings.TrimSpace(text)
+	if l := strings.ToLower(raw); strings.HasPrefix(l, "hysteria2://") || strings.HasPrefix(l, "hy2://") {
+		return parseHysteria2(raw)
+	}
 	if !strings.HasPrefix(strings.ToLower(raw), "vless://") {
 		return nil, errors.New("Это не ключ VLESS — он должен начинаться с vless://")
 	}
@@ -198,8 +307,55 @@ func parseVless(text string) (*vlessKey, error) {
 
 var reEarlyData = regexp.MustCompile(`[?&]ed=(\d+)`)
 
+func (k *vlessKey) hysteria2Outbound(tag string) map[string]any {
+	tls := map[string]any{"enabled": true}
+	name := k.SNI
+	if name == "" && !isIP(k.Server) {
+		name = k.Server
+	}
+	if name != "" {
+		tls["server_name"] = name
+	}
+	if len(k.ALPN) > 0 {
+		tls["alpn"] = k.ALPN
+	}
+	if k.Insecure {
+		tls["insecure"] = true
+	}
+	ob := map[string]any{"type": "hysteria2", "tag": tag, "server": k.Server, "server_port": k.Port,
+		"password": k.UUID, "tls": tls}
+	if k.ObfsPassword != "" {
+		ob["obfs"] = map[string]any{"type": "salamander", "password": k.ObfsPassword}
+	}
+	var ports []string
+	for _, p := range strings.Split(k.ServerPorts, ",") {
+		if p = strings.ReplaceAll(strings.TrimSpace(p), "-", ":"); p != "" {
+			if !strings.Contains(p, ":") {
+				p += ":" + p
+			}
+			ports = append(ports, p)
+		}
+	}
+	if len(ports) > 0 {
+		ob["server_ports"] = ports
+		if k.HopInterval > 0 {
+			ob["hop_interval"] = fmt.Sprintf("%ds", k.HopInterval)
+		}
+	}
+	if k.UpMbps > 0 {
+		ob["up_mbps"] = k.UpMbps
+	}
+	if k.DownMbps > 0 {
+		ob["down_mbps"] = k.DownMbps
+	}
+	return ob
+}
+
 // outbound — исходящее sing-box для этого сервера.
 func (k *vlessKey) outbound(tag string) map[string]any {
+	if k.Protocol == "hysteria2" {
+		return k.hysteria2Outbound(tag)
+	}
 	ob := map[string]any{"type": "vless", "tag": tag, "server": k.Server, "server_port": k.Port, "uuid": k.UUID,
 		"packet_encoding": "xudp"}
 	if k.Flow != "" {
@@ -518,23 +674,345 @@ func awgProfile(c *awgConf) Profile {
 	return Profile{ID: profileID("awg", c.Conf), Kind: "awg", Name: c.Name, Data: c.Conf, Summary: c.summary()}
 }
 
-// parseVlessList — ключи VLESS из текста или ответа подписки (просто ссылки или base64).
-func parseVlessList(text, sub string) ([]Profile, []string) {
+// Адреса, на которых сервис присылает не сервер, а сообщение в названии «ключа» (Remnawave так отвечает,
+// когда достигнут лимит устройств, программа не прислала код устройства, подписка истекла и т.п.)
+var placeholderHosts = map[string]bool{"0.0.0.0": true, "127.0.0.1": true, "::": true, "::1": true, "localhost": true}
+
+func isPlaceholder(k *vlessKey) bool {
+	return placeholderHosts[strings.ToLower(k.Server)] || k.Port <= 1
+}
+
+const (
+	brokenVless    = "vless?" // сервер VLESS, который не удалось разобрать
+	brokenHysteria = "hysteria?"
+)
+
+// walkMaps — все объекты внутри JSON (для полей, место которых в разных версиях Xray разное).
+func walkMaps(v any, fn func(map[string]any) bool) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		if fn(x) {
+			return true
+		}
+		for _, c := range x {
+			if walkMaps(c, fn) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range x {
+			if walkMaps(c, fn) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// xrayHysteriaLink — исходящее Hysteria (Xray 26+: protocol hysteria, version 2) → ключ hysteria2://.
+func xrayHysteriaLink(ob map[string]any, name string, str func(map[string]any, string) string,
+	obj func(map[string]any, string) map[string]any) string {
+	settings := obj(ob, "settings")
+	ss := obj(ob, "streamSettings")
+	hs := obj(ss, "hysteriaSettings")
+	srv := settings
+	for _, key := range []string{"servers", "vnext"} {
+		if list, _ := settings[key].([]any); len(list) > 0 {
+			if m, _ := list[0].(map[string]any); m != nil {
+				srv = m
+			}
+		}
+	}
+	version := leadInt(str(hs, "version"))
+	if version == 0 {
+		version = leadInt(str(settings, "version"))
+	}
+	if version != 0 && version != 2 {
+		return ""
+	}
+	host, port := str(srv, "address"), leadInt(str(srv, "port"))
+	auth := ""
+	for _, v := range []string{str(hs, "auth"), str(hs, "password"), str(srv, "password"), str(settings, "password")} {
+		if v != "" {
+			auth = v
+			break
+		}
+	}
+	if auth == "" {
+		if users, _ := srv["users"].([]any); len(users) > 0 {
+			if u, _ := users[0].(map[string]any); u != nil {
+				auth = str(u, "password")
+			}
+		}
+	}
+	if host == "" || port == 0 || auth == "" {
+		return ""
+	}
+	tls := obj(ss, "tlsSettings")
+	q := url.Values{}
+	if v := str(tls, "serverName"); v != "" {
+		q.Set("sni", v)
+	}
+	if b, _ := tls["allowInsecure"].(bool); b {
+		q.Set("insecure", "1")
+	}
+	if alpn, _ := tls["alpn"].([]any); len(alpn) > 0 {
+		parts := make([]string, 0, len(alpn))
+		for _, a := range alpn {
+			if s, ok := a.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		q.Set("alpn", strings.Join(parts, ","))
+	}
+	walkMaps(ss, func(m map[string]any) bool { // маскировка salamander: в finalmask/udpmasks или в настройках
+		kind := strings.ToLower(str(m, "type"))
+		if kind == "" {
+			kind = strings.ToLower(str(m, "name"))
+		}
+		if kind != "salamander" {
+			return false
+		}
+		pw := str(m, "password")
+		if pw == "" {
+			pw = str(obj(m, "settings"), "password")
+		}
+		if pw == "" {
+			return false
+		}
+		q.Set("obfs", "salamander")
+		q.Set("obfs-password", pw)
+		return true
+	})
+	if q.Get("obfs") == "" {
+		if pw := str(hs, "obfs"); pw != "" {
+			q.Set("obfs", "salamander")
+			q.Set("obfs-password", pw)
+		}
+	}
+	hop := obj(hs, "udphop")
+	if len(hop) == 0 {
+		hop = obj(hs, "hop")
+	}
+	if p := str(hop, "port"); p != "" {
+		q.Set("mport", strings.ReplaceAll(p, ":", "-"))
+		if n := leadInt(str(hop, "interval")); n > 0 {
+			q.Set("hopinterval", strconv.Itoa(n))
+		}
+	}
+	for _, k := range []string{"up", "down"} {
+		if n := leadInt(str(hs, k)); n > 0 {
+			q.Set(k+"mbps", strconv.Itoa(n))
+		}
+	}
+	hostPart := host
+	if strings.Contains(host, ":") {
+		hostPart = "[" + host + "]"
+	}
+	label := name
+	if label == "" {
+		label = host
+	}
+	return fmt.Sprintf("hysteria2://%s@%s:%d/?%s#%s", url.QueryEscape(auth), hostPart, port, q.Encode(),
+		url.PathEscape(label))
+}
+
+var proxyProtocols = map[string]bool{"vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true,
+	"hysteria2": true, "tuic": true, "wireguard": true, "socks": true, "http": true}
+
+// xrayJSONLinks — подписка в формате Xray JSON (так её отдают Happ и Streisand): из каждого конфига
+// берётся исходящее VLESS и пересобирается в ссылку vless://. ok=false — это не JSON. skipped —
+// протоколы конфигов без VLESS (их серверы пропущены).
+func xrayJSONLinks(text string) (links, skipped []string, ok bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "{") {
+		return nil, nil, false
+	}
+	var data any
+	if json.Unmarshal([]byte(t), &data) != nil {
+		return nil, nil, false
+	}
+	configs, isList := data.([]any)
+	if !isList {
+		configs = []any{data}
+	}
+	str := func(m map[string]any, key string) string {
+		if v, ok := m[key]; ok && v != nil {
+			switch x := v.(type) {
+			case string:
+				return x
+			case float64:
+				return strconv.FormatFloat(x, 'f', -1, 64)
+			case bool:
+				return strconv.FormatBool(x)
+			}
+		}
+		return ""
+	}
+	obj := func(m map[string]any, key string) map[string]any {
+		v, _ := m[key].(map[string]any)
+		if v == nil {
+			v = map[string]any{}
+		}
+		return v
+	}
+	for _, c := range configs {
+		cfg, _ := c.(map[string]any)
+		if cfg == nil {
+			continue
+		}
+		name := str(cfg, "remarks")
+		outbounds, _ := cfg["outbounds"].([]any)
+		found, other := false, ""
+		for _, o := range outbounds {
+			ob, _ := o.(map[string]any)
+			if ob == nil {
+				continue
+			}
+			proto := str(ob, "protocol")
+			if proto == "hysteria" || proto == "hysteria2" {
+				if link := xrayHysteriaLink(ob, name, str, obj); link != "" {
+					links = append(links, link)
+					found = true
+					break
+				}
+				other = brokenHysteria
+				continue
+			}
+			if proto != "vless" {
+				if other == "" && proxyProtocols[proto] {
+					other = proto
+				}
+				continue
+			}
+			settings := obj(ob, "settings")
+			srv, user := settings, settings // упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+			if vnext, _ := settings["vnext"].([]any); len(vnext) > 0 {
+				srv, _ = vnext[0].(map[string]any)
+				user = nil
+				if srv != nil {
+					if users, _ := srv["users"].([]any); len(users) > 0 {
+						user, _ = users[0].(map[string]any)
+					}
+				}
+			}
+			if srv == nil || user == nil {
+				other = brokenVless
+				continue
+			}
+			host, uid := str(srv, "address"), str(user, "id")
+			port, err := strconv.Atoi(str(srv, "port"))
+			if host == "" || uid == "" || err != nil {
+				other = brokenVless
+				continue
+			}
+			ss := obj(ob, "streamSettings")
+			netw, sec := str(ss, "network"), str(ss, "security")
+			if netw == "" {
+				netw = "tcp"
+			}
+			if sec == "" {
+				sec = "none"
+			}
+			enc := str(user, "encryption")
+			if enc == "" {
+				enc = "none"
+			}
+			q := url.Values{}
+			set := func(k, v string) {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			set("encryption", enc)
+			set("type", netw)
+			set("security", sec)
+			set("flow", str(user, "flow"))
+			switch sec {
+			case "reality":
+				r := obj(ss, "realitySettings")
+				set("sni", str(r, "serverName"))
+				set("pbk", str(r, "publicKey"))
+				set("sid", str(r, "shortId"))
+				set("fp", str(r, "fingerprint"))
+				set("spx", str(r, "spiderX"))
+			case "tls":
+				tl := obj(ss, "tlsSettings")
+				set("sni", str(tl, "serverName"))
+				set("fp", str(tl, "fingerprint"))
+				if alpn, _ := tl["alpn"].([]any); len(alpn) > 0 {
+					parts := make([]string, 0, len(alpn))
+					for _, a := range alpn {
+						if s, ok := a.(string); ok {
+							parts = append(parts, s)
+						}
+					}
+					set("alpn", strings.Join(parts, ","))
+				}
+				if b, _ := tl["allowInsecure"].(bool); b {
+					set("allowInsecure", "1")
+				}
+			}
+			switch netw {
+			case "ws":
+				w := obj(ss, "wsSettings")
+				set("path", str(w, "path"))
+				h := str(obj(w, "headers"), "Host")
+				if h == "" {
+					h = str(w, "host")
+				}
+				set("host", h)
+			case "grpc":
+				set("serviceName", str(obj(ss, "grpcSettings"), "serviceName"))
+			case "httpupgrade":
+				h := obj(ss, "httpupgradeSettings")
+				set("path", str(h, "path"))
+				set("host", str(h, "host"))
+			case "xhttp":
+				x := obj(ss, "xhttpSettings")
+				set("path", str(x, "path"))
+				set("host", str(x, "host"))
+			}
+			hostPart := host
+			if strings.Contains(host, ":") {
+				hostPart = "[" + host + "]"
+			}
+			label := name
+			if label == "" {
+				label = host
+			}
+			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", url.PathEscape(uid), hostPart, port,
+				q.Encode(), url.PathEscape(label)))
+			found = true
+			break // в конфиге одно исходящее «proxy», остальные — direct/block
+		}
+		if !found && other != "" {
+			skipped = append(skipped, other)
+		}
+	}
+	return links, skipped, true
+}
+
+// parseSubscriptionText — ключи VLESS из текста или ответа подписки (ссылки, base64 или Xray JSON).
+// notices — сообщения сервиса вместо серверов (заглушки на 0.0.0.0), в ключи они не попадают.
+func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices []string) {
 	t := text
+	links, jsonSkipped, isJSON := xrayJSONLinks(t)
+	if isJSON {
+		t = strings.Join(links, "\n")
+	}
 	if !strings.Contains(t, "://") {
 		if b, err := b64decode(t); err == nil && strings.Contains(string(b), "://") {
 			t = string(b)
 		}
 	}
-	var keys []Profile
-	var problems []string
 	other := 0
 	for _, raw := range strings.Split(t, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || !strings.Contains(line, "://") {
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(line), "vless://") {
+		if !isKeyLine(line) {
 			other++
 			continue
 		}
@@ -549,10 +1027,56 @@ func parseVlessList(text, sub string) ([]Profile, []string) {
 			problems = append(problems, name+": "+err.Error())
 			continue
 		}
+		if isPlaceholder(k) {
+			notices = append(notices, k.Name)
+			continue
+		}
 		keys = append(keys, vlessProfile(k, sub))
 	}
+	brokenV, brokenH := 0, 0
+	kept := jsonSkipped[:0]
+	for _, x := range jsonSkipped {
+		switch x {
+		case brokenVless:
+			brokenV++
+		case brokenHysteria:
+			brokenH++
+		default:
+			kept = append(kept, x)
+		}
+	}
+	jsonSkipped = kept
+	if brokenV > 0 {
+		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов VLESS в формате Xray JSON: %d", brokenV))
+	}
+	if brokenH > 0 {
+		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов Hysteria в формате Xray JSON: %d", brokenH))
+	}
+	other += len(jsonSkipped)
 	if other > 0 {
-		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS): %d", other))
+		kinds := ""
+		if len(jsonSkipped) > 0 {
+			seen := map[string]bool{}
+			var uniq []string
+			for _, s := range jsonSkipped {
+				if !seen[s] {
+					seen[s] = true
+					uniq = append(uniq, s)
+				}
+			}
+			sort.Strings(uniq)
+			kinds = " (" + strings.Join(uniq, ", ") + ")"
+		}
+		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS и не Hysteria2)%s: %d", kinds, other))
+	}
+	return keys, problems, notices
+}
+
+// parseVlessList — то же для вставленного текста: сообщения сервиса идут в предупреждения.
+func parseVlessList(text, sub string) ([]Profile, []string) {
+	keys, problems, notices := parseSubscriptionText(text, sub)
+	for _, n := range notices {
+		problems = append(problems, "сервис подписки сообщает: «"+n+"»")
 	}
 	return keys, problems
 }
@@ -600,7 +1124,7 @@ func parseInput(text string) ParsedInput {
 		out.Profiles = append(out.Profiles, keys...)
 		out.Problems = append(out.Problems, problems...)
 		if len(keys) == 0 && len(problems) == 0 && len(out.Profiles) == 0 && len(out.Subscriptions) == 0 {
-			out.Problems = append(out.Problems, "Не нашёл ключей. Подходят vless://…, vpn://… (AmneziaVPN), "+
+			out.Problems = append(out.Problems, "Не нашёл ключей. Подходят vless://…, hysteria2://…, vpn://… (AmneziaVPN), "+
 				"конфиг AmneziaWG или ссылка на подписку.")
 		}
 	}
@@ -616,22 +1140,26 @@ func toJSON(v any) string {
 // Возвращает JSON ParsedInput.
 func ParseInput(text string) string { return toJSON(parseInput(text)) }
 
-// ParseSubscription разбирает ответ подписки (ссылки или base64). Возвращает JSON {profiles, problems}.
+// ParseSubscription разбирает ответ подписки (ссылки, base64 или Xray JSON).
+// Возвращает JSON {profiles, problems, notices}; notices — сообщения сервиса вместо серверов.
 func ParseSubscription(body, url string) string {
-	p, problems := parseVlessList(body, url)
+	p, problems, notices := parseSubscriptionText(body, url)
 	if p == nil {
 		p = []Profile{}
 	}
 	if problems == nil {
 		problems = []string{}
 	}
-	return toJSON(map[string]any{"profiles": p, "problems": problems})
+	if notices == nil {
+		notices = []string{}
+	}
+	return toJSON(map[string]any{"profiles": p, "problems": problems, "notices": notices})
 }
 
 // VlessEndpoint — адрес и порт сервера из ключа vless:// (для пинга); пусто, если ключ не разобрать.
 func VlessEndpoint(uri string) string {
 	k, err := parseVless(uri)
-	if err != nil {
+	if err != nil || k.Protocol == "hysteria2" { // Hysteria2 работает по UDP — TCP-пинг к нему ничего не скажет
 		return ""
 	}
 	return net.JoinHostPort(k.Server, strconv.Itoa(k.Port))

@@ -30,17 +30,48 @@ data class VlessKey(
     val path: String = "",
     val host: String = "",
     val serviceName: String = "",
+    // Hysteria2 (protocol = "hysteria2"): пароль — в uuid; маскировка salamander, «прыжки» по портам, скорость
+    val protocol: String = "vless",
+    val obfsPassword: String = "",
+    val serverPorts: String = "",  // диапазон портов, например 20000-50000
+    val hopInterval: Int = 0,      // с
+    val upMbps: Int = 0,
+    val downMbps: Int = 0,
 ) {
+    val label: String get() = if (protocol == "hysteria2") "Hysteria2" else "VLESS"
+
     val summary: String
         get() {
+            if (protocol == "hysteria2") return "$server:$port · Hysteria2" + if (obfsPassword.isNotEmpty()) " · salamander" else ""
             val sec = mapOf("reality" to "Reality", "tls" to "TLS", "none" to "без TLS")[security] ?: security
             val tr = mapOf("tcp" to "TCP", "ws" to "WebSocket", "grpc" to "gRPC", "http" to "HTTP/2",
                 "httpupgrade" to "HTTPUpgrade")[transport] ?: transport
             return "$server:$port · $sec · $tr"
         }
 
+    private fun hysteria2Outbound(tag: String): JSONObject {
+        val tls = JSONObject().put("enabled", true)
+        val serverName = sni.ifEmpty { if (Keys.isIp(server)) "" else server }
+        if (serverName.isNotEmpty()) tls.put("server_name", serverName)
+        if (alpn.isNotEmpty()) tls.put("alpn", JSONArray(alpn))
+        if (insecure) tls.put("insecure", true)
+        val ob = JSONObject().put("type", "hysteria2").put("tag", tag).put("server", server)
+            .put("server_port", port).put("password", uuid).put("tls", tls)
+        if (obfsPassword.isNotEmpty()) ob.put("obfs", JSONObject().put("type", "salamander").put("password", obfsPassword))
+        val ports = serverPorts.split(",").map { it.trim().replace("-", ":") }.filter { it.isNotEmpty() }
+            .map { if (it.contains(":")) it else "$it:$it" }
+        if (ports.isNotEmpty()) {
+            ob.put("server_ports", JSONArray(ports))
+            if (hopInterval > 0) ob.put("hop_interval", "${hopInterval}s")
+        }
+        if (upMbps > 0) ob.put("up_mbps", upMbps)
+        if (downMbps > 0) ob.put("down_mbps", downMbps)
+        return ob
+    }
+
     /** Исходящее sing-box для этого сервера. */
     fun outbound(tag: String): JSONObject {
+        if (protocol == "hysteria2") return hysteria2Outbound(tag)
         val ob = JSONObject()
             .put("type", "vless").put("tag", tag).put("server", server).put("server_port", port)
             .put("uuid", uuid).put("packet_encoding", "xudp")
@@ -114,8 +145,70 @@ object Keys {
         s
     }
 
+    private val HYSTERIA2_SCHEMES = listOf("hysteria2://", "hy2://")
+
+    fun isHysteria2(data: String) = HYSTERIA2_SCHEMES.any { data.trim().lowercase().startsWith(it) }
+
+    /** Ключ сервера для sing-box: vless:// или hysteria2:// (hy2://). */
+    fun isKeyLine(line: String): Boolean {
+        val l = line.lowercase()
+        return l.startsWith("vless://") || HYSTERIA2_SCHEMES.any { l.startsWith(it) }
+    }
+
+    private fun leadInt(s: String?): Int = Regex("^\\s*(\\d+)").find(s ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+    /** Ключ hysteria2://пароль@host:port/?sni=…&obfs=salamander&obfs-password=…#имя
+     *  (порт может быть списком «443,20000-50000», mport — диапазон для «прыжков»). */
+    fun parseHysteria2(raw: String): VlessKey {
+        val body = raw.substringBefore('#')
+        val fragment = if (raw.contains('#')) decode(raw.substringAfter('#')) else ""
+        val rest = body.substringAfter("://")
+        var netloc = rest.substringBefore('/')
+        var query = rest.substringAfter('/', "").substringAfter('?', "")
+        if (netloc.contains('?')) {
+            query = netloc.substringAfter('?')
+            netloc = netloc.substringBefore('?')
+        }
+        val at = netloc.lastIndexOf('@')
+        if (at <= 0) throw KeyException("В ключе Hysteria2 нет пароля")
+        val auth = decode(netloc.substring(0, at))
+        val hostPort = netloc.substring(at + 1)
+        val server: String
+        var ports: String
+        if (hostPort.startsWith("[")) {
+            server = hostPort.substringAfter("[").substringBefore("]")
+            ports = hostPort.substringAfter("]").removePrefix(":")
+        } else {
+            server = hostPort.substringBefore(":")
+            ports = hostPort.substringAfter(":", "")
+        }
+        if (ports.isEmpty()) ports = "443"
+        val q = query.split("&").filter { it.isNotEmpty() }.associate {
+            decode(it.substringBefore("=")) to decode(it.substringAfter("=", "")).trim()
+        }
+        val port = leadInt(ports.split(',', '-').first())
+        var hop = q["mport"].orEmpty()
+        if (hop.isEmpty() && (ports.contains(',') || ports.contains('-'))) {
+            hop = if (ports.contains(',')) ports.substringAfter(',') else ports
+        }
+        if (server.isEmpty() || port <= 0 || port > 65535) throw KeyException("В ключе Hysteria2 нет адреса сервера или порта")
+        val obfs = q["obfs"].orEmpty()
+        if (obfs.isNotEmpty() && !obfs.equals("salamander", true)) throw KeyException("Маскировка Hysteria2 «$obfs» не поддерживается")
+        val ins = q["insecure"].orEmpty().lowercase()
+        return VlessKey(
+            uri = raw, name = fragment.trim().ifEmpty { "$server:$port" }, server = server, port = port, uuid = auth,
+            security = "tls", transport = "", sni = q["sni"].orEmpty().ifEmpty { q["peer"].orEmpty() },
+            alpn = q["alpn"].orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() },
+            insecure = ins == "1" || ins == "true", protocol = "hysteria2",
+            obfsPassword = if (obfs.isNotEmpty()) q["obfs-password"].orEmpty() else "",
+            serverPorts = hop.replace(":", "-"), hopInterval = leadInt(q["hopinterval"]),
+            upMbps = leadInt(q["upmbps"]), downMbps = leadInt(q["downmbps"]),
+        )
+    }
+
     fun parseVless(uriText: String): VlessKey {
         val raw = uriText.trim()
+        if (HYSTERIA2_SCHEMES.any { raw.lowercase().startsWith(it) }) return parseHysteria2(raw)
         if (!raw.lowercase().startsWith("vless://")) throw KeyException("Это не ключ VLESS — он должен начинаться с vless://")
         val hashIdx = raw.indexOf('#')
         val fragment = if (hashIdx >= 0) decode(raw.substring(hashIdx + 1)) else ""
@@ -311,29 +404,218 @@ object Keys {
         null
     }
 
-    /** Ключи VLESS из текста или ответа подписки (просто ссылки или base64). */
-    fun parseVlessList(text: String): Pair<List<VlessKey>, List<String>> {
+    /** Разобранная подписка: ключи, предупреждения и сообщения сервиса вместо серверов. */
+    data class SubParse(val keys: List<VlessKey>, val problems: List<String>, val notices: List<String>)
+
+    // Адреса, на которых сервис присылает не сервер, а сообщение в названии «ключа» (Remnawave так отвечает,
+    // когда достигнут лимит устройств, программа не прислала код устройства, подписка истекла и т.п.)
+    private val PLACEHOLDER_HOSTS = setOf("0.0.0.0", "127.0.0.1", "::", "::1", "localhost")
+
+    fun isPlaceholder(k: VlessKey) = k.server.lowercase() in PLACEHOLDER_HOSTS || k.port <= 1
+
+    private const val BROKEN_VLESS = "vless?"  // сервер VLESS, который не удалось разобрать
+    private const val BROKEN_HYSTERIA = "hysteria?"
+
+    /** Все объекты внутри JSON (для полей, место которых в разных версиях Xray разное). */
+    private fun walk(v: Any?, out: MutableList<JSONObject> = mutableListOf()): List<JSONObject> {
+        when (v) {
+            is JSONObject -> {
+                out.add(v)
+                v.keys().forEach { walk(v.opt(it), out) }
+            }
+            is JSONArray -> for (i in 0 until v.length()) walk(v.opt(i), out)
+        }
+        return out
+    }
+
+    /** Исходящее Hysteria (Xray 26+: protocol hysteria, version 2) → ключ hysteria2://. */
+    private fun xrayHysteriaLink(ob: JSONObject, name: String): String? {
+        val settings = ob.optJSONObject("settings") ?: JSONObject()
+        val ss = ob.optJSONObject("streamSettings") ?: JSONObject()
+        val hs = ss.optJSONObject("hysteriaSettings") ?: JSONObject()
+        var srv = settings
+        for (key in listOf("servers", "vnext")) settings.optJSONArray(key)?.optJSONObject(0)?.let { srv = it }
+        val version = leadInt(hs.s("version")).takeIf { it > 0 } ?: leadInt(settings.s("version"))
+        if (version != 0 && version != 2) return null
+        val host = srv.s("address")
+        val port = leadInt(srv.s("port"))
+        var auth = listOf(hs.s("auth"), hs.s("password"), srv.s("password"), settings.s("password")).firstOrNull { it.isNotEmpty() }.orEmpty()
+        if (auth.isEmpty()) auth = srv.optJSONArray("users")?.optJSONObject(0)?.s("password").orEmpty()
+        if (host.isEmpty() || port <= 0 || auth.isEmpty()) return null
+        val tls = ss.optJSONObject("tlsSettings") ?: JSONObject()
+        val q = linkedMapOf("sni" to tls.s("serverName"))
+        if (tls.optBoolean("allowInsecure", false)) q["insecure"] = "1"
+        tls.optJSONArray("alpn")?.let { a -> q["alpn"] = (0 until a.length()).joinToString(",") { a.optString(it) } }
+        for (m in walk(ss)) {  // маскировка salamander: в finalmask/udpmasks или в настройках
+            val kind = m.s("type").ifEmpty { m.s("name") }.lowercase()
+            if (kind != "salamander") continue
+            val pw = m.s("password").ifEmpty { m.optJSONObject("settings")?.s("password").orEmpty() }
+            if (pw.isNotEmpty()) {
+                q["obfs"] = "salamander"
+                q["obfs-password"] = pw
+                break
+            }
+        }
+        if (q["obfs"] == null && hs.s("obfs").isNotEmpty()) {
+            q["obfs"] = "salamander"
+            q["obfs-password"] = hs.s("obfs")
+        }
+        val hop = hs.optJSONObject("udphop") ?: hs.optJSONObject("hop")
+        if (hop != null && hop.s("port").isNotEmpty()) {
+            q["mport"] = hop.s("port").replace(":", "-")
+            leadInt(hop.s("interval")).takeIf { it > 0 }?.let { q["hopinterval"] = it.toString() }
+        }
+        for (k in listOf("up", "down")) leadInt(hs.s(k)).takeIf { it > 0 }?.let { q["${k}mbps"] = it.toString() }
+        val query = q.filterValues { it.isNotEmpty() }.entries.joinToString("&") { "${it.key}=${enc(it.value)}" }
+        val hostPart = if (host.contains(":")) "[$host]" else host
+        return "hysteria2://${enc(auth)}@$hostPart:$port/?$query#${enc(name.ifEmpty { host })}"
+    }
+
+    private val PROXY_PROTOCOLS = setOf("vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic",
+        "wireguard", "socks", "http")
+
+    /** Строка из JSON; пусто, если поля нет или там null (org.json отдал бы «null»). */
+    private fun JSONObject.s(key: String): String = if (isNull(key)) "" else optString(key, "")
+
+    private fun enc(s: String): String = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
+
+    /** Подписка в формате Xray JSON (так её отдают Happ и Streisand): из каждого конфига берётся исходящее
+     *  VLESS и пересобирается в ссылку vless://. null — это не JSON. В skipped — протоколы конфигов без VLESS. */
+    fun xrayJsonLinks(text: String, skipped: MutableList<String>): List<String>? {
+        val t = text.trim()
+        if (!t.startsWith("[") && !t.startsWith("{")) return null
+        val configs: List<JSONObject> = try {
+            if (t.startsWith("[")) JSONArray(t).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
+            else listOf(JSONObject(t))
+        } catch (e: Exception) {
+            return null
+        }
+        val links = mutableListOf<String>()
+        for (cfg in configs) {
+            val name = cfg.s("remarks")
+            val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
+            var found = false
+            var other = ""
+            for (i in 0 until outbounds.length()) {
+                val ob = outbounds.optJSONObject(i) ?: continue
+                val proto = ob.s("protocol")
+                if (proto == "hysteria" || proto == "hysteria2") {
+                    val link = xrayHysteriaLink(ob, name)
+                    if (link != null) {
+                        links.add(link)
+                        found = true
+                        break
+                    }
+                    other = BROKEN_HYSTERIA
+                    continue
+                }
+                if (proto != "vless") {
+                    if (other.isEmpty() && proto in PROXY_PROTOCOLS) other = proto
+                    continue
+                }
+                val settings = ob.optJSONObject("settings") ?: JSONObject()
+                val vnext = settings.optJSONArray("vnext")
+                // упрощённая запись Xray 25+: адрес, порт и id прямо в settings
+                val srv = if (vnext != null && vnext.length() > 0) vnext.optJSONObject(0) else settings
+                val user = if (vnext != null && vnext.length() > 0) srv?.optJSONArray("users")?.optJSONObject(0) else settings
+                val host = srv?.s("address").orEmpty()
+                val port = srv?.optInt("port", -1) ?: -1
+                val uid = user?.s("id").orEmpty()
+                if (srv == null || user == null || host.isEmpty() || uid.isEmpty() || port <= 0) {
+                    other = BROKEN_VLESS
+                    continue
+                }
+                val ss = ob.optJSONObject("streamSettings") ?: JSONObject()
+                val net = ss.s("network").ifEmpty { "tcp" }
+                val sec = ss.s("security").ifEmpty { "none" }
+                val q = linkedMapOf("encryption" to user.s("encryption").ifEmpty { "none" },
+                    "type" to net, "security" to sec, "flow" to user.s("flow"))
+                if (sec == "reality") {
+                    val r = ss.optJSONObject("realitySettings") ?: JSONObject()
+                    q["sni"] = r.s("serverName")
+                    q["pbk"] = r.s("publicKey")
+                    q["sid"] = r.s("shortId")
+                    q["fp"] = r.s("fingerprint")
+                    q["spx"] = r.s("spiderX")
+                } else if (sec == "tls") {
+                    val tl = ss.optJSONObject("tlsSettings") ?: JSONObject()
+                    q["sni"] = tl.s("serverName")
+                    q["fp"] = tl.s("fingerprint")
+                    val alpn = tl.optJSONArray("alpn")
+                    if (alpn != null) q["alpn"] = (0 until alpn.length()).joinToString(",") { alpn.optString(it) }
+                    if (tl.optBoolean("allowInsecure", false)) q["allowInsecure"] = "1"
+                }
+                when (net) {
+                    "ws" -> {
+                        val w = ss.optJSONObject("wsSettings") ?: JSONObject()
+                        q["path"] = w.s("path")
+                        q["host"] = w.optJSONObject("headers")?.s("Host").orEmpty().ifEmpty { w.s("host") }
+                    }
+                    "grpc" -> q["serviceName"] = ss.optJSONObject("grpcSettings")?.s("serviceName").orEmpty()
+                    "httpupgrade" -> {
+                        val h = ss.optJSONObject("httpupgradeSettings") ?: JSONObject()
+                        q["path"] = h.s("path")
+                        q["host"] = h.s("host")
+                    }
+                    "xhttp" -> {
+                        val x = ss.optJSONObject("xhttpSettings") ?: JSONObject()
+                        q["path"] = x.s("path")
+                        q["host"] = x.s("host")
+                    }
+                }
+                val query = q.filterValues { it.isNotEmpty() }.entries.joinToString("&") { "${it.key}=${enc(it.value)}" }
+                val hostPart = if (host.contains(":")) "[$host]" else host
+                links.add("vless://${enc(uid)}@$hostPart:$port?$query#${enc(name.ifEmpty { host })}")
+                found = true
+                break  // в конфиге одно исходящее «proxy», остальные — direct/block
+            }
+            if (!found && other.isNotEmpty()) skipped.add(other)
+        }
+        return links
+    }
+
+    /** Ключи VLESS из ответа подписки (ссылки, base64 или Xray JSON). Заглушки сервиса — в notices. */
+    fun parseSubscription(text: String): SubParse {
         var t = text
+        val jsonSkipped = mutableListOf<String>()
+        xrayJsonLinks(t, jsonSkipped)?.let { t = it.joinToString("\n") }
         if (!t.contains("://")) decodeBase64Text(t)?.let { t = it }
         val keys = mutableListOf<VlessKey>()
         val problems = mutableListOf<String>()
+        val notices = mutableListOf<String>()
         var other = 0
         for (rawLine in t.lines()) {
             val line = rawLine.trim()
             if (line.isEmpty() || !line.contains("://")) continue
-            if (!line.lowercase().startsWith("vless://")) {
+            if (!isKeyLine(line)) {
                 other++
                 continue
             }
             try {
-                keys.add(parseVless(line))
+                val k = parseVless(line)
+                if (isPlaceholder(k)) notices.add(k.name) else keys.add(k)
             } catch (e: KeyException) {
                 val name = if (line.contains("#")) decode(line.substringAfterLast("#")) else line.take(40) + "…"
                 problems.add("$name: ${e.message}")
             }
         }
-        if (other > 0) problems.add("пропущено ключей других типов (не VLESS): $other")
-        return keys to problems
+        for ((marker, label) in listOf(BROKEN_VLESS to "VLESS", BROKEN_HYSTERIA to "Hysteria")) {
+            val broken = jsonSkipped.count { it == marker }
+            jsonSkipped.removeAll { it == marker }
+            if (broken > 0) problems.add("не удалось разобрать серверов $label в формате Xray JSON: $broken")
+        }
+        other += jsonSkipped.size
+        if (other > 0) {
+            val kinds = if (jsonSkipped.isNotEmpty()) " (${jsonSkipped.toSortedSet().joinToString(", ")})" else ""
+            problems.add("пропущено ключей других типов (не VLESS и не Hysteria2)$kinds: $other")
+        }
+        return SubParse(keys, problems, notices)
+    }
+
+    /** Ключи VLESS из вставленного текста: сообщения сервиса идут в предупреждения. */
+    fun parseVlessList(text: String): Pair<List<VlessKey>, List<String>> {
+        val p = parseSubscription(text)
+        return p.keys to (p.problems + p.notices.map { "сервис подписки сообщает: «$it»" })
     }
 
     /** Что угодно из буфера обмена: vless://, vpn://, .conf, ссылка на подписку. */
@@ -368,7 +650,7 @@ object Keys {
             keys.forEach { out.profiles.add(vlessProfile(it)) }
             out.problems.addAll(problems)
             if (keys.isEmpty() && problems.isEmpty() && out.profiles.isEmpty() && out.subscriptions.isEmpty()) {
-                out.problems.add("Не нашёл ключей. Подходят vless://…, vpn://… (AmneziaVPN), конфиг AmneziaWG или ссылка на подписку.")
+                out.problems.add("Не нашёл ключей. Подходят vless://…, hysteria2://…, vpn://… (AmneziaVPN), конфиг AmneziaWG или ссылка на подписку.")
             }
         }
         return out

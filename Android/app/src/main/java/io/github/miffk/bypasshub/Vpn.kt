@@ -137,7 +137,8 @@ object Vpn {
                     LogBuffer.add("Пинг через sing-box: ${e.message}")
                 }
             }
-            val rest = vless.filter { it.id !in result }
+            // Hysteria2 работает по UDP: время TCP-подключения к нему ничего не скажет, оставляем «—»
+            val rest = vless.filter { it.id !in result && !Keys.isHysteria2(it.data) }
             val pool = Executors.newFixedThreadPool(8)
             val futures = rest.associate { p ->
                 p.id to pool.submit<Long?> {

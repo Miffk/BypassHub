@@ -322,7 +322,7 @@ def test_xray_json_subscription():
     ]
     keys, problems = vpn.parse_keys(json.dumps(cfg, ensure_ascii=False))
     assert [k.name for k in keys] == ["🇩🇪 Germany", "🇳🇱 WS"]
-    assert problems == ["пропущено ключей других типов (не VLESS) (trojan): 1"]
+    assert problems == ["пропущено ключей других типов (не VLESS и не Hysteria2) (trojan): 1"]
     de, ws = keys
     assert (de.server, de.security, de.public_key, de.sni, de.flow) == \
         ("de.example.com", "reality", PBK, "www.microsoft.com", "xtls-rprx-vision")
@@ -381,3 +381,121 @@ def test_fetch_falls_back_to_doh(monkeypatch):
     monkeypatch.setattr(netfetch, "urlopen", refused)
     with pytest.raises(URLError):
         netfetch.fetch("https://sub.example.com/x", {})   # не DNS — запасной путь не нужен
+
+
+def test_awg_waits_for_slow_adapter(tmp_path, monkeypatch):
+    """Служба туннеля долго создаёт адаптер (START_PENDING больше 10 с) — это ещё не ошибка."""
+    import subprocess
+    from bypasshub import winutil
+    m = awg.AwgManager(tmp_path)
+    for name in (awg.EXE_NAME, awg.WINTUN_DLL):
+        (tmp_path / name).write_bytes(b"x")
+    states = iter([None] + ["START_PENDING"] * 200 + ["RUNNING"])
+    monkeypatch.setattr(winutil, "service_state", lambda name: next(states))
+    monkeypatch.setattr(winutil, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(awg.time, "sleep", lambda s: None)
+    monkeypatch.setattr(awg.AwgManager, "_wait_adapter_gone", staticmethod(lambda timeout=10: None))
+    m.start(awg.parse_conf(CONF))  # без исключения: дождались RUNNING
+
+
+def test_service_pid_from_sc_queryex():
+    from bypasshub import winutil
+    out = ("SERVICE_NAME: AmneziaWGTunnel$BypassHub\n        TYPE               : 10  WIN32_OWN_PROCESS\n"
+           "        STATE              : 2  START_PENDING\n        PID                : 4321\n")
+    assert winutil.parse_service_pid(out) == 4321 and winutil.parse_service_pid("") == 0
+
+
+def test_github_requests_fall_back_to_doh(monkeypatch):
+    """Системный DNS не находит GitHub — проверка обновлений идёт через DNS по HTTPS."""
+    import socket
+    from urllib.error import URLError
+    from bypasshub import github, netfetch
+
+    def no_dns(*a, **kw):
+        raise URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    class Fake:
+        headers = {}
+
+        def __init__(self, url):
+            self.url = url
+
+        def read(self, n=-1):
+            return json.dumps({"tag_name": "v1.2.3", "assets": []}).encode()
+
+        def geturl(self):
+            return self.url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+    monkeypatch.setattr(netfetch, "urlopen", no_dns)
+    monkeypatch.setattr(netfetch, "_open_pinned", lambda url, headers, timeout: Fake(url))
+    assert github.latest_release("a/b").tag == "v1.2.3"
+
+
+def test_xray_json_simplified_vless_and_description():
+    """Новая запись Xray (адрес, порт и id прямо в settings) — тоже сервер; в журнал — формат ответа."""
+    cfg = [{"remarks": "FI", "outbounds": [
+        {"protocol": "vless", "settings": {"address": "fi.example.com", "port": 443, "id": UUID, "encryption": "none"},
+         "streamSettings": {"network": "grpc", "security": "tls", "grpcSettings": {"serviceName": "g"}}},
+        {"protocol": "freedom"}]},
+        {"remarks": "bad", "outbounds": [{"protocol": "vless", "settings": {"port": 443}}]}]
+    text = json.dumps(cfg)
+    keys, problems = vpn.parse_keys(text)
+    assert [(k.name, k.server, k.transport) for k in keys] == [("FI", "fi.example.com", "grpc")]
+    assert problems == ["не удалось разобрать серверов VLESS в формате Xray JSON: 1"]
+    assert vpn.describe_subscription(text) == "Xray JSON, конфигов 2, исходящие: vless×2, freedom×1"
+    links = base64.b64encode(f"{REALITY}\nhysteria2://x@h:1#a\nhysteria2://y@h:2#b".encode()).decode()
+    assert vpn.describe_subscription(links) == "base64, схемы: hysteria2×2, vless×1"
+
+
+HY2 = "hysteria2://p%40ss@de.example.com:443/?sni=de.example.com&obfs=salamander&obfs-password=salt&mport=20000-50000#DE%20Hysteria"
+
+
+def test_hysteria2_key_and_outbound():
+    k = vpn.parse_vless(HY2)
+    assert (k.protocol, k.server, k.port, k.uuid, k.obfs_password, k.server_ports, k.name) == \
+        ("hysteria2", "de.example.com", 443, "p@ss", "salt", "20000-50000", "DE Hysteria")
+    ob = vpn.outbound(k, "x")
+    assert ob == {"type": "hysteria2", "tag": "x", "server": "de.example.com", "server_port": 443,
+                  "password": "p@ss", "tls": {"enabled": True, "server_name": "de.example.com"},
+                  "obfs": {"type": "salamander", "password": "salt"}, "server_ports": ["20000:50000"]}
+    # порты списком в адресе, короткая схема hy2://
+    k2 = vpn.parse_vless("hy2://secret@1.2.3.4:443,5000-6000?insecure=1#x")
+    assert (k2.port, k2.server_ports, k2.insecure, k2.label) == (443, "5000-6000", True, "Hysteria2")
+    keys, problems = vpn.parse_keys(f"{REALITY}\n{HY2}\ntrojan://x@h:1#t")
+    assert [k.protocol for k in keys] == ["vless", "hysteria2"]
+    assert problems == ["пропущено ключей других типов (не VLESS и не Hysteria2): 1"]
+
+
+def test_xray_json_hysteria():
+    """Hysteria в Xray JSON (так их отдаёт Remnawave для Happ) — тоже серверы."""
+    cfg = [
+        {"remarks": "🇩🇪 Molniya | Hysteria", "outbounds": [
+            {"protocol": "hysteria", "tag": "proxy", "settings": {"version": 2, "address": "de.example.com", "port": 443},
+             "streamSettings": {"network": "hysteria", "security": "tls",
+                                "tlsSettings": {"serverName": "de.example.com", "alpn": ["h3"]},
+                                "hysteriaSettings": {"version": 2, "auth": "pw", "udphop": {"port": "20000-30000",
+                                                                                           "interval": 30}},
+                                "finalmask": {"udp": [{"type": "salamander", "settings": {"password": "salt"}}]}}},
+            {"protocol": "freedom", "tag": "direct"}]},
+        {"remarks": "broken", "outbounds": [{"protocol": "hysteria", "settings": {"version": 2}}]},
+    ]
+    keys, problems = vpn.parse_keys(json.dumps(cfg, ensure_ascii=False))
+    assert len(keys) == 1
+    k = keys[0]
+    assert (k.protocol, k.name, k.server, k.uuid, k.sni, k.alpn, k.obfs_password, k.server_ports, k.hop_interval) == \
+        ("hysteria2", "🇩🇪 Molniya | Hysteria", "de.example.com", "pw", "de.example.com", ["h3"], "salt",
+         "20000-30000", 30)
+    assert problems == ["не удалось разобрать серверов Hysteria в формате Xray JSON: 1"]
+
+
+def test_hysteria_in_server_group_config():
+    servers = [vpn.outbound(vpn.parse_vless(REALITY), tag="a"), vpn.outbound(vpn.parse_vless(HY2), tag="b")]
+    cfg = vpn.build_config(vpn.server_group(servers, vpn.AUTO_TAG), mode="tun")
+    types = {ob["tag"]: ob["type"] for ob in cfg["outbounds"]}
+    assert types["a"] == "vless" and types["b"] == "hysteria2"

@@ -25,6 +25,7 @@ import android.widget.Toast
 import io.github.miffk.bypasshub.AUTO
 import io.github.miffk.bypasshub.BuildConfig
 import io.github.miffk.bypasshub.Bypass
+import io.github.miffk.bypasshub.Keys
 import io.github.miffk.bypasshub.LogBuffer
 import io.github.miffk.bypasshub.Profile
 import io.github.miffk.bypasshub.R
@@ -739,7 +740,7 @@ class MainActivity : Activity() {
                 append(if (sel) "● " else "")
                 append(p.name)
                 setSpan(android.text.style.StyleSpan(Typeface.BOLD), 0, length, 0)
-                val kind = " - " + (if (p.kind == "awg") "AmneziaWG" else "VLESS") + if (now) " · сейчас" else ""
+                val kind = " - " + (if (p.kind == "awg") "AmneziaWG" else if (Keys.isHysteria2(p.data)) "Hysteria2" else "VLESS") + if (now) " · сейчас" else ""
                 val start = length
                 append(kind)
                 setSpan(android.text.style.ForegroundColorSpan(Ui.MUTED), start, length, 0)
@@ -770,7 +771,7 @@ class MainActivity : Activity() {
                 if (cur.isNotEmpty()) cur else null, null))
         }
         for (p in profiles) {
-            val sub = if (editable) p.summary else (if (p.kind == "awg") "AmneziaWG" else "VLESS") +
+            val sub = if (editable) p.summary else (if (p.kind == "awg") "AmneziaWG" else if (Keys.isHysteria2(p.data)) "Hysteria2" else "VLESS") +
                 (if (live && g?.selected == AUTO && g.current == p.id) " · ● сейчас" else "")
             parent.addView(serverRow(p.id, p.name, sub, p.id == selected, if (p.kind == "vless") p.id else null,
                 if (editable) p else null))
@@ -841,7 +842,7 @@ class MainActivity : Activity() {
     private fun buildServers(col: LinearLayout) {
         val add = Ui.card(this)
         add.addView(Ui.text(this, "Добавить сервер", 17f, Ui.TEXT, true))
-        add.addView(Ui.text(this, "Ключ vless://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), конфиг " +
+        add.addView(Ui.text(this, "Ключ vless://… или hysteria2://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), конфиг " +
             "AmneziaWG или ссылка на подписку https://…. Можно несколько ключей — по одному на строку.", 13f, Ui.MUTED),
             Ui.lp(top = dp(4), bottom = dp(10)))
         val input = Ui.input(this, "Вставьте ключ сюда", multiline = true).apply { tag = "input" }

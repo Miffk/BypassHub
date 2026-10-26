@@ -44,7 +44,7 @@ class VpnPage(Page):
         home.vpn_card.add_header(self.header)
 
         body = W.section(self.lay, "Добавить сервер",
-                         "Вставьте ключ vless://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), "
+                         "Вставьте ключ vless://… или hysteria2://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), "
                          "конфиг AmneziaWG (.conf) или ссылку на подписку https://… от вашего VPN-сервиса. "
                          "Можно несколько ключей сразу — по одному на строку.")
         self.input = W.textbox(74)

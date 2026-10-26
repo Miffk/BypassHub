@@ -63,7 +63,31 @@ def _is_dns_failure(exc: BaseException) -> bool:
     return isinstance(reason, socket.gaierror)
 
 
-def _fetch_pinned(url: str, headers: Dict[str, str], timeout: float, limit: int, redirects: int = 3) -> Response:
+class _PinnedResponse:
+    """Ответ по запасному пути — с тем же, что нужно от ответа urlopen: read, headers, geturl."""
+
+    def __init__(self, conn: http.client.HTTPSConnection, resp: http.client.HTTPResponse, url: str):
+        self._conn, self._resp, self._url = conn, resp, url
+        self.headers = resp.headers
+        self.status = resp.status
+
+    def read(self, amt: int = -1) -> bytes:
+        return self._resp.read() if amt is None or amt < 0 else self._resp.read(amt)
+
+    def geturl(self) -> str:
+        return self._url
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "_PinnedResponse":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def _open_pinned(url: str, headers: Dict[str, str], timeout: float, redirects: int = 3) -> _PinnedResponse:
     for _ in range(redirects + 1):
         parts = urlsplit(url)
         if parts.scheme != "https" or not parts.hostname:
@@ -78,13 +102,32 @@ def _fetch_pinned(url: str, headers: Dict[str, str], timeout: float, limit: int,
             resp = conn.getresponse()
             if resp.status in (301, 302, 303, 307, 308) and resp.getheader("Location"):
                 url = urljoin(url, resp.getheader("Location"))
+                conn.close()
                 continue
             if resp.status >= 400:
                 raise URLError(f"HTTP {resp.status}")
-            return Response(resp.read(limit), resp.headers, url)
-        finally:
+            return _PinnedResponse(conn, resp, url)
+        except BaseException:
             conn.close()
+            raise
     raise URLError("слишком много перенаправлений")
+
+
+def _fetch_pinned(url: str, headers: Dict[str, str], timeout: float, limit: int) -> Response:
+    with _open_pinned(url, headers, timeout) as resp:
+        return Response(resp.read(limit), resp.headers, resp.geturl())
+
+
+def open_url(url: str, headers: Dict[str, str], timeout: float = 20):
+    """Как urlopen (ответ — с read, headers, geturl, для with), но если система не нашла адрес
+    сайта — через DNS по HTTPS. Для GitHub: у части провайдеров его адреса не находятся."""
+    try:
+        return urlopen(Request(url, headers=headers), timeout=timeout, context=tls.context())
+    except URLError as exc:
+        if not _is_dns_failure(exc):
+            raise
+        log.info("Адрес %s не найден системным DNS — пробую DNS по HTTPS", urlsplit(url).hostname)
+        return _open_pinned(url, headers, timeout)
 
 
 def fetch(url: str, headers: Dict[str, str], timeout: float = 20, limit: int = 4 * 1024 * 1024) -> Response:
