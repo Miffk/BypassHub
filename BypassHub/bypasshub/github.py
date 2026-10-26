@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-from . import APP_NAME, __version__, tls
+from . import APP_NAME, __version__
 from .log import log
 
 USER_AGENT = f"{APP_NAME}/{__version__}"
@@ -57,15 +56,19 @@ def is_newer(latest: str, installed: str) -> bool:
     return latest.strip().lstrip("vV") != installed.strip().lstrip("vV")
 
 
-def _request(url: str, accept: str = "*/*") -> Request:
-    return Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept,
-                                 "Cache-Control": "no-cache"})
+def _headers(accept: str = "*/*") -> Dict[str, str]:
+    return {"User-Agent": USER_AGENT, "Accept": accept, "Cache-Control": "no-cache"}
+
+
+def _open(url: str, timeout: float, accept: str = "*/*"):
+    """GET с запасным DNS (см. netfetch): у части провайдеров адреса GitHub не находятся."""
+    from . import netfetch
+    return netfetch.open_url(url, _headers(accept), timeout)
 
 
 def _release_from_api(repo: str) -> Release:
-    req = _request(f"https://api.github.com/repos/{repo}/releases/latest",
-                   "application/vnd.github+json")
-    with urlopen(req, timeout=15, context=tls.context()) as resp:
+    with _open(f"https://api.github.com/repos/{repo}/releases/latest", 15,
+               "application/vnd.github+json") as resp:
         data = json.loads(resp.read().decode("utf-8"))
     tag = (data.get("tag_name") or "").strip()
     if not tag:
@@ -84,8 +87,7 @@ def _release_from_api(repo: str) -> Release:
 
 def _release_from_redirect(repo: str) -> Release:
     """Без API (например, при лимите запросов): /releases/latest редиректит на /tag/<tag>."""
-    with urlopen(_request(f"https://github.com/{repo}/releases/latest"), timeout=15,
-                 context=tls.context()) as resp:
+    with _open(f"https://github.com/{repo}/releases/latest", 15) as resp:
         final = resp.geturl()
     m = re.search(r"/releases/tag/([^/?#]+)", final)
     if not m:
@@ -111,8 +113,7 @@ def latest_release(repo: str) -> Release:
 
 def fetch_text(url: str, timeout: float = 15) -> str:
     sep = "&" if "?" in url else "?"
-    with urlopen(_request(f"{url}{sep}t={int(time.time())}"), timeout=timeout,
-                 context=tls.context()) as resp:
+    with _open(f"{url}{sep}t={int(time.time())}", timeout) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
 
@@ -122,7 +123,7 @@ def download(url: str, dest: Path, progress: Optional[ProgressCb] = None,
     tmp = dest.with_name(dest.name + ".part")
     h = hashlib.sha256()
     log.info("Скачивание %s", url)
-    with urlopen(_request(url), timeout=30, context=tls.context()) as resp:
+    with _open(url, 30) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with open(tmp, "wb") as f:

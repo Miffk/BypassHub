@@ -26,6 +26,7 @@ REPO = "amnezia-vpn/amneziawg-windows-client"
 EXE_NAME = "amneziawg.exe"
 TUNNEL_NAME = "BypassHub"                 # имя туннеля = имя сетевого адаптера
 SERVICE_NAME = f"AmneziaWGTunnel${TUNNEL_NAME}"
+START_TIMEOUT = 60                        # сколько ждать запуска службы туннеля, с
 FALLBACK_METRIC = 9000
 WINTUN_DLL = "wintun.dll"  # драйвер сетевого адаптера; служба загружает его из папки amneziawg.exe
 
@@ -256,6 +257,7 @@ class AwgManager:
         if not self.is_installed():
             raise RuntimeError("Клиент AmneziaWG ещё не скачан")
         self.stop()
+        self._wait_adapter_gone()
         self.root.mkdir(parents=True, exist_ok=True)
         # Файл читает служба SYSTEM; права на папку — как у всей папки BypassHub
         self.conf_file.write_text(prepare_conf(profile.conf, lan_access, split), encoding="utf-8")
@@ -265,7 +267,9 @@ class AwgManager:
         if res.returncode != 0:
             raise RuntimeError("AmneziaWG не запустился: " + ((res.stdout + res.stderr).strip() or
                                                               f"код {res.returncode}"))
-        for _ in range(40):
+        # служба создаёт сетевой адаптер Wintun; на части ПК это занимает десятки секунд
+        deadline = time.monotonic() + START_TIMEOUT
+        while time.monotonic() < deadline:
             state = winutil.service_state(SERVICE_NAME)
             if state == "RUNNING":
                 if split:
@@ -281,6 +285,24 @@ class AwgManager:
             raise RuntimeError("Туннель AmneziaWG не запустился (служба: "
                                f"{state or 'нет'}). Если открыт AmneziaVPN, отключитесь в нём и "
                                "попробуйте снова." + (f"\n\nЖурнал AmneziaWG:\n{details}" if details else ""))
+
+    @staticmethod
+    def _wait_adapter_gone(timeout: float = 10) -> None:
+        """Адаптер прежнего туннеля удаляется не сразу; пока он есть, новый с тем же именем
+        создаётся очень долго (служба висит в START_PENDING на «Creating adapter»)."""
+        try:
+            import psutil
+        except ImportError:
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if TUNNEL_NAME not in psutil.net_if_stats():
+                    return
+            except Exception:
+                return
+            time.sleep(0.25)
+        log.warning("AmneziaWG: адаптер прежнего туннеля ещё не удалён")
 
     def service_log_tail(self, lines: int = 8) -> str:
         """Последние строки журнала службы туннеля — там причина, если туннель не запустился."""
@@ -317,7 +339,7 @@ class AwgManager:
             if winutil.service_state(SERVICE_NAME) is None:
                 break
             time.sleep(0.25)
-        else:  # клиент не справился — удаляем службу сами
+        else:  # клиент не справился (служба зависла) — останавливаем и удаляем её сами
             winutil.service_stop_delete(SERVICE_NAME)
         log.info("AmneziaWG выключен")
 

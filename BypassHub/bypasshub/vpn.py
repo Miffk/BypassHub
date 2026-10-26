@@ -26,9 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
-from urllib.request import urlopen
 
-from . import github, netfetch, tls, winutil
+from . import github, netfetch, winutil
 from .log import log
 
 REPO = "SagerNet/sing-box"
@@ -680,9 +679,8 @@ def pick_release(data: List[Dict[str, Any]]) -> Optional[github.Release]:
 
 def latest_release() -> github.Release:
     try:
-        req = github._request(f"https://api.github.com/repos/{REPO}/releases?per_page=40",
-                              "application/vnd.github+json")
-        with urlopen(req, timeout=15, context=tls.context()) as resp:
+        with github._open(f"https://api.github.com/repos/{REPO}/releases?per_page=40", 15,
+                          "application/vnd.github+json") as resp:
             rel = pick_release(json.loads(resp.read().decode("utf-8")))
         if rel is not None:
             return rel
