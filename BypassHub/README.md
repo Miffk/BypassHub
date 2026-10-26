@@ -91,6 +91,8 @@ build.bat
 
 - `bypasshub/vpn.py` — ключи VLESS (`parse_vless`), подписки, профили (`Profile`, `parse_input`), сборка config.json
   для sing-box (`build_config`) и `VpnManager` (запуск sing-box, системный прокси Windows, базы roscomvpn).
+- Кроме VLESS, sing-box получает серверы Hysteria2: ключи `hysteria2://` / `hy2://` и исходящие `hysteria` из
+  подписок в формате Xray JSON (`parse_hysteria2`, `_xray_hysteria_link`). Задержку до них без VPN не меряем — это UDP.
 - `bypasshub/awg.py` — ключи AmneziaVPN `vpn://` (base64url + qCompress + JSON, конфиг в `containers[].awg.last_config`),
   `.conf`, `AwgManager`: `amneziawg.exe` достаётся из официального .msi (`msiexec /a`), туннель ставится службой
   `amneziawg.exe /installtunnelservice` (служба `AmneziaWGTunnel$BypassHub`).

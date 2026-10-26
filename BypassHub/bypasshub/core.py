@@ -365,7 +365,9 @@ class Core:
                 real = True
             except Exception as exc:
                 log.debug("VPN: проверка задержек через sing-box: %r", exc)
-        rest = [p for p in vless if p.id not in result]
+        # Hysteria2 работает по UDP: время TCP-подключения к нему ничего не скажет, оставляем «—»
+        rest = [p for p in vless if p.id not in result
+                and not p.data.lower().startswith(vpn.HYSTERIA2_SCHEMES)]
         if rest:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(8) as ex:

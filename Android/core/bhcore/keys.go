@@ -42,6 +42,12 @@ type vlessKey struct {
 	ALPN                []string
 	Insecure            bool
 	Path, Host, Service string
+	// Hysteria2 (Protocol = "hysteria2"): пароль — в UUID; маскировка salamander, «прыжки» по портам, скорость
+	Protocol         string
+	ObfsPassword     string
+	ServerPorts      string // диапазон портов, например 20000-50000
+	HopInterval      int    // с
+	UpMbps, DownMbps int
 }
 
 var (
@@ -64,6 +70,13 @@ func urlDecode(s string) string {
 }
 
 func (k *vlessKey) summary() string {
+	if k.Protocol == "hysteria2" {
+		s := fmt.Sprintf("%s:%d · Hysteria2", k.Server, k.Port)
+		if k.ObfsPassword != "" {
+			s += " · salamander"
+		}
+		return s
+	}
 	sec := map[string]string{"reality": "Reality", "tls": "TLS", "none": "без TLS"}[k.Security]
 	if sec == "" {
 		sec = k.Security
@@ -76,8 +89,103 @@ func (k *vlessKey) summary() string {
 	return fmt.Sprintf("%s:%d · %s · %s", k.Server, k.Port, sec, tr)
 }
 
+var reLeadInt = regexp.MustCompile(`^\s*(\d+)`)
+
+func leadInt(s string) int {
+	if m := reLeadInt.FindStringSubmatch(s); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+// isKeyLine — ключ сервера для sing-box: vless:// или hysteria2:// (hy2://).
+func isKeyLine(line string) bool {
+	l := strings.ToLower(line)
+	return strings.HasPrefix(l, "vless://") || strings.HasPrefix(l, "hysteria2://") || strings.HasPrefix(l, "hy2://")
+}
+
+// parseHysteria2 — ключ hysteria2://пароль@host:port/?sni=…&obfs=salamander&obfs-password=…#имя
+// (порт может быть списком «443,20000-50000», mport — диапазон для «прыжков»).
+func parseHysteria2(raw string) (*vlessKey, error) {
+	body, fragment, _ := strings.Cut(raw, "#")
+	rest := body[strings.Index(body, "://")+3:]
+	netloc, tail, _ := strings.Cut(rest, "/")
+	query := ""
+	if i := strings.Index(netloc, "?"); i >= 0 {
+		netloc, query = netloc[:i], netloc[i+1:]
+	} else if _, q, ok := strings.Cut(tail, "?"); ok {
+		query = q
+	}
+	at := strings.LastIndex(netloc, "@")
+	if at <= 0 {
+		return nil, errors.New("В ключе Hysteria2 нет пароля")
+	}
+	auth, hostPort := netloc[:at], netloc[at+1:]
+	server, ports := hostPort, ""
+	if strings.HasPrefix(hostPort, "[") {
+		if end := strings.Index(hostPort, "]"); end > 0 {
+			server, ports = hostPort[1:end], strings.TrimPrefix(hostPort[end+1:], ":")
+		}
+	} else if i := strings.Index(hostPort, ":"); i >= 0 {
+		server, ports = hostPort[:i], hostPort[i+1:]
+	}
+	if ports == "" {
+		ports = "443"
+	}
+	q := map[string]string{}
+	for _, part := range strings.Split(query, "&") {
+		if part == "" {
+			continue
+		}
+		key, val, _ := strings.Cut(part, "=")
+		q[urlDecode(key)] = strings.TrimSpace(urlDecode(val))
+	}
+	port := leadInt(strings.FieldsFunc(ports, func(r rune) bool { return r == ',' || r == '-' })[0])
+	hop := q["mport"]
+	if hop == "" && strings.ContainsAny(ports, ",-") {
+		if _, after, ok := strings.Cut(ports, ","); ok {
+			hop = after
+		} else {
+			hop = ports
+		}
+	}
+	if server == "" || port <= 0 || port > 65535 {
+		return nil, errors.New("В ключе Hysteria2 нет адреса сервера или порта")
+	}
+	obfs := q["obfs"]
+	if obfs != "" && !strings.EqualFold(obfs, "salamander") {
+		return nil, fmt.Errorf("Маскировка Hysteria2 «%s» не поддерживается", obfs)
+	}
+	k := &vlessKey{URI: raw, Server: server, Port: port, UUID: urlDecode(auth), Security: "tls",
+		Protocol: "hysteria2", ServerPorts: strings.ReplaceAll(hop, ":", "-"), HopInterval: leadInt(q["hopinterval"]),
+		UpMbps: leadInt(q["upmbps"]), DownMbps: leadInt(q["downmbps"])}
+	k.SNI = q["sni"]
+	if k.SNI == "" {
+		k.SNI = q["peer"]
+	}
+	if obfs != "" {
+		k.ObfsPassword = q["obfs-password"]
+	}
+	for _, a := range strings.Split(q["alpn"], ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			k.ALPN = append(k.ALPN, a)
+		}
+	}
+	ins := strings.ToLower(q["insecure"])
+	k.Insecure = ins == "1" || ins == "true"
+	k.Name = strings.TrimSpace(urlDecode(fragment))
+	if k.Name == "" {
+		k.Name = fmt.Sprintf("%s:%d", k.Server, k.Port)
+	}
+	return k, nil
+}
+
 func parseVless(text string) (*vlessKey, error) {
 	raw := strings.TrimSpace(text)
+	if l := strings.ToLower(raw); strings.HasPrefix(l, "hysteria2://") || strings.HasPrefix(l, "hy2://") {
+		return parseHysteria2(raw)
+	}
 	if !strings.HasPrefix(strings.ToLower(raw), "vless://") {
 		return nil, errors.New("Это не ключ VLESS — он должен начинаться с vless://")
 	}
@@ -199,8 +307,55 @@ func parseVless(text string) (*vlessKey, error) {
 
 var reEarlyData = regexp.MustCompile(`[?&]ed=(\d+)`)
 
+func (k *vlessKey) hysteria2Outbound(tag string) map[string]any {
+	tls := map[string]any{"enabled": true}
+	name := k.SNI
+	if name == "" && !isIP(k.Server) {
+		name = k.Server
+	}
+	if name != "" {
+		tls["server_name"] = name
+	}
+	if len(k.ALPN) > 0 {
+		tls["alpn"] = k.ALPN
+	}
+	if k.Insecure {
+		tls["insecure"] = true
+	}
+	ob := map[string]any{"type": "hysteria2", "tag": tag, "server": k.Server, "server_port": k.Port,
+		"password": k.UUID, "tls": tls}
+	if k.ObfsPassword != "" {
+		ob["obfs"] = map[string]any{"type": "salamander", "password": k.ObfsPassword}
+	}
+	var ports []string
+	for _, p := range strings.Split(k.ServerPorts, ",") {
+		if p = strings.ReplaceAll(strings.TrimSpace(p), "-", ":"); p != "" {
+			if !strings.Contains(p, ":") {
+				p += ":" + p
+			}
+			ports = append(ports, p)
+		}
+	}
+	if len(ports) > 0 {
+		ob["server_ports"] = ports
+		if k.HopInterval > 0 {
+			ob["hop_interval"] = fmt.Sprintf("%ds", k.HopInterval)
+		}
+	}
+	if k.UpMbps > 0 {
+		ob["up_mbps"] = k.UpMbps
+	}
+	if k.DownMbps > 0 {
+		ob["down_mbps"] = k.DownMbps
+	}
+	return ob
+}
+
 // outbound — исходящее sing-box для этого сервера.
 func (k *vlessKey) outbound(tag string) map[string]any {
+	if k.Protocol == "hysteria2" {
+		return k.hysteria2Outbound(tag)
+	}
 	ob := map[string]any{"type": "vless", "tag": tag, "server": k.Server, "server_port": k.Port, "uuid": k.UUID,
 		"packet_encoding": "xudp"}
 	if k.Flow != "" {
@@ -527,7 +682,140 @@ func isPlaceholder(k *vlessKey) bool {
 	return placeholderHosts[strings.ToLower(k.Server)] || k.Port <= 1
 }
 
-const brokenVless = "vless?" // сервер VLESS, который не удалось разобрать
+const (
+	brokenVless    = "vless?" // сервер VLESS, который не удалось разобрать
+	brokenHysteria = "hysteria?"
+)
+
+// walkMaps — все объекты внутри JSON (для полей, место которых в разных версиях Xray разное).
+func walkMaps(v any, fn func(map[string]any) bool) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		if fn(x) {
+			return true
+		}
+		for _, c := range x {
+			if walkMaps(c, fn) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range x {
+			if walkMaps(c, fn) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// xrayHysteriaLink — исходящее Hysteria (Xray 26+: protocol hysteria, version 2) → ключ hysteria2://.
+func xrayHysteriaLink(ob map[string]any, name string, str func(map[string]any, string) string,
+	obj func(map[string]any, string) map[string]any) string {
+	settings := obj(ob, "settings")
+	ss := obj(ob, "streamSettings")
+	hs := obj(ss, "hysteriaSettings")
+	srv := settings
+	for _, key := range []string{"servers", "vnext"} {
+		if list, _ := settings[key].([]any); len(list) > 0 {
+			if m, _ := list[0].(map[string]any); m != nil {
+				srv = m
+			}
+		}
+	}
+	version := leadInt(str(hs, "version"))
+	if version == 0 {
+		version = leadInt(str(settings, "version"))
+	}
+	if version != 0 && version != 2 {
+		return ""
+	}
+	host, port := str(srv, "address"), leadInt(str(srv, "port"))
+	auth := ""
+	for _, v := range []string{str(hs, "auth"), str(hs, "password"), str(srv, "password"), str(settings, "password")} {
+		if v != "" {
+			auth = v
+			break
+		}
+	}
+	if auth == "" {
+		if users, _ := srv["users"].([]any); len(users) > 0 {
+			if u, _ := users[0].(map[string]any); u != nil {
+				auth = str(u, "password")
+			}
+		}
+	}
+	if host == "" || port == 0 || auth == "" {
+		return ""
+	}
+	tls := obj(ss, "tlsSettings")
+	q := url.Values{}
+	if v := str(tls, "serverName"); v != "" {
+		q.Set("sni", v)
+	}
+	if b, _ := tls["allowInsecure"].(bool); b {
+		q.Set("insecure", "1")
+	}
+	if alpn, _ := tls["alpn"].([]any); len(alpn) > 0 {
+		parts := make([]string, 0, len(alpn))
+		for _, a := range alpn {
+			if s, ok := a.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		q.Set("alpn", strings.Join(parts, ","))
+	}
+	walkMaps(ss, func(m map[string]any) bool { // маскировка salamander: в finalmask/udpmasks или в настройках
+		kind := strings.ToLower(str(m, "type"))
+		if kind == "" {
+			kind = strings.ToLower(str(m, "name"))
+		}
+		if kind != "salamander" {
+			return false
+		}
+		pw := str(m, "password")
+		if pw == "" {
+			pw = str(obj(m, "settings"), "password")
+		}
+		if pw == "" {
+			return false
+		}
+		q.Set("obfs", "salamander")
+		q.Set("obfs-password", pw)
+		return true
+	})
+	if q.Get("obfs") == "" {
+		if pw := str(hs, "obfs"); pw != "" {
+			q.Set("obfs", "salamander")
+			q.Set("obfs-password", pw)
+		}
+	}
+	hop := obj(hs, "udphop")
+	if len(hop) == 0 {
+		hop = obj(hs, "hop")
+	}
+	if p := str(hop, "port"); p != "" {
+		q.Set("mport", strings.ReplaceAll(p, ":", "-"))
+		if n := leadInt(str(hop, "interval")); n > 0 {
+			q.Set("hopinterval", strconv.Itoa(n))
+		}
+	}
+	for _, k := range []string{"up", "down"} {
+		if n := leadInt(str(hs, k)); n > 0 {
+			q.Set(k+"mbps", strconv.Itoa(n))
+		}
+	}
+	hostPart := host
+	if strings.Contains(host, ":") {
+		hostPart = "[" + host + "]"
+	}
+	label := name
+	if label == "" {
+		label = host
+	}
+	return fmt.Sprintf("hysteria2://%s@%s:%d/?%s#%s", url.QueryEscape(auth), hostPart, port, q.Encode(),
+		url.PathEscape(label))
+}
 
 var proxyProtocols = map[string]bool{"vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true,
 	"hysteria2": true, "tuic": true, "wireguard": true, "socks": true, "http": true}
@@ -582,6 +870,15 @@ func xrayJSONLinks(text string) (links, skipped []string, ok bool) {
 				continue
 			}
 			proto := str(ob, "protocol")
+			if proto == "hysteria" || proto == "hysteria2" {
+				if link := xrayHysteriaLink(ob, name, str, obj); link != "" {
+					links = append(links, link)
+					found = true
+					break
+				}
+				other = brokenHysteria
+				continue
+			}
 			if proto != "vless" {
 				if other == "" && proxyProtocols[proto] {
 					other = proto
@@ -715,7 +1012,7 @@ func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices 
 		if line == "" || !strings.Contains(line, "://") {
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(line), "vless://") {
+		if !isKeyLine(line) {
 			other++
 			continue
 		}
@@ -736,18 +1033,24 @@ func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices 
 		}
 		keys = append(keys, vlessProfile(k, sub))
 	}
-	broken := 0
+	brokenV, brokenH := 0, 0
 	kept := jsonSkipped[:0]
 	for _, x := range jsonSkipped {
-		if x == brokenVless {
-			broken++
-		} else {
+		switch x {
+		case brokenVless:
+			brokenV++
+		case brokenHysteria:
+			brokenH++
+		default:
 			kept = append(kept, x)
 		}
 	}
 	jsonSkipped = kept
-	if broken > 0 {
-		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов VLESS в формате Xray JSON: %d", broken))
+	if brokenV > 0 {
+		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов VLESS в формате Xray JSON: %d", brokenV))
+	}
+	if brokenH > 0 {
+		problems = append(problems, fmt.Sprintf("не удалось разобрать серверов Hysteria в формате Xray JSON: %d", brokenH))
 	}
 	other += len(jsonSkipped)
 	if other > 0 {
@@ -764,7 +1067,7 @@ func parseSubscriptionText(text, sub string) (keys []Profile, problems, notices 
 			sort.Strings(uniq)
 			kinds = " (" + strings.Join(uniq, ", ") + ")"
 		}
-		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS)%s: %d", kinds, other))
+		problems = append(problems, fmt.Sprintf("пропущено ключей других типов (не VLESS и не Hysteria2)%s: %d", kinds, other))
 	}
 	return keys, problems, notices
 }
@@ -821,7 +1124,7 @@ func parseInput(text string) ParsedInput {
 		out.Profiles = append(out.Profiles, keys...)
 		out.Problems = append(out.Problems, problems...)
 		if len(keys) == 0 && len(problems) == 0 && len(out.Profiles) == 0 && len(out.Subscriptions) == 0 {
-			out.Problems = append(out.Problems, "Не нашёл ключей. Подходят vless://…, vpn://… (AmneziaVPN), "+
+			out.Problems = append(out.Problems, "Не нашёл ключей. Подходят vless://…, hysteria2://…, vpn://… (AmneziaVPN), "+
 				"конфиг AmneziaWG или ссылка на подписку.")
 		}
 	}
@@ -856,7 +1159,7 @@ func ParseSubscription(body, url string) string {
 // VlessEndpoint — адрес и порт сервера из ключа vless:// (для пинга); пусто, если ключ не разобрать.
 func VlessEndpoint(uri string) string {
 	k, err := parseVless(uri)
-	if err != nil {
+	if err != nil || k.Protocol == "hysteria2" { // Hysteria2 работает по UDP — TCP-пинг к нему ничего не скажет
 		return ""
 	}
 	return net.JoinHostPort(k.Server, strconv.Itoa(k.Port))

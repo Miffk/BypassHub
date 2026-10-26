@@ -16,7 +16,7 @@ struct ServersView: View {
         ScrollView {
             VStack(spacing: 14) {
                 Card("Добавить сервер") {
-                    Hint("Ключ vless://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), конфиг AmneziaWG " +
+                    Hint("Ключ vless://… или hysteria2://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), конфиг AmneziaWG " +
                          "или ссылка на подписку https://…. Можно несколько ключей — по одному на строку.")
                     TextEditor(text: $input)
                         .font(.system(.footnote, design: .monospaced))

@@ -149,7 +149,7 @@ func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
 		s.Profiles[2].Name != "FI new" {
 		t.Fatalf("xray json: %+v", s)
 	}
-	if len(s.Problems) != 1 || s.Problems[0] != "пропущено ключей других типов (не VLESS) (trojan): 1" {
+	if len(s.Problems) != 1 || s.Problems[0] != "пропущено ключей других типов (не VLESS и не Hysteria2) (trojan): 1" {
 		t.Fatalf("problems: %v", s.Problems)
 	}
 	de, err := parseVless(s.Profiles[0].Data)
@@ -167,5 +167,54 @@ func TestSubscriptionXrayJSONAndNotices(t *testing.T) {
 	_ = json.Unmarshal([]byte(ParseSubscription(stub, "https://sub")), &s)
 	if len(s.Profiles) != 0 || len(s.Notices) != 1 || s.Notices[0] != "Лимит устройств" {
 		t.Fatalf("stub: %+v", s)
+	}
+}
+
+const keyHY2 = "hysteria2://p%40ss@de.example.com:443/?sni=de.example.com&obfs=salamander&obfs-password=salt&mport=20000-50000#DE%20Hysteria"
+
+func TestHysteria2(t *testing.T) {
+	k, err := parseVless(keyHY2)
+	if err != nil || k.Protocol != "hysteria2" || k.UUID != "p@ss" || k.ObfsPassword != "salt" ||
+		k.ServerPorts != "20000-50000" || k.Name != "DE Hysteria" || k.Port != 443 {
+		t.Fatalf("hy2: %+v %v", k, err)
+	}
+	k2, err := parseVless("hy2://secret@1.2.3.4:443,5000-6000?insecure=1#x")
+	if err != nil || k2.Port != 443 || k2.ServerPorts != "5000-6000" || !k2.Insecure {
+		t.Fatalf("hy2 short: %+v %v", k2, err)
+	}
+	if VlessEndpoint(keyHY2) != "" {
+		t.Fatal("UDP-сервер не пингуется по TCP")
+	}
+	vr, _ := parseVless(keyReality)
+	servers := []map[string]any{vr.outbound("a"), k.outbound("b"), k2.outbound("c")}
+	cfg := buildVPNConfig(serverGroup(servers, autoTag), true, map[string]string{}, 9090, "s", nil, nil)
+	if err := CheckConfig(cfg); err != nil {
+		t.Fatalf("VPN с Hysteria2: %v\n%s", err, cfg)
+	}
+	if !strings.Contains(cfg, `"type":"hysteria2"`) || !strings.Contains(cfg, `"20000:50000"`) {
+		t.Fatalf("нет hysteria2 в конфиге: %s", cfg)
+	}
+	// Hysteria в Xray JSON (как его отдаёт Remnawave для Happ)
+	sub := `[{"remarks": "DE Hysteria", "outbounds": [
+	  {"protocol": "hysteria", "settings": {"version": 2, "address": "de.example.com", "port": 443},
+	   "streamSettings": {"network": "hysteria", "security": "tls",
+	    "tlsSettings": {"serverName": "de.example.com", "alpn": ["h3"]},
+	    "hysteriaSettings": {"version": 2, "auth": "pw", "udphop": {"port": "20000-30000", "interval": 30}},
+	    "finalmask": {"udp": [{"type": "salamander", "settings": {"password": "salt"}}]}}},
+	  {"protocol": "freedom"}]},
+	 {"remarks": "broken", "outbounds": [{"protocol": "hysteria", "settings": {"version": 2}}]}]`
+	var s struct {
+		Profiles []Profile
+		Problems []string
+	}
+	_ = json.Unmarshal([]byte(ParseSubscription(sub, "https://sub")), &s)
+	if len(s.Profiles) != 1 || len(s.Problems) != 1 ||
+		s.Problems[0] != "не удалось разобрать серверов Hysteria в формате Xray JSON: 1" {
+		t.Fatalf("xray hysteria: %+v", s)
+	}
+	h, err := parseVless(s.Profiles[0].Data)
+	if err != nil || h.UUID != "pw" || h.ObfsPassword != "salt" || h.ServerPorts != "20000-30000" ||
+		h.HopInterval != 30 || h.SNI != "de.example.com" || h.Name != "DE Hysteria" {
+		t.Fatalf("xray hysteria key: %+v %v", h, err)
 	}
 }
