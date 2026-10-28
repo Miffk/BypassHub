@@ -131,3 +131,43 @@ def test_vpn_adapters(monkeypatch):
         "Ethernet": [addr("192.168.31.129")], "WireGuard Tunnel": [addr("10.0.0.2")]})
     monkeypatch.setattr(psutil, "net_if_stats", lambda: {"WireGuard Tunnel": NS(isup=False)})
     assert tgproxy.vpn_adapters() == ["AmneziaVPN"]  # Radmin VPN локальную сеть не блокирует
+
+
+def test_tg_config_not_rewritten_when_unchanged(tmp_path):
+    """Конфиг перезаписывается только при изменениях: TgWsProxy сам пишет его при запуске,
+    и свежий файл при загрузке ПК бывает занят (PermissionError у TgWsProxy)."""
+    tg = tgproxy.TgProxyManager(tmp_path)
+    tg.ensure_config()
+    before = tg.config_file.stat().st_mtime_ns
+    import os
+    os.utime(tg.config_file, ns=(before - 10**9, before - 10**9))
+    tg.ensure_config()
+    assert tg.config_file.stat().st_mtime_ns == before - 10**9
+    cfg = tg.load_config()
+    cfg["port"] = 2222
+    tg.save_config(cfg)
+    assert tg.load_config()["port"] == 2222
+
+
+def test_tg_restarted_when_port_stays_closed(tmp_path, monkeypatch):
+    """TgWsProxy упал при запуске (окно ошибки держит процесс, порт закрыт) — перезапуск."""
+    from bypasshub import winutil
+    tg = tgproxy.TgProxyManager(tmp_path)
+    tg.exe.parent.mkdir(parents=True, exist_ok=True)
+    tg.exe.write_bytes(b"x")
+    state = {"running": False, "launches": 0}
+    monkeypatch.setattr(tg, "_own_processes", lambda: [object()] if state["running"] else [])
+    monkeypatch.setattr(winutil, "find_processes_like", lambda name: [])
+
+    def popen(cmd, cwd=None, stdout=None, detached=False):
+        state["running"] = True
+        state["launches"] += 1
+
+    monkeypatch.setattr(winutil, "popen_hidden", popen)
+    monkeypatch.setattr(tg, "stop", lambda: state.update(running=False))
+    # первый запуск порт не открыл, второй — открыл
+    monkeypatch.setattr(winutil, "port_listening", lambda port, host="127.0.0.1": state["launches"] >= 2)
+    monkeypatch.setattr(tgproxy.time, "sleep", lambda s: None)
+    monkeypatch.setattr(tgproxy, "START_TIMEOUT", 0.05)
+    tg.start()
+    assert state["launches"] == 2

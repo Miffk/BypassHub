@@ -25,6 +25,7 @@ from .log import log
 REPO = "Flowseal/tg-ws-proxy"
 EXE_NAME = "TgWsProxy.exe"
 PORTABLE_DIR = "TgWsProxy_data"
+START_TIMEOUT = 12.0  # сколько ждать, пока прокси откроет порт, с
 
 ASSETS = {
     "TgWsProxy_windows.exe": "Windows 10/11 x64",
@@ -328,8 +329,15 @@ class TgProxyManager:
         data = dict(cfg)
         data["check_updates"] = False
         data["autostart"] = False
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+        try:
+            if self.config_file.read_text(encoding="utf-8") == text:
+                return  # не трогаем: свежий файл при загрузке ПК бывает занят антивирусом как раз тогда,
+                # когда TgWsProxy сам сохраняет конфиг, — и TgWsProxy падает с PermissionError
+        except OSError:
+            pass
         tmp = self.config_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
         tmp.replace(self.config_file)
 
     def ensure_config(self) -> Dict[str, Any]:
@@ -338,7 +346,8 @@ class TgProxyManager:
         # не показывать окно первого запуска и предупреждение об IPv6 —
         # подключение к Telegram настраивается из BypassHub
         for marker in (".first_run_done_mtproto", ".ipv6_warned"):
-            (self.data_dir / marker).touch(exist_ok=True)
+            if not (self.data_dir / marker).exists():
+                (self.data_dir / marker).touch()
         return cfg
 
     # ---------------------------------------------------------- статус
@@ -370,14 +379,35 @@ class TgProxyManager:
         if foreign:
             raise RuntimeError("Уже запущен другой TgWsProxy:\n" + "\n".join(p.exe or p.name for p in foreign)
                                + "\nЗакройте его (значок в трее → Выход) и попробуйте снова.")
-        self.ensure_config()
-        log.info("Запуск tg-ws-proxy")
-        winutil.popen_hidden([str(self.exe)], cwd=self.root, detached=True)
-        for _ in range(20):
-            time.sleep(0.25)
-            if self._own_processes():
+        cfg = self.ensure_config()
+        for attempt in range(2):
+            log.info("Запуск tg-ws-proxy")
+            winutil.popen_hidden([str(self.exe)], cwd=self.root, detached=True)
+            for _ in range(20):
+                time.sleep(0.25)
+                if self._own_processes():
+                    break
+            else:
+                raise RuntimeError("tg-ws-proxy не запустился. Подробности — в логе прокси.")
+            if self._wait_listening(cfg) or attempt:
                 return
-        raise RuntimeError("tg-ws-proxy не запустился. Подробности — в логе прокси.")
+            # TgWsProxy упал при запуске (например, не смог записать свой config.json при загрузке ПК):
+            # окно с ошибкой держит процесс живым, а порт закрыт — закрываем его и пробуем ещё раз
+            log.warning("tg-ws-proxy не открыл порт %s — перезапуск", cfg.get("port"))
+            self.stop()
+            time.sleep(1.0)
+
+    def _wait_listening(self, cfg: Dict[str, Any]) -> bool:
+        """Дождаться, пока прокси откроет порт (False — не открыл или процесс завершился)."""
+        port, host = int(cfg.get("port", 1443)), cfg.get("host", "127.0.0.1")
+        deadline = time.monotonic() + START_TIMEOUT
+        while time.monotonic() < deadline:
+            if winutil.port_listening(port, host):
+                return True
+            if not self._own_processes():
+                return False
+            time.sleep(0.3)
+        return winutil.port_listening(port, host)
 
     def stop(self) -> None:
         procs = self._own_processes()
