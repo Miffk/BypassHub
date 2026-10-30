@@ -30,8 +30,7 @@ UNIT_DIR = Path("/etc/systemd/system")
 HOSTS = Path("/etc/hosts")
 
 # Программы, которые помощник запускает по просьбе окна
-RUN_ALLOWED = ("nft", "iptables", "ip6tables", "ip", "systemctl", "modprobe", "awg-quick", "awg",
-               "resolvectl", "ufw", "firewall-cmd")
+RUN_ALLOWED = ("nft", "iptables", "ip6tables", "systemctl", "modprobe", "resolvectl", "ufw", "firewall-cmd")
 
 
 def data_home() -> Path:

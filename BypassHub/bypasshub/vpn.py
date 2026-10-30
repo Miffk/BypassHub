@@ -730,6 +730,11 @@ def awg_outbound(interface: str, tag: str = "proxy") -> Dict[str, Any]:
     return {"type": "direct", "tag": tag, "bind_interface": interface}
 
 
+def socks_outbound(port: int, tag: str = "proxy") -> Dict[str, Any]:
+    """«Через VPN» = в локальный SOCKS5 туннеля AmneziaWG (Linux, bypasshub-awg)."""
+    return {"type": "socks", "tag": tag, "server": "127.0.0.1", "server_port": int(port), "version": "5"}
+
+
 def server_group(servers: List[Dict[str, Any]], selected: str) -> List[Dict[str, Any]]:
     """Несколько серверов в одном конфиге: каждый со своим тегом (id профиля),
     «auto» — лучший по задержке (sing-box сам проверяет их и переключается),

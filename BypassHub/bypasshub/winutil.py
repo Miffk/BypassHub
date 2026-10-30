@@ -187,6 +187,25 @@ def kill_by_name(name: str) -> None:
         kill_pid_tree(p.pid)
 
 
+def restore_library_path(env: Optional[dict] = None) -> dict:
+    """Собранная программа в Linux: загрузчик PyInstaller дописывает в LD_LIBRARY_PATH папку своих
+    библиотек (Qt, GLib…), а прежнее значение хранит в LD_LIBRARY_PATH_ORIG. Запущенные нами программы
+    (TgWsProxy, kwriteconfig6, xdg-open…) не должны получать чужие библиотеки — возвращаем как было.
+    Сам процесс это не затрагивает: пути к библиотекам загрузчик читает только при старте."""
+    env = os.environ if env is None else env
+    if IS_LINUX and getattr(sys, "frozen", False):
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:  # и прочие пути внутрь распакованной сборки (QT_PLUGIN_PATH и т. п.)
+            for key in [k for k, v in env.items() if meipass in v and k != "PATH"]:
+                del env[key]
+    return env
+
+
 def clean_env() -> dict:
     """Окружение для запуска других программ из собранного exe.
 
@@ -194,7 +213,7 @@ def clean_env() -> dict:
     _MEIPASS2) и свою временную папку в PATH. Если запустить exe с тем же путём
     (например, обновлённый BypassHub.exe), он решит, что уже распакован, и
     возьмёт файлы из временной папки старого процесса, которая исчезает."""
-    env = os.environ.copy()
+    env = restore_library_path(os.environ.copy())
     for key in list(env):
         if key.startswith("_PYI_") or key.startswith("_MEIPASS"):
             del env[key]

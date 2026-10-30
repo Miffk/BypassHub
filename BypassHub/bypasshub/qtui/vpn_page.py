@@ -113,8 +113,8 @@ class VpnPage(Page):
         body = W.section(self.lay, "AmneziaWG",
                          "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
                          "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
-                         + ("для AmneziaWG работают через sing-box. В Linux нужны пакеты amneziawg-tools и "
-                            "amneziawg-dkms (или amneziawg-go), например из AUR."
+                         + ("для AmneziaWG работают через sing-box. В Linux AmneziaWG встроен в BypassHub и "
+                            "работает без модуля ядра — ставить ничего не нужно."
                             if winutil.IS_LINUX else
                             "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG."))
         self.lan_access = W.Toggle("Без раздельного туннелирования: оставить доступ к локальной сети",

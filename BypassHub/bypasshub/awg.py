@@ -6,9 +6,10 @@ amneziawg.exe, а BypassHub ставит туннель как службу ко
 `amneziawg.exe /installtunnelservice <файл.conf>` — так же, как это делает сам
 клиент. Отдельно ставить AmneziaWG или AmneziaVPN не нужно.
 
-В Linux туннель поднимает awg-quick из пакета amneziawg-tools (с модулем ядра
-amneziawg-dkms или amneziawg-go) — его ставит пользователь, BypassHub вызывает
-awg-quick через помощника с правами root (linux.py).
+В Linux туннель поднимает bypasshub-awg — ядро AmneziaWG из Android-версии
+(Android/core/cmd/bypasshub-awg), встроенное в сборку BypassHub. Он работает в пространстве
+пользователя, без модуля ядра и прав root, и открывает локальный SOCKS5; трафик в него
+направляет sing-box (во всех режимах — и «Весь трафик», и «Системный прокси»).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import github, linux, winutil
+from . import github, winutil
 from .log import log
 
 REPO = "amnezia-vpn/amneziawg-windows-client"
@@ -34,9 +35,21 @@ SERVICE_NAME = f"AmneziaWGTunnel${TUNNEL_NAME}"
 START_TIMEOUT = 60                        # сколько ждать запуска службы туннеля, с
 FALLBACK_METRIC = 9000
 WINTUN_DLL = "wintun.dll"  # драйвер сетевого адаптера; служба загружает его из папки amneziawg.exe
-LINUX_HINT = ("Для ключей AmneziaVPN в Linux нужен AmneziaWG: пакеты amneziawg-tools и amneziawg-dkms "
-              "(или amneziawg-go), например из AUR: paru -S amneziawg-tools amneziawg-dkms. "
-              "После установки включите VPN ещё раз.")
+LINUX_EXE = "bypasshub-awg"
+LINUX_HINT = ("Не найден bypasshub-awg (AmneziaWG для Linux). Он входит в собранный BypassHub-linux-x86_64; "
+              "при запуске из исходников соберите его: cd Android/core && go build -o "
+              "~/.local/bin/bypasshub-awg ./cmd/bypasshub-awg")
+LINUX_START_TIMEOUT = 15  # сколько ждать, пока bypasshub-awg откроет SOCKS5, с
+
+
+def linux_engine() -> Optional[Path]:
+    """bypasshub-awg: внутри сборки (assets/bin) или в PATH (запуск из исходников)."""
+    from .paths import resource_path
+    bundled = resource_path("bin/" + LINUX_EXE)
+    if bundled.is_file():
+        return bundled
+    found = shutil.which(LINUX_EXE)
+    return Path(found) if found else None
 
 
 # ====================================================================== ключи
@@ -210,18 +223,10 @@ def prepare_conf(conf: str, lan_access: bool = True, split: bool = False) -> str
 
 # ====================================================================== релизы клиента
 
-def split_dns(conf: str) -> "tuple[str, List[str]]":
-    """Убирает строки DNS = из конфига и возвращает их адреса (в Linux без resolvconf
-    awg-quick с DNS не запускается — тогда DNS туннеля задаём через resolvectl)."""
-    dns: List[str] = []
-    lines = []
-    for ln in conf.splitlines():
-        m = re.match(r"(?i)\s*DNS\s*=\s*(.*)$", ln)
-        if m:
-            dns += [d.strip() for d in m.group(1).split(",") if d.strip()]
-            continue
-        lines.append(ln)
-    return "\n".join(lines) + "\n", dns
+def parse_socks_port(text: str) -> int:
+    """Порт из первой строки bypasshub-awg «SOCKS5 127.0.0.1:<порт>» (0 — ещё не запустился)."""
+    m = re.search(r"^SOCKS5 127\.0\.0\.1:(\d+)\s*$", text, re.MULTILINE)
+    return int(m.group(1)) if m else 0
 
 
 def asset_name(version: str) -> str:
@@ -262,72 +267,90 @@ class AwgManager:
     def version_file(self) -> Path:
         return self.root / "version.txt"
 
+    @property
+    def linux_exe(self) -> Path:
+        return self.root / LINUX_EXE
+
+    @property
+    def linux_log(self) -> Path:
+        return self.root / "awg.log"
+
     def is_installed(self) -> bool:
         if winutil.IS_LINUX:
-            return bool(linux.which("awg-quick") and linux.which("awg"))
+            return linux_engine() is not None
         # без wintun.dll рядом служба туннеля сразу останавливается (так было в 1.3.0 до исправления)
         return self.exe.exists() and (self.root / WINTUN_DLL).exists()
 
     def local_version(self) -> str:
-        if winutil.IS_LINUX:
-            awg_bin = linux.which("awg")
-            if not awg_bin:
-                return ""
-            m = re.search(r"v?(\d+(?:\.\d+)+)", winutil.run([awg_bin, "--version"], timeout=10).stdout)
-            return m.group(1) if m else ""
+        if winutil.IS_LINUX:  # ядро встроено в BypassHub — его версия
+            from . import __version__
+            return __version__
         try:
             return self.version_file.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
 
-    @staticmethod
-    def _linux_up() -> bool:
-        try:
-            import psutil
-            return TUNNEL_NAME in psutil.net_if_stats()
-        except Exception:
-            return False
+    def _linux_procs(self) -> List[winutil.ProcInfo]:
+        return [p for p in winutil.find_processes(LINUX_EXE) if p.exe and winutil.same_path(p.exe, self.linux_exe)]
 
     def status(self) -> AwgStatus:
         if winutil.IS_LINUX:
-            up = self._linux_up()
-            return AwgStatus(installed=self.is_installed(), version=self.local_version() if up else "",
+            up = bool(self._linux_procs())
+            return AwgStatus(installed=self.is_installed(), version=self.local_version(),
                              running=up, state="RUNNING" if up else None)
         state = winutil.service_state(SERVICE_NAME)
         return AwgStatus(installed=self.is_installed(), version=self.local_version(),
                          running=state in ("RUNNING", "START_PENDING"), state=state)
 
-    def _start_linux(self, profile: AwgProfile, split: bool) -> None:
-        if not self.is_installed():
+    def _start_linux(self, profile: AwgProfile) -> int:
+        """Запускает bypasshub-awg от имени пользователя; возвращает порт его SOCKS5."""
+        engine = linux_engine()
+        if engine is None:
             raise RuntimeError(LINUX_HINT)
         self.stop()
-        # доступ к локальной сети awg-quick сохраняет сам (suppress_prefixlength), а половинки
-        # 0.0.0.0/1 + 128.0.0.0/1 в Linux завернули бы в туннель и пакеты к самому серверу
-        conf = prepare_conf(profile.conf, lan_access=False, split=split)
-        conf, dns = split_dns(conf)
-        use_resolvconf = bool(dns) and not split and bool(linux.which("resolvconf"))
-        if use_resolvconf:
-            conf = re.sub(r"(?im)^(\s*\[Interface\]\s*)$", lambda m: m.group(1) + "\nDNS = " + ", ".join(dns),
-                          conf, count=1)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.conf_file.write_text(conf, encoding="utf-8")
+        # своя копия в папке данных: путь не меняется между запусками (по нему находим процесс)
+        if not self.linux_exe.exists() or self.linux_exe.read_bytes() != engine.read_bytes():
+            tmp = self.linux_exe.with_name(LINUX_EXE + ".new")
+            shutil.copyfile(engine, tmp)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, self.linux_exe)
+        # маршруты и DNS туннеля не нужны: что пускать в него, решает sing-box
+        self.conf_file.write_text(prepare_conf(profile.conf, lan_access=False, split=True), encoding="utf-8")
         os.chmod(self.conf_file, 0o600)  # в файле закрытый ключ
         log.info("Запуск AmneziaWG: %s (%s)", profile.name, profile.endpoint)
-        h = linux.helper()
-        res = h.run(["awg-quick", "up", str(self.conf_file)], timeout=90)
-        if res["rc"] != 0:
-            raise RuntimeError("Туннель AmneziaWG не запустился:\n" + (res["out"].strip()[-1500:] or
-                                                                     f"код {res['rc']}"))
-        if split:
-            h.run(["ip", "route", "replace", "default", "dev", TUNNEL_NAME, "metric", str(FALLBACK_METRIC)])
-        elif dns and not use_resolvconf and linux.which("resolvectl"):
-            h.run(["resolvectl", "dns", TUNNEL_NAME] + dns)
-            h.run(["resolvectl", "domain", TUNNEL_NAME, "~."])
+        logf = open(self.linux_log, "wb")
+        try:
+            proc = winutil.popen_hidden([str(self.linux_exe), str(self.conf_file)], cwd=self.root, stdout=logf,
+                                        detached=True)
+        finally:
+            logf.close()
+        deadline = time.monotonic() + LINUX_START_TIMEOUT
+        while time.monotonic() < deadline:
+            port = parse_socks_port(self._linux_log_text())
+            if port:
+                return port
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        winutil.kill_pid_tree(proc.pid)
+        details = self._linux_log_text().strip()
+        raise RuntimeError("AmneziaWG не запустился" + (f":\n{details[-1500:]}" if details else ""))
 
-    def start(self, profile: AwgProfile, lan_access: bool = True, split: bool = False) -> None:
+    def _linux_log_text(self) -> str:
+        try:
+            return self.linux_log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def socks_port(self) -> int:
+        """Порт SOCKS5 запущенного bypasshub-awg (0 — не запущен)."""
+        return parse_socks_port(self._linux_log_text()) if self._linux_procs() else 0
+
+    def start(self, profile: AwgProfile, lan_access: bool = True, split: bool = False) -> int:
+        """Windows — служба туннеля (возвращает 0); Linux — bypasshub-awg, возвращает порт SOCKS5."""
         if winutil.IS_LINUX:
-            self._start_linux(profile, split)
-            return
+            return self._start_linux(profile)
         if not self.is_installed():
             raise RuntimeError("Клиент AmneziaWG ещё не скачан")
         self.stop()
@@ -406,12 +429,11 @@ class AwgManager:
 
     def stop(self) -> None:
         if winutil.IS_LINUX:
-            if not self._linux_up():
-                return
-            h = linux.helper()
-            if h.run(["awg-quick", "down", str(self.conf_file)], timeout=60)["rc"] != 0 and self._linux_up():
-                h.run(["ip", "link", "delete", TUNNEL_NAME])
-            log.info("AmneziaWG выключен")
+            procs = self._linux_procs()
+            for p in procs:
+                winutil.kill_pid_tree(p.pid)
+            if procs:
+                log.info("AmneziaWG выключен")
             return
         if winutil.service_state(SERVICE_NAME) is None:
             return
