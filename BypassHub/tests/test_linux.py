@@ -110,7 +110,7 @@ def test_firewall_script(tmp_path):
     assert "queue num 200 bypass" in script and "meta mark & 0x40000000 != 0 accept" in script
     assert "--dports 80,443,1024:65535" in script and "--queue-bypass" in script
     path = tmp_path / "fw.sh"
-    path.write_text(script)
+    path.write_text(script, encoding="utf-8")
     if shutil.which("sh"):
         assert subprocess.run(["sh", "-n", str(path)]).returncode == 0  # синтаксис sh
 
@@ -354,6 +354,7 @@ def test_parse_ufw_numbered():
 
 # ---------------------------------------------------------------------- помощник с правами root
 
+@linux_only
 def test_helper_whitelists(tmp_path):
     linux.set_data_root(tmp_path)
     prog = tmp_path / "zapret" / "bin" / "nfqws"
