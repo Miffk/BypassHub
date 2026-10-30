@@ -2,7 +2,7 @@
 
 > Описание для пользователей, скриншоты и ответы на частые вопросы — в [README в корне репозитория](../README.md).
 
-Программа для Windows, в которой собраны в одном окне:
+Программа для Windows и Linux, в которой собраны в одном окне:
 
 - **[zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)** — обход блокировок Discord, YouTube и др.;
 - **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** — локальный MTProto-прокси, ускоряющий Telegram Desktop.
@@ -99,3 +99,23 @@ build.bat
 - Раздельное туннелирование для AmneziaWG: туннель с `Table = off` + маршрут через него с метрикой 9000, sing-box
   (TUN) отправляет «зарубежное» в outbound `direct` с `bind_interface: BypassHub`, адрес сервера AmneziaWG — мимо TUN.
 - sing-box обновляется только в пределах `vpn.MIN_VERSION`…`vpn.MAX_VERSION` — формат конфига проверен на 1.14.
+
+## Linux
+
+- `bypasshub/linux.py` — всё, что отличается в Linux: один экземпляр (flock), ярлыки `.desktop` (меню и автозапуск),
+  системный прокси KDE Plasma (`kwriteconfig6`) и GNOME (`gsettings`), правила перехвата для nfqws
+  (`firewall_script`: nftables, запасной путь — iptables), службы systemd, ufw/firewalld для доступа с телефона.
+- Окно работает от пользователя. Права root — у **помощника**: `pkexec <программа> --root-helper <папка данных>`
+  (`RootHelper` ↔ `serve`, одна JSON-строка на запрос/ответ по stdin/stdout). Команды — в `linux.HANDLERS`: запуск
+  программ только из папки данных (`spawn`, `kill`), запись только в `/etc/hosts`, `/etc/bypasshub/`, `/run/bypasshub/`
+  и `/etc/systemd/system/bypasshub-*.service`, внешние команды — только из `linux.RUN_ALLOWED`.
+- zapret: релиз Flowseal даёт стратегии, списки и фейки, а nfqws берётся из релиза bol-van/zapret
+  (`zapret-<тег>-openwrt-embedded.tar.gz`, `binaries/linux-x86_64/nfqws`) и кладётся в `zapret/bin/nfqws`.
+  `to_nfqws_args` переводит аргументы winws: `--wf-tcp/--wf-udp` становятся портами в правилах nftables,
+  остальные параметры у nfqws те же. nfqws запускается с `--qnum=200 --uid=<пользователь>`; служба —
+  `bypasshub-zapret.service` с копией nfqws в `/usr/local/lib/bypasshub/`.
+- sing-box: `sing-box-<версия>-linux-amd64.tar.gz`; «Весь трафик» (TUN) запускает помощник, «Системный прокси» —
+  от пользователя. AmneziaWG — системный `awg-quick` (amneziawg-tools), через помощника.
+- Горячие клавиши: `BypassHub --action toggle_zapret|toggle_tg|toggle_vpn|show_window|check_services` — запущенная
+  копия выполняет действие (файл `action-*.flag` в папке данных).
+- Сборка: `./build.sh` или job `linux` в `bypasshub.yml` (Ubuntu 22.04, файл `BypassHub-linux-x86_64`).

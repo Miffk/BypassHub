@@ -18,7 +18,19 @@ if TYPE_CHECKING:
 
 GAME_LABELS = {"disabled": "Выключен", "all": "TCP и UDP", "tcp": "Только TCP", "udp": "Только UDP"}
 IPSET_LABELS = {"none": "none", "loaded": "loaded", "any": "any"}
-MODE_LABELS = {"process": "Программа (winws.exe)", "service": "Служба Windows"}
+if winutil.IS_LINUX:
+    MODE_LABELS = {"process": "Программа (nfqws)", "service": "Служба systemd"}
+    ENGINE = "nfqws"
+    ENGINE_INFO = "(nfqws + nftables)"
+    MODE_HINT = ("«Программа» — nfqws работает, пока запущен BypassHub (при включении система спросит пароль "
+                 "администратора — один раз за сеанс). «Служба systemd» — обход работает сам с момента включения "
+                 "компьютера, без BypassHub и без пароля.")
+else:
+    MODE_LABELS = {"process": "Программа (winws.exe)", "service": "Служба Windows"}
+    ENGINE = "winws.exe"
+    ENGINE_INFO = "(winws.exe + WinDivert)"
+    MODE_HINT = ("«Программа» — winws.exe работает, пока запущен BypassHub. «Служба Windows» — как "
+                 "Install Service в service.bat: обход работает сам с момента включения ПК.")
 
 
 class ZapretPage(Page):
@@ -26,8 +38,8 @@ class ZapretPage(Page):
         super().__init__(app)
         from .home import ServiceCard
         home = app.pages["home"][1]
-        self.header = ServiceCard("Zapret", "Обход блокировок Discord, YouTube и других сервисов "
-                                            "(winws.exe + WinDivert)", home.toggle_zapret)
+        self.header = ServiceCard("Zapret", "Обход блокировок Discord, YouTube и других сервисов " + ENGINE_INFO,
+                                  home.toggle_zapret)
         self.header.add_buttons(W.button("Подобрать стратегию", self._auto_pick, primary=True),
                                 W.button("Проверить доступность", lambda: home.check_services()))
         self.lay.addWidget(self.header)
@@ -38,9 +50,7 @@ class ZapretPage(Page):
         self.lay.addWidget(self.not_installed)
 
         # --- стратегия и режим
-        body = W.section(self.lay, "Стратегия и режим запуска",
-                         "«Программа» — winws.exe работает, пока запущен BypassHub. «Служба Windows» — как "
-                         "Install Service в service.bat: обход работает сам с момента включения ПК.")
+        body = W.section(self.lay, "Стратегия и режим запуска", MODE_HINT)
         self.strategy_box = W.row(body, "Стратегия", W.combo(on_change=self._strategy_changed))
         self.mode_btn = W.row(body, "Режим", W.Segmented(MODE_LABELS.values(), self._mode_changed))
         self.service_label = W.label("", "muted")
@@ -75,7 +85,7 @@ class ZapretPage(Page):
         # --- исключения программ
         body = W.section(self.lay, "Не применять обход к программам",
                          "Отметьте программы, которые должны работать без zapret (например, если Steam с "
-                         "включённым обходом грузит медленнее). winws работает на уровне сетевых пакетов и не "
+                         f"включённым обходом грузит медленнее). {ENGINE} работает на уровне сетевых пакетов и не "
                          "видит, какой программе они принадлежат, поэтому исключаются домены этих программ. "
                          "Если включён Game Filter, трафик игр по IP всё равно может попадать под обход.")
         grid = W.grid(3)
@@ -115,23 +125,28 @@ class ZapretPage(Page):
         # --- hosts
         body = W.section(self.lay, "Файл hosts",
                          "Нужен для веб-версии Telegram и голосовых каналов Discord (аналог «Update Hosts File»). "
-                         "Записи добавляются отдельным блоком, перед изменением создаётся копия hosts.bypasshub.bak.")
+                         "Записи добавляются отдельным блоком, перед изменением создаётся копия "
+                         + ("/etc/bypasshub/hosts.bak." if winutil.IS_LINUX else "hosts.bypasshub.bak."))
         self.hosts_label = W.label("Статус не проверялся")
         body.addWidget(self.hosts_label)
         body.addLayout(W.button_bar(W.button("Проверить", self._hosts_check, primary=True),
                                     W.button("Обновить автоматически", self._hosts_apply, primary=True),
-                                    W.button("Вручную (блокнот)", self._hosts_manual),
+                                    W.button("Вручную" if winutil.IS_LINUX else "Вручную (блокнот)",
+                                             self._hosts_manual),
                                     W.button("Удалить записи", self._hosts_remove)))
 
         # --- инструменты
         body = W.section(self.lay, "Инструменты")
         body.addLayout(W.button_bar(W.button("Автоподбор стратегии", self._auto_pick, primary=True),
                                     W.button("Диагностика", self._diagnostics, primary=True),
-                                    W.button("Удалить службы", self._remove_services)))
-        body.addLayout(W.button_bar(W.button("Открыть папку zapret", lambda: winutil.open_path(app.core.zapret.root)),
-                                    W.button("Лог winws.exe", self._open_winws_log),
-                                    W.button("Показать команду", self._show_command),
-                                    W.button("Тест в PowerShell", self._run_tests)))
+                                    W.button("Удалить службу" if winutil.IS_LINUX else "Удалить службы",
+                                             self._remove_services)))
+        tools = [W.button("Открыть папку zapret", lambda: winutil.open_path(app.core.zapret.root)),
+                 W.button(f"Лог {ENGINE}", self._open_winws_log),
+                 W.button("Показать команду", self._show_command)]
+        if winutil.IS_WINDOWS:
+            tools.append(W.button("Тест в PowerShell", self._run_tests))
+        body.addLayout(W.button_bar(*tools))
         self.finish()
         self.sync_from_settings()
         self.reload()
@@ -185,7 +200,7 @@ class ZapretPage(Page):
                 text += f" · стратегия {zs.service_strategy}"
         else:
             text = "Служба zapret не установлена"
-        W.set_text(self.service_label, text + " · winws.exe " + ("запущен" if zs.running else "не запущен"))
+        W.set_text(self.service_label, text + f" · {ENGINE} " + ("запущен" if zs.running else "не запущен"))
 
     # ------------------------------------------------------------------ helpers
     def _after_change(self, what: str) -> None:
@@ -351,6 +366,11 @@ class ZapretPage(Page):
                 import subprocess
                 subprocess.Popen(["notepad", str(tmp)])
                 subprocess.Popen(["explorer", "/select,", str(zm.hosts_path())])
+            else:
+                winutil.open_path(tmp)
+                self.app.info(f"Скопируйте текст из открывшегося файла в конец /etc/hosts (например, командой "
+                              f"«sudo nano /etc/hosts» или sudoedit) и сохраните его.\n\nФайл с записями: {tmp}")
+                return
             self.app.info("Скопируйте текст из блокнота в конец файла hosts (редактор нужно открыть от имени "
                           "администратора) и сохраните его.")
         self.app.run_task(work, done)
@@ -386,7 +406,8 @@ class ZapretPage(Page):
         self.app.run_task(work, lambda r, e: self.app.error(str(e)) if e else None)
 
     def _remove_services(self) -> None:
-        if not self.app.ask("Остановить обход и удалить службы zapret и WinDivert?"):
+        if not self.app.ask("Остановить обход и удалить службу zapret?" if winutil.IS_LINUX
+                            else "Остановить обход и удалить службы zapret и WinDivert?"):
             return
 
         def work():
@@ -408,4 +429,4 @@ class ZapretPage(Page):
             self.app.error(str(exc))
             return
         from .dialogs import TextDialog
-        TextDialog(self.app, "Команда запуска winws.exe", cmd.replace(" --new ", " --new" + os.linesep)).show()
+        TextDialog(self.app, f"Команда запуска {ENGINE}", cmd.replace(" --new ", " --new" + os.linesep)).show()

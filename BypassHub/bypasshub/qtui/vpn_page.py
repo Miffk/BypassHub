@@ -71,7 +71,10 @@ class VpnPage(Page):
         body = W.section(self.lay, "Режим",
                          "«Весь трафик» — через VPN идут все программы, включая игры и Discord (виртуальный "
                          "сетевой адаптер). «Системный прокси» — только браузеры и программы, которые "
-                         "учитывают настройки прокси Windows; остальные работают как обычно.")
+                         + ("учитывают системные настройки прокси (KDE Plasma, GNOME); остальные работают как "
+                            "обычно. Для режима «Весь трафик» система спросит пароль администратора."
+                            if winutil.IS_LINUX else
+                            "учитывают настройки прокси Windows; остальные работают как обычно."))
         self.mode = W.row(body, "Что пускать через VPN", W.Segmented(vpn.MODES.values(), self._mode_changed))
         self.ru_direct = W.Toggle("Раздельное туннелирование: российское — напрямую", self._ru_changed)
         body.addWidget(self.ru_direct)
@@ -96,19 +99,24 @@ class VpnPage(Page):
             grid.addWidget(cb, i // 2, i % 2)
             self.exclude_checks[title] = cb
         body.addLayout(grid)
-        self.exclude_entry = W.entry("game.exe, other.exe")
+        self.exclude_entry = W.entry("game, other" if winutil.IS_LINUX else "game.exe, other.exe")
         self.exclude_entry.returnPressed.connect(self._exclude_changed)
         ex_label = W.label("Другие программы")
         ex_label.setFixedWidth(150)
         body.addLayout(W.hbox(ex_label, self.exclude_entry, W.button("Выбрать…", self._exclude_pick),
                               W.button("Применить", self._exclude_changed, primary=True), stretch_last=False))
-        body.addWidget(W.label("Имена файлов программ через запятую. «Выбрать…» — указать .exe игры в папке, куда она "
+        body.addWidget(W.label("Имена файлов программ через запятую. «Выбрать…» — указать файл игры в папке, куда она "
+                               "установлена." if winutil.IS_LINUX else
+                               "Имена файлов программ через запятую. «Выбрать…» — указать .exe игры в папке, куда она "
                                "установлена.", "small", wrap=True))
 
         body = W.section(self.lay, "AmneziaWG",
                          "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
                          "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
-                         "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG.")
+                         + ("для AmneziaWG работают через sing-box. В Linux нужны пакеты amneziawg-tools и "
+                            "amneziawg-dkms (или amneziawg-go), например из AUR."
+                            if winutil.IS_LINUX else
+                            "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG."))
         self.lan_access = W.Toggle("Без раздельного туннелирования: оставить доступ к локальной сети",
                                    self._lan_changed)
         body.addWidget(self.lan_access)
@@ -325,7 +333,9 @@ class VpnPage(Page):
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
     def _exclude_pick(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Программа мимо VPN", "", "Программы (*.exe);;Все файлы (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Программа мимо VPN", "",
+                                              "Все файлы (*)" if winutil.IS_LINUX
+                                              else "Программы (*.exe);;Все файлы (*.*)")
         if not path:
             return
         current = self.exclude_entry.text().strip()

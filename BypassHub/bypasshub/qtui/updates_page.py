@@ -78,8 +78,9 @@ class UpdatesPage(Page):
         assets.update(tgproxy.ASSETS)
         self._assets = assets
         self.asset = W.row(body, "Сборка TG WS Proxy", W.combo(assets.values(), self._asset_changed),
-                           hint="Если антивирус блокирует основную сборку, попробуйте версию для Windows 7 — "
-                                "по возможностям она не отличается.")
+                           hint="" if winutil.IS_LINUX else
+                           "Если антивирус блокирует основную сборку, попробуйте версию для Windows 7 — "
+                           "по возможностям она не отличается.")
         self.finish()
 
         W.set_checked(self.check_on_start, s.get("updates", "check_on_start"))

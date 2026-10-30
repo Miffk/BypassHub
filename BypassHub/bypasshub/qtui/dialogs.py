@@ -242,7 +242,8 @@ class PhoneDialog(_Dialog):
         if not tg.phone_access():
             self.body.addWidget(W.label(
                 "Сейчас прокси принимает подключения только с этого компьютера. Чтобы подключить телефон, "
-                "BypassHub откроет его для домашней сети (адрес 0.0.0.0) и добавит правило в брандмауэр Windows. "
+                "BypassHub откроет его для домашней сети (адрес 0.0.0.0) и добавит правило в брандмауэр "
+                + ("(ufw или firewalld, если он включён). " if winutil.IS_LINUX else "Windows. ") +
                 "Выключить можно здесь же в любой момент.", wrap=True))
             self.body.addLayout(W.button_bar(W.button("Разрешить доступ с телефона", self._enable, primary=True),
                                              W.button("Закрыть", self.close)))

@@ -1,4 +1,7 @@
 import json
+import sys
+
+import pytest
 
 from bypasshub import github, tgproxy
 from bypasshub.settings import Settings
@@ -59,6 +62,7 @@ def test_proxy_link():
         "tg://proxy?server=127.0.0.1&port=1443&secret=dd" + "ab" * 16
 
 
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="в Linux одна сборка — см. test_linux.py")
 def test_choose_asset_explicit():
     assert tgproxy.choose_asset("TgWsProxy_windows_arm64.exe") == "TgWsProxy_windows_arm64.exe"
     assert tgproxy.choose_asset("auto") in tgproxy.ASSETS

@@ -19,7 +19,7 @@ from .app import Page
 if TYPE_CHECKING:
     from .app import App
 
-MODES = {"dark": "Тёмная", "light": "Светлая", "system": "Как в Windows"}
+MODES = {"dark": "Тёмная", "light": "Светлая", "system": "Как в Windows" if winutil.IS_WINDOWS else "Как в системе"}
 
 
 class SettingsPage(Page):
@@ -64,12 +64,43 @@ class SettingsPage(Page):
         body = W.section(self.lay, "Запуск")
         self.autostart = W.Toggle("Запускать BypassHub при включении компьютера", self._autostart_changed)
         body.addWidget(self.autostart)
-        body.addWidget(W.label("Через Планировщик заданий Windows — с правами администратора и без запроса UAC.",
-                               "small"))
+        if winutil.IS_LINUX:
+            body.addWidget(W.label("Ярлык в ~/.config/autostart. Если при запуске нужно включить то, что требует прав "
+                                   "администратора (zapret в режиме «Программа», VPN «Весь трафик»), система один раз "
+                                   "спросит пароль. Режим zapret «Служба systemd» работает без пароля.",
+                                   "small", wrap=True))
+        else:
+            body.addWidget(W.label("Через Планировщик заданий Windows — с правами администратора и без запроса UAC.",
+                                   "small"))
         self._switch(body, "Запускать свёрнутым в трей", "start_minimized")
         self._switch(body, "При запуске включать то, что было включено (zapret, прокси)", "restore_state")
 
         # ------------------------------------------------------------ горячие клавиши
+        self.hk_buttons: Dict[str, QPushButton] = {}
+        self._hk_capturing: Optional[str] = None
+        if winutil.IS_LINUX:
+            self._linux_hotkeys()
+        else:
+            self._windows_hotkeys(s)
+
+        # ------------------------------------------------------------ окно и выход
+        self._build_rest(app)
+
+    def _linux_hotkeys(self) -> None:
+        """В Linux (особенно в Wayland) программа не может сама перехватывать сочетания клавиш —
+        их назначают в системе на команду BypassHub --action …, которую выполнит запущенная копия."""
+        from .. import linux
+        body = W.section(self.lay, "Горячие клавиши",
+                         "В Linux сочетания клавиш назначаются в системе. KDE Plasma: Параметры системы → "
+                         "Клавиатура → Комбинации клавиш → «Добавить» → «Команда или сценарий». GNOME: "
+                         "Настройки → Клавиатура → Комбинации клавиш → «Свои комбинации». Укажите команду:")
+        base = linux.shell_join(linux.self_command())
+        for action, text in hotkeys.ACTIONS.items():
+            body.addWidget(W.label(text))
+            body.addWidget(W.label(f"{base} --action {action}", "small", selectable=True, wrap=True))
+        self.hk_info = W.label("", "small", wrap=True)
+
+    def _windows_hotkeys(self, s) -> None:
         body = W.section(self.lay, "Горячие клавиши",
                          "Работают в любой программе, даже когда BypassHub свёрнут в трей. Нажмите на "
                          "сочетание, чтобы изменить его, затем нажмите новые клавиши (Esc — отмена). "
@@ -77,7 +108,6 @@ class SettingsPage(Page):
         self.hk_switch = W.Toggle("Включить горячие клавиши", self._hk_toggle)
         W.set_checked(self.hk_switch, s.data["hotkeys"].get("enabled"))
         body.addWidget(self.hk_switch)
-        self.hk_buttons: Dict[str, QPushButton] = {}
         for action, text in hotkeys.ACTIONS.items():
             btn = W.button("", lambda a=action: self._hk_capture(a), width=190)
             self.hk_buttons[action] = btn
@@ -86,10 +116,9 @@ class SettingsPage(Page):
         self.hk_info = W.label("", "small", wrap=True)
         body.addWidget(self.hk_info)
         body.addLayout(W.button_bar(W.button("По умолчанию", self._hk_defaults)))
-        self._hk_capturing: Optional[str] = None
         self._key_filter = _KeyCatcher(self._hk_key)
 
-        # ------------------------------------------------------------ окно и выход
+    def _build_rest(self, app: "App") -> None:
         body = W.section(self.lay, "Окно и выход")
         self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
         self._switch(body, "При выходе выключать zapret (режим «Программа») и прокси", "stop_on_exit")

@@ -9,6 +9,9 @@ config.json и запускает в одном из режимов:
 * «Системный прокси» — локальный прокси, который прописывается в настройках
   Windows: через VPN идут браузеры и программы, которые эти настройки учитывают.
 
+В Linux режим «Весь трафик» запускает sing-box помощник с правами root (linux.py),
+а «Системный прокси» прописывается в настройках KDE Plasma и/или GNOME.
+
 Российские сайты по желанию идут напрямую, мимо VPN.
 """
 from __future__ import annotations
@@ -18,7 +21,9 @@ import binascii
 import ipaddress
 import json
 import re
+import os
 import shutil
+import tarfile
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -27,18 +32,19 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
-from . import github, netfetch, winutil
+from . import github, linux, netfetch, winutil
 from .log import log
 
 REPO = "SagerNet/sing-box"
-EXE_NAME = "sing-box.exe"
+EXE_NAME = "sing-box" if winutil.IS_LINUX else "sing-box.exe"
 # Конфиг пишется под формат sing-box 1.12+ (новый формат DNS-серверов); в 1.16
 # удаляются устаревшие поля, поэтому обновления берутся только из этого диапазона.
 MIN_VERSION = (1, 12)
 MAX_VERSION = (1, 16)  # не включая
 PINNED_VERSION = "1.14.3"  # если GitHub API недоступен
 
-INTERFACE_NAME = "BypassHub VPN"
+# в Linux имя сетевого интерфейса — до 15 символов и без пробелов
+INTERFACE_NAME = "bypasshub-vpn" if winutil.IS_LINUX else "BypassHub VPN"
 AUTO_TAG = "auto"                     # группа «лучший сервер»
 URLTEST_URL = "https://www.gstatic.com/generate_204"
 TUN_ADDRESS = "172.19.0.1/30"
@@ -749,16 +755,22 @@ EXCLUDE_PRESETS: Dict[str, List[str]] = {
     "Fortnite": ["fortniteclient-win64-shipping.exe"],
     "Steam (загрузки игр)": ["steam.exe", "steamwebhelper.exe", "steamservice.exe"],
 }
+if winutil.IS_LINUX:  # имена программ Linux (игры через Proton видны как процессы wine)
+    EXCLUDE_PRESETS = {
+        "Dota 2": ["dota2"],
+        "Counter-Strike 2": ["cs2"],
+        "Steam (загрузки игр)": ["steam", "steamwebhelper"],
+    }
 
 
 def clean_exe_names(names: List[str]) -> List[str]:
-    """Имена программ: только имя файла, в нижнем регистре, с .exe, без повторов."""
+    """Имена программ: только имя файла, в нижнем регистре, с .exe (в Windows), без повторов."""
     out: List[str] = []
     for raw in names:
         name = re.split(r"[\\/]", str(raw).strip().strip('"'))[-1].strip().lower()
         if not name:
             continue
-        if not name.endswith(".exe"):
+        if not name.endswith(".exe") and not winutil.IS_LINUX:
             name += ".exe"
         if name not in out:
             out.append(name)
@@ -869,6 +881,9 @@ def version_ok(version: str) -> bool:
 
 
 def asset_name(version: str) -> str:
+    if winutil.IS_LINUX:
+        arch = {"amd64": "amd64", "arm64": "arm64", "386": "386", "arm": "armv7"}.get(linux.machine(), "amd64")
+        return f"sing-box-{version}-linux-{arch}.tar.gz"
     arch = winutil.machine_arch()
     if "ARM64" in arch:
         name = "arm64"
@@ -1018,19 +1033,12 @@ class VpnManager:
         self.check_config()
         if mode == "proxy" and winutil.port_listening(proxy_port):
             raise RuntimeError(f"Порт {proxy_port} уже занят другой программой — укажите другой порт VPN.")
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        logf = open(self.log_file, "wb")
-        try:
-            log.info("Запуск VPN: %s (%s)", name, MODES.get(mode, mode))
-            self._proc = winutil.popen_hidden([str(self.exe), "run", "-c", str(self.config_file),
-                                               "-D", str(self.root)], cwd=self.root, stdout=logf,
-                                              detached=True)
-        finally:
-            logf.close()
+        log.info("Запуск VPN: %s (%s)", name, MODES.get(mode, mode))
+        poll = self._launch(mode)
         deadline = time.time() + (6 if mode == "tun" else 3)
         while time.time() < deadline:
             time.sleep(0.25)
-            if self._proc.poll() is not None:
+            if poll() is not None:
                 tail = _clean_log(self.read_log_tail())
                 self._proc = None
                 raise RuntimeError(f"sing-box завершился сразу после запуска.\n{tail}")
@@ -1038,6 +1046,23 @@ class VpnManager:
                 break
         if mode == "proxy":
             self.enable_system_proxy(proxy_port)
+
+    def _launch(self, mode: str):
+        """Запускает sing-box с текущим config.json; возвращает функцию «код выхода или None».
+        В Linux режиму «Весь трафик» (TUN) нужны права root — его запускает помощник."""
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [str(self.exe), "run", "-c", str(self.config_file), "-D", str(self.root)]
+        if winutil.IS_LINUX and mode == "tun" and os.geteuid() != 0:
+            h = linux.helper()
+            pid = h.call("spawn", argv=cmd, cwd=str(self.root), log=str(self.log_file))["pid"]
+            self._proc = None
+            return lambda: h.call("poll", pid=pid)
+        logf = open(self.log_file, "wb")
+        try:
+            self._proc = winutil.popen_hidden(cmd, cwd=self.root, stdout=logf, detached=True)
+        finally:
+            logf.close()
+        return self._proc.poll
 
     def stop(self) -> None:
         procs = self._own_processes()
@@ -1193,6 +1218,15 @@ class VpnManager:
 
     # ---------------------------------------------------------- системный прокси
     def enable_system_proxy(self, port: int) -> None:
+        if winutil.IS_LINUX:
+            if not self.proxy_backup.exists():
+                self.proxy_backup.write_text(json.dumps({"linux": linux.get_system_proxy()}), encoding="utf-8")
+            if linux.set_system_proxy(port):
+                log.info("Системный прокси (KDE/GNOME): 127.0.0.1:%s", port)
+            else:
+                log.warning("Не нашлось настроек прокси рабочего стола — укажите в программах прокси "
+                            "127.0.0.1:%s (HTTP или SOCKS5) вручную", port)
+            return
         if not self.proxy_backup.exists():
             prev = winutil.get_system_proxy()
             self.proxy_backup.write_text(json.dumps(prev), encoding="utf-8")
@@ -1208,9 +1242,12 @@ class VpnManager:
         except Exception:
             prev = {}
         try:
-            winutil.set_system_proxy(bool(prev.get("enable")), prev.get("server") or "",
-                                     prev.get("override") or "")
-            log.info("Настройки прокси Windows восстановлены")
+            if winutil.IS_LINUX:
+                linux.set_system_proxy(0, prev.get("linux") or {})
+            else:
+                winutil.set_system_proxy(bool(prev.get("enable")), prev.get("server") or "",
+                                         prev.get("override") or "")
+            log.info("Настройки системного прокси восстановлены")
         except Exception as exc:
             log.warning("Не удалось вернуть настройки прокси Windows: %r", exc)
             return
@@ -1240,19 +1277,30 @@ class VpnManager:
         asset = release.asset(asset_name(release.version))
         zip_path = download_dir / asset.name
         github.download(asset.url, zip_path, progress, asset.sha256)
+        self.root.mkdir(parents=True, exist_ok=True)
+        new = self.root / (EXE_NAME + ".new")
         try:
-            with zipfile.ZipFile(zip_path) as zf:
-                member = next((n for n in zf.namelist() if n.lower().endswith("/" + EXE_NAME)
-                               or n.lower() == EXE_NAME), None)
-                if member is None:
-                    raise IOError(f"в архиве {asset.name} нет {EXE_NAME}")
-                self.root.mkdir(parents=True, exist_ok=True)
-                new = self.root / (EXE_NAME + ".new")
-                with zf.open(member) as src, open(new, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+            if asset.name.endswith(".tar.gz"):
+                with tarfile.open(zip_path) as tf:
+                    member = next((m for m in tf.getmembers() if m.isfile()
+                                   and (m.name.endswith("/" + EXE_NAME) or m.name == EXE_NAME)), None)
+                    if member is None:
+                        raise IOError(f"в архиве {asset.name} нет {EXE_NAME}")
+                    with tf.extractfile(member) as src, open(new, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                os.chmod(new, 0o755)
+            else:
+                with zipfile.ZipFile(zip_path) as zf:
+                    member = next((n for n in zf.namelist() if n.lower().endswith("/" + EXE_NAME)
+                                   or n.lower() == EXE_NAME), None)
+                    if member is None:
+                        raise IOError(f"в архиве {asset.name} нет {EXE_NAME}")
+                    with zf.open(member) as src, open(new, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
         finally:
             zip_path.unlink(missing_ok=True)
         was_running = self._own_processes()
+        mode = self.running_mode()
         for p in was_running:
             winutil.kill_pid_tree(p.pid)
         for _ in range(10):
@@ -1262,18 +1310,12 @@ class VpnManager:
             except OSError:
                 time.sleep(0.5)
         else:
-            raise RuntimeError("не удалось заменить sing-box.exe — файл занят")
+            raise RuntimeError(f"не удалось заменить {EXE_NAME} — файл занят")
         self.version_file.write_text(release.version, encoding="utf-8")
         self.update_rule_sets(max_age=0)
         log.info("sing-box %s установлен (%s)", release.version, asset.name)
         if was_running:  # перезапуск с тем же конфигом
-            logf = open(self.log_file, "wb")
-            try:
-                self._proc = winutil.popen_hidden([str(self.exe), "run", "-c", str(self.config_file),
-                                                   "-D", str(self.root)], cwd=self.root, stdout=logf,
-                                                  detached=True)
-            finally:
-                logf.close()
+            self._launch(mode)
 
 
 def _free_port() -> int:

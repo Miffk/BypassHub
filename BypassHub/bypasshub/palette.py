@@ -113,6 +113,18 @@ def system_mode() -> str:
                 return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
         except OSError:
             pass
+    elif sys.platform.startswith("linux"):
+        try:  # KDE Plasma и GNOME сообщают Qt, светлая тема или тёмная
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QGuiApplication
+            if QGuiApplication.instance() is not None:
+                scheme = QGuiApplication.styleHints().colorScheme()
+                if scheme == Qt.ColorScheme.Light:
+                    return "light"
+                if scheme == Qt.ColorScheme.Dark:
+                    return "dark"
+        except Exception:
+            pass
     return "dark"
 
 

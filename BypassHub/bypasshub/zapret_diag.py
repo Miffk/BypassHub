@@ -26,9 +26,81 @@ def _proc_running(name: str) -> bool:
     return bool(winutil.find_processes(name))
 
 
+# Linux: другие обходы DPI, которые тоже перехватывают пакеты (процессы и службы systemd)
+LINUX_CONFLICTS = ("nfqws", "tpws", "ciadpi", "byedpi", "spoofdpi", "goodbyedpi", "zapret")
+
+
+def run_linux_diagnostics(zapret_root: Path) -> List[Check]:
+    from . import linux
+    from .zapret import ZapretManager
+    zm = ZapretManager(zapret_root, zapret_root)
+    out: List[Check] = [Check(OK, f"zapret установлен в: {zapret_root}")]
+    if zm.winws.exists() and os.access(zm.winws, os.X_OK):
+        out.append(Check(OK, f"nfqws найден ({zm.nfqws_version() or 'версия неизвестна'})"))
+    else:
+        out.append(Check(ERROR, "nfqws не найден — нажмите «Проверить сейчас» во вкладке «Обновления»"))
+    if linux.which("nft"):
+        out.append(Check(OK, "nftables есть — правила перехвата ставятся через nft"))
+    elif linux.which("iptables"):
+        out.append(Check(OK, "nftables нет, правила перехвата ставятся через iptables"))
+    else:
+        out.append(Check(ERROR, "Нет ни nftables, ни iptables. Установите nftables: sudo pacman -S nftables"))
+    if Path("/sys/module/nfnetlink_queue").exists():
+        out.append(Check(OK, "Модуль ядра nfnetlink_queue загружен"))
+    else:
+        out.append(Check(OK, "Модуль ядра nfnetlink_queue загрузится при включении обхода"))
+    if linux.which("pkexec"):
+        out.append(Check(OK, "pkexec (polkit) есть — права администратора запрашиваются им"))
+    else:
+        out.append(Check(ERROR, "Нет pkexec — установите пакет polkit"))
+
+    foreign = [p.exe or p.name for name in ("nfqws", "tpws", "ciadpi", "byedpi", "spoofdpi")
+               for p in winutil.find_processes(name) if not (p.exe and zm._is_own(p.exe))]
+    if foreign:
+        out.append(Check(ERROR, "Запущен другой обход DPI: " + ", ".join(sorted(set(foreign)))
+                     + ". Выключите его — два обхода мешают друг другу"))
+    else:
+        out.append(Check(OK, "Других обходов DPI не найдено"))
+    found = conflicting_services()
+    if found:
+        out.append(Check(WARN, f"Включены службы других обходов: {', '.join(found)}. Если zapret из BypassHub не "
+                               f"работает, выключите их: sudo systemctl disable --now {' '.join(found)}"))
+
+    import psutil
+    try:
+        names = [n for n, st in psutil.net_if_stats().items() if st.isup]
+    except Exception:
+        names = []
+    vpns = [n for n in names if re.match(r"(wg|awg|tun|tap|ppp|nordlynx|proton|tailscale)", n.lower())
+            and not n.lower().startswith("bypasshub") and n != "BypassHub"]
+    if vpns:
+        out.append(Check(WARN, f"Подключён VPN: {', '.join(vpns)}. Через VPN обход не нужен, а некоторые VPN "
+                               "мешают zapret — выключите их, если обход не работает"))
+    else:
+        out.append(Check(OK, "Сторонних VPN не найдено"))
+
+    proxy = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("all_proxy")
+    if proxy:
+        out.append(Check(WARN, f"В системе задан прокси: {proxy}. Убедитесь, что он рабочий"))
+    else:
+        out.append(Check(OK, "Системный прокси не задан переменными окружения"))
+
+    out.append(Check(WARN, "Убедитесь, что в браузере включён безопасный DNS (DoH) с провайдером, отличным от "
+                           "провайдера по умолчанию, — иначе провайдер может подменять адреса сайтов"))
+    try:
+        hosts = ZapretManager.hosts_path().read_text(encoding="utf-8", errors="replace").lower()
+        if "youtube.com" in hosts or "youtu.be" in hosts:
+            out.append(Check(WARN, "В /etc/hosts есть записи youtube.com/youtu.be — они могут мешать YouTube"))
+    except OSError:
+        pass
+    return out
+
+
 def run_diagnostics(zapret_root: Path) -> List[Check]:
+    if winutil.IS_LINUX:
+        return run_linux_diagnostics(zapret_root)
     if not winutil.IS_WINDOWS:
-        return [Check(WARN, "Диагностика доступна только в Windows")]
+        return [Check(WARN, "Диагностика доступна только в Windows и Linux")]
     out: List[Check] = [Check(OK, f"zapret установлен в: {zapret_root}")]
     services = winutil.list_services()
     services_l = services.lower()
@@ -185,10 +257,25 @@ def _doh_in_tree(parent, name: str, depth: int = 0) -> bool:
 
 
 def conflicting_services() -> List[str]:
+    if winutil.IS_LINUX:
+        sc = shutil.which("systemctl")
+        if not sc:
+            return []
+        res = winutil.run([sc, "list-units", "--type=service", "--state=active", "--no-legend", "--plain"],
+                          timeout=15)
+        units = [ln.split()[0] for ln in res.stdout.splitlines() if ln.split()]
+        return [u for u in units if any(c in u.lower() for c in LINUX_CONFLICTS) and not u.startswith("bypasshub")]
     return [s for s in CONFLICTING_SERVICES if winutil.service_state(s) is not None]
 
 
 def remove_conflicting_services() -> List[str]:
+    if winutil.IS_LINUX:  # чужие службы systemd не удаляем — только выключаем
+        from . import linux
+        found = conflicting_services()
+        for unit in found:
+            linux.helper().run(["systemctl", "disable", "--now", unit], timeout=60)
+        log.info("Выключены службы других обходов: %s", ", ".join(found) or "нет")
+        return found
     removed = []
     for s in conflicting_services():
         winutil.service_stop_delete(s)
@@ -207,11 +294,25 @@ DISCORD_VARIANTS = (
 )
 
 
-def clear_discord_cache() -> List[str]:
-    appdata = Path(os.environ.get("APPDATA", ""))
-    report: List[str] = []
+def _discord_dirs() -> List[tuple]:
+    """(имя процесса, папка данных Discord) для каждой установленной версии."""
+    if not winutil.IS_LINUX:
+        appdata = Path(os.environ.get("APPDATA", ""))
+        return [(exe, appdata / folder) for exe, folder in DISCORD_VARIANTS]
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    flatpak = Path.home() / ".var" / "app" / "com.discordapp.Discord" / "config"
+    out = []
     for exe, folder in DISCORD_VARIANTS:
-        base = appdata / folder
+        name = exe[:-4]  # в Linux процесс называется Discord, DiscordPTB…
+        out.append((name, config / folder))
+        if folder == "discord":
+            out.append((name, flatpak / folder))
+    return out
+
+
+def clear_discord_cache() -> List[str]:
+    report: List[str] = []
+    for exe, base in _discord_dirs():
         if not base.is_dir():
             continue
         winutil.kill_by_name(exe)

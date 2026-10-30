@@ -1,7 +1,7 @@
-"""Обёртки над Windows: права администратора, процессы, службы, автозапуск.
+"""Обёртки над ОС: права администратора, процессы, службы, автозапуск.
 
-Модуль импортируется и на других ОС (для тестов), но реально работает только
-на Windows.
+Сделано для Windows; на Linux часть функций передаёт работу модулю linux
+(автозапуск, брандмауэр, один экземпляр), остальное там не нужно.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from typing import List, Optional, Sequence
 from .log import log
 
 IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -53,8 +54,9 @@ def relaunch_as_admin(extra_args: Sequence[str] = ()) -> bool:
 
 
 def run(cmd: Sequence[str], timeout: float = 60, check: bool = False,
-        encoding: str = "cp866") -> subprocess.CompletedProcess:
+        encoding: Optional[str] = None) -> subprocess.CompletedProcess:
     """Запуск консольной команды без окна; вывод возвращается строкой."""
+    encoding = encoding or ("cp866" if IS_WINDOWS else "utf-8")
     kwargs = {}
     if IS_WINDOWS:
         kwargs["creationflags"] = CREATE_NO_WINDOW
@@ -95,7 +97,7 @@ def find_processes(name: str) -> List[ProcInfo]:
             try:
                 pname = (p.info.get("name") or "").lower()
                 if pname == name_l:
-                    result.append(ProcInfo(p.info["pid"], p.info["name"], p.info.get("exe") or ""))
+                    result.append(ProcInfo(p.info["pid"], p.info["name"], _exe_of(p)))
             except Exception:
                 continue
         return result
@@ -120,10 +122,24 @@ def find_processes_like(substring: str) -> List[ProcInfo]:
     for p in psutil.process_iter(["pid", "name", "exe"]):
         try:
             if sub in (p.info.get("name") or "").lower():
-                result.append(ProcInfo(p.info["pid"], p.info["name"], p.info.get("exe") or ""))
+                result.append(ProcInfo(p.info["pid"], p.info["name"], _exe_of(p)))
         except Exception:
             continue
     return result
+
+
+def _exe_of(p) -> str:
+    """Путь к программе процесса. В Linux путь чужого (root) процесса закрыт — тогда берём
+    первый аргумент командной строки: её видят все, а nfqws и sing-box запускаются по полному пути."""
+    exe = p.info.get("exe") or ""
+    if not exe and IS_LINUX:
+        try:
+            cmd = p.cmdline()
+            if cmd and os.path.isabs(cmd[0]):
+                exe = cmd[0]
+        except Exception:
+            pass
+    return exe
 
 
 def port_listening(port: int, host: str = "127.0.0.1") -> bool:
@@ -146,6 +162,10 @@ def kill_pid_tree(pid: int) -> None:
     if psutil is not None:
         try:
             parent = psutil.Process(pid)
+            if IS_LINUX and parent.uids().real != os.getuid() and os.geteuid() != 0:
+                from . import linux  # процесс запущен помощником от root — его и просим
+                linux.helper().call("kill", pid=pid)
+                return
             procs = parent.children(recursive=True) + [parent]
             for p in procs:
                 try:
@@ -333,6 +353,10 @@ def firewall_rule_exists(name: str) -> bool:
 
 def firewall_allow_tcp(name: str, port: int) -> None:
     """Разрешить входящие TCP-подключения на порт (для всех профилей сети)."""
+    if IS_LINUX:
+        from . import linux
+        linux.firewall_allow_tcp(name, port)
+        return
     if not IS_WINDOWS:
         return
     firewall_remove(name)
@@ -343,6 +367,9 @@ def firewall_allow_tcp(name: str, port: int) -> None:
 
 
 def firewall_remove(name: str) -> None:
+    if IS_LINUX:
+        from . import linux
+        linux.firewall_remove(name)
     if IS_WINDOWS:
         run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"], encoding="cp437")
 
@@ -394,6 +421,9 @@ def _self_command() -> tuple[str, str]:
 
 
 def autostart_enabled() -> bool:
+    if IS_LINUX:
+        from . import linux
+        return linux.autostart_enabled()
     if not IS_WINDOWS:
         return False
     return run(["schtasks", "/Query", "/TN", TASK_NAME]).returncode == 0
@@ -401,7 +431,12 @@ def autostart_enabled() -> bool:
 
 def set_autostart(enabled: bool) -> None:
     """Автозапуск через Планировщик заданий — так программа стартует с правами
-    администратора без запроса UAC при каждом входе в систему."""
+    администратора без запроса UAC при каждом входе в систему.
+    В Linux — ярлык в ~/.config/autostart."""
+    if IS_LINUX:
+        from . import linux
+        linux.set_autostart(enabled)
+        return
     if not IS_WINDOWS:
         return
     if not enabled:
@@ -430,8 +465,12 @@ def set_autostart(enabled: bool) -> None:
 _mutex_handle = None
 
 
-def acquire_single_instance(name: str = "Global\\BypassHub_SingleInstance") -> bool:
+def acquire_single_instance(name: str = "Global\\BypassHub_SingleInstance",
+                            lock_file: Optional[Path] = None) -> bool:
     global _mutex_handle
+    if IS_LINUX and lock_file is not None:
+        from . import linux
+        return linux.acquire_single_instance(lock_file)
     if not IS_WINDOWS:
         return True
     k32 = ctypes.windll.kernel32
@@ -449,8 +488,19 @@ def acquire_single_instance(name: str = "Global\\BypassHub_SingleInstance") -> b
 def message_box(text: str, title: str = "BypassHub", error: bool = False) -> None:
     if IS_WINDOWS:
         ctypes.windll.user32.MessageBoxW(None, text, title, 0x10 if error else 0x40)
-    else:
-        print(f"[{title}] {text}", file=sys.stderr)
+        return
+    print(f"[{title}] {text}", file=sys.stderr)
+    import shutil
+    for tool, args in (("kdialog", ["--title", title, "--error" if error else "--msgbox", text]),
+                       ("zenity", ["--error" if error else "--info", "--title", title, "--text", text]),
+                       ("notify-send", [title, text])):
+        exe = shutil.which(tool)
+        if exe:
+            try:
+                subprocess.run([exe] + args, timeout=600)
+                return
+            except Exception:
+                continue
 
 
 def windows_major_version() -> int:

@@ -3,6 +3,11 @@
 Всё, что умеет service.bat, перенесено сюда, а файлы настроек остаются теми
 же самыми (utils/game_filter.enabled, lists/*-user.txt, ipset-all.txt,
 bin/ACTIVE_*.bin), поэтому папкой zapret можно пользоваться и вручную.
+
+В Linux стратегии, списки и фейки берутся из того же релиза, а вместо winws.exe
+работает nfqws из bol-van/zapret (winws — его сборка для Windows, параметры те же).
+Пакеты в nfqws отправляют правила nftables (или iptables) — их ставит помощник
+с правами root (см. linux.py). «Служба» в Linux — служба systemd.
 """
 from __future__ import annotations
 
@@ -11,13 +16,14 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import github, winutil
+from . import github, linux, winutil
 from .log import log
 
 REPO = "Flowseal/zapret-discord-youtube"
@@ -30,6 +36,16 @@ SERVICE_NAME = "zapret"
 SERVICE_REG_KEY = r"System\CurrentControlSet\Services\zapret"
 SERVICE_REG_VALUE = "zapret-discord-youtube"
 IPSET_NONE_MARK = "203.0.113.113/32"
+
+# Linux: nfqws из релизов bol-van/zapret и служба systemd
+NFQWS_REPO = "bol-van/zapret"
+NFQWS = "nfqws"
+NFQWS_VERSION_FILE = "nfqws.version"
+LINUX_UNIT = "bypasshub-zapret.service"
+LINUX_FW_SCRIPT = linux.ETC_DIR / "zapret-fw.sh"
+LINUX_HOSTS_BACKUP = linux.ETC_DIR / "hosts.bak"
+# параметры, которые есть только у winws (фильтр WinDivert, Wi-Fi, сети Windows)
+_WINDOWS_ONLY = ("--wf-", "--ssid-filter", "--nlm-filter", "--nlm-list")
 GAME_FILTER_OFF = "12"  # так service.bat «выключает» диапазон портов
 
 USER_LISTS: Dict[str, Tuple[str, str]] = {
@@ -180,6 +196,62 @@ def parse_strategy(bat_text: str, variables: Dict[str, str]) -> List[str]:
     raise ValueError("в файле стратегии не найден запуск winws.exe")
 
 
+def to_nfqws_args(args: List[str]) -> Tuple[List[str], str, str]:
+    """Аргументы winws → аргументы nfqws и порты для перехвата: (аргументы, TCP, UDP).
+    --wf-tcp/--wf-udp у winws задают, какие пакеты перехватывать; в Linux это делают правила
+    nftables, поэтому порты уходят туда, а остальные параметры у nfqws те же.
+    Пути в стратегиях собраны по-windowsовски (set "LISTS=%~dp0lists\\") — разделители меняем на /."""
+    out: List[str] = []
+    tcp: List[str] = []
+    udp: List[str] = []
+    args = [a.replace("\\", "/") for a in args]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        key, eq, value = arg.partition("=")
+        if key.startswith(_WINDOWS_ONLY):
+            if not eq and i + 1 < len(args) and not args[i + 1].startswith("--"):
+                value = args[i + 1]
+                i += 1
+            if key == "--wf-tcp":
+                tcp.append(value)
+            elif key == "--wf-udp":
+                udp.append(value)
+            else:
+                log.debug("nfqws: параметр %s есть только в Windows — пропущен", key)
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out, ",".join(tcp), ",".join(udp)
+
+
+def nfqws_asset(tag: str) -> str:
+    """Самый маленький архив релиза bol-van/zapret, в котором есть nfqws для Linux."""
+    return f"zapret-{tag}-openwrt-embedded.tar.gz"
+
+
+def nfqws_member_dir() -> str:
+    return {"amd64": "linux-x86_64", "arm64": "linux-arm64", "386": "linux-x86",
+            "arm": "linux-arm"}.get(linux.machine(), "linux-x86_64")
+
+
+def extract_nfqws(archive: Path, dest: Path) -> None:
+    """Достаёт binaries/<платформа>/nfqws из архива релиза bol-van/zapret."""
+    want = f"/binaries/{nfqws_member_dir()}/{NFQWS}"
+    with tarfile.open(archive) as tf:
+        member = next((m for m in tf.getmembers() if m.isfile() and ("/" + m.name).endswith(want)), None)
+        if member is None:
+            raise IOError(f"в архиве {archive.name} нет {want.lstrip('/')}")
+        src = tf.extractfile(member)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".new")
+        with src, open(tmp, "wb") as f:
+            shutil.copyfileobj(src, f)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, dest)
+
+
 def natural_key(name: str):
     return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", name)]
 
@@ -256,9 +328,26 @@ class ZapretManager:
 
     @property
     def winws(self) -> Path:
-        return self.bin / "winws.exe"
+        """Программа обхода: winws.exe, в Linux — nfqws."""
+        return self.bin / (NFQWS if winutil.IS_LINUX else "winws.exe")
+
+    @property
+    def engine_name(self) -> str:
+        return self.winws.name
+
+    @property
+    def nfqws_version_file(self) -> Path:
+        return self.bin / NFQWS_VERSION_FILE
+
+    def nfqws_version(self) -> str:
+        try:
+            return self.nfqws_version_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
 
     def is_installed(self) -> bool:
+        if winutil.IS_LINUX:  # нужны и стратегии из релиза Flowseal, и сам nfqws
+            return self.winws.exists() and (self.root / "service.bat").exists()
         return self.winws.exists()
 
     def local_version(self) -> str:
@@ -297,7 +386,17 @@ class ZapretManager:
             text = raw.decode("cp866", errors="replace")
         return parse_strategy(text, self.variables())
 
+    def linux_launch(self, strategy: str) -> Tuple[List[str], str, str]:
+        """(команда nfqws, порты TCP, порты UDP) для стратегии."""
+        args, tcp, udp = to_nfqws_args(self.build_args(strategy))
+        # nfqws после запуска сбрасывает права root; списки и фейки лежат в папке пользователя
+        uid, gid = os.getuid(), os.getgid()
+        return [str(self.winws), f"--qnum={linux.QNUM}", f"--uid={uid}:{gid}"] + args, tcp, udp
+
     def command_line(self, strategy: str) -> str:
+        if winutil.IS_LINUX:
+            argv, tcp, udp = self.linux_launch(strategy)
+            return f"# порты: TCP {tcp or '—'}; UDP {udp or '—'}\n" + linux.shell_join(argv)
         return subprocess.list2cmdline([str(self.winws)] + self.build_args(strategy))
 
     # ---------------------------------------------------------- Game Filter
@@ -495,20 +594,37 @@ class ZapretManager:
         log.info("Исключения программ: %s", ", ".join(names + (["свои домены"] if domains else [])) or "нет")
 
     # ---------------------------------------------------------- статус
+    def _is_own(self, exe: str) -> bool:
+        return (winutil.same_path(exe, self.winws)
+                or (winutil.IS_LINUX and winutil.same_path(exe, linux.LIB_DIR / NFQWS)))
+
     def status(self) -> ZapretStatus:
         st = ZapretStatus(installed=self.is_installed(), version=self.local_version())
-        for p in winutil.find_processes("winws.exe"):
+        for p in winutil.find_processes(self.engine_name):
             st.running = True
-            if not p.exe or winutil.same_path(p.exe, self.winws):
+            if not p.exe or self._is_own(p.exe):
                 st.own_process = True
             else:
                 st.foreign_processes.append(p.exe)
-        st.service_state = winutil.service_state(SERVICE_NAME)
+        st.service_state = self.service_state()
         if st.service_installed:
             st.service_strategy = self.service_strategy() or ""
         return st
 
+    @staticmethod
+    def service_state() -> Optional[str]:
+        if winutil.IS_LINUX:
+            return linux.unit_state(LINUX_UNIT)
+        return winutil.service_state(SERVICE_NAME)
+
     def service_strategy(self) -> Optional[str]:
+        if winutil.IS_LINUX:
+            try:
+                text = (linux.UNIT_DIR / LINUX_UNIT).read_text(encoding="utf-8")
+            except OSError:
+                return None
+            m = re.search(r"^# strategy: (.+)$", text, re.MULTILINE)
+            return m.group(1).strip() if m else None
         if not winutil.IS_WINDOWS:
             return None
         import winreg
@@ -540,6 +656,9 @@ class ZapretManager:
         self.ensure_user_lists()
 
     def start_process(self, strategy: str) -> None:
+        if winutil.IS_LINUX:
+            self._start_process_linux(strategy)
+            return
         self._check_ready(strategy)
         args = self.build_args(strategy)
         if winutil.service_state(SERVICE_NAME) is not None:
@@ -560,6 +679,25 @@ class ZapretManager:
             self._proc = None
             raise RuntimeError(f"winws.exe завершился сразу после запуска.\n{tail}")
 
+    def _start_process_linux(self, strategy: str) -> None:
+        self._check_ready(strategy)
+        argv, tcp, udp = self.linux_launch(strategy)
+        if self.service_state() is not None:
+            log.info("Удаляю службу zapret, чтобы запустить обход вручную")
+            self._linux_service_remove()
+        self.kill_winws()
+        h = linux.helper()
+        res = h.call("zapret_fw", action="up", tcp=tcp, udp=udp)
+        if res["rc"] != 0:
+            raise RuntimeError("Не удалось настроить перехват пакетов для nfqws:\n" + res["out"].strip())
+        self.winws_log.parent.mkdir(parents=True, exist_ok=True)
+        log.info("Запуск zapret: %s (nfqws, TCP %s, UDP %s)", strategy, tcp or "—", udp or "—")
+        pid = h.call("spawn", argv=argv, cwd=str(self.bin), log=str(self.winws_log))["pid"]
+        time.sleep(1.5)
+        if h.call("poll", pid=pid) is not None:
+            h.call("zapret_fw", action="down")
+            raise RuntimeError(f"nfqws завершился сразу после запуска.\n{self._read_log_tail()}")
+
     def _read_log_tail(self, n: int = 15) -> str:
         try:
             lines = self.winws_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -568,13 +706,25 @@ class ZapretManager:
             return ""
 
     def kill_winws(self) -> None:
-        procs = winutil.find_processes("winws.exe")
+        procs = winutil.find_processes(self.engine_name)
+        if winutil.IS_LINUX:  # чужой nfqws (например, zapret из пакета) не трогаем
+            procs = [p for p in procs if p.exe and winutil.same_path(p.exe, self.winws)]
         for p in procs:
-            log.info("Останавливаю winws.exe (pid %s)", p.pid)
+            log.info("Останавливаю %s (pid %s)", self.engine_name, p.pid)
             winutil.kill_pid_tree(p.pid)
         self._proc = None
+        # правила перехвата без nfqws не мешают (у них флаг bypass) — убираем их, только если помощник уже
+        # запущен: спрашивать пароль ради этого (например, при выходе) не нужно
+        if winutil.IS_LINUX and linux.helper().running():
+            try:
+                linux.helper().call("zapret_fw", action="down")
+            except Exception as exc:
+                log.debug("zapret: правила перехвата: %r", exc)
 
     def install_service(self, strategy: str) -> None:
+        if winutil.IS_LINUX:
+            self._install_service_linux(strategy)
+            return
         self._check_ready(strategy)
         cmdline = self.command_line(strategy)
         self.kill_winws()
@@ -593,8 +743,43 @@ class ZapretManager:
         if res.returncode != 0:
             raise RuntimeError(f"служба не запустилась: {(res.stdout + res.stderr).strip()}")
 
+    def _install_service_linux(self, strategy: str) -> None:
+        self._check_ready(strategy)
+        argv, tcp, udp = self.linux_launch(strategy)
+        self.kill_winws()
+        self._linux_service_remove()
+        h = linux.helper()
+        # служба запускается от root при загрузке — её программа и сценарий лежат в папках root
+        argv[0] = h.call("install_bin", src=str(self.winws), name=NFQWS)
+        h.call("write_file", path=str(LINUX_FW_SCRIPT), text=linux.firewall_script(tcp, udp), mode=0o755)
+        fw = f"/bin/sh {LINUX_FW_SCRIPT}"
+        unit = linux.unit_text("BypassHub: zapret (nfqws)", argv, pre=[f"{fw} up"], post=[f"{fw} down"],
+                               comment=f"strategy: {Path(strategy).stem}")
+        log.info("Установка службы zapret: %s", strategy)
+        h.call("write_file", path=str(linux.UNIT_DIR / LINUX_UNIT), text=unit)
+        h.run(["systemctl", "daemon-reload"])
+        res = h.run(["systemctl", "enable", "--now", LINUX_UNIT], timeout=60)
+        time.sleep(1.5)
+        if res["rc"] != 0 or self.service_state() != "RUNNING":
+            status = h.run(["systemctl", "status", "--no-pager", "-n", "15", LINUX_UNIT])["out"]
+            raise RuntimeError(f"служба не запустилась: {(res['out'] + status).strip()}")
+
+    def _linux_service_remove(self) -> None:
+        if not (linux.UNIT_DIR / LINUX_UNIT).exists():
+            return
+        h = linux.helper()
+        h.run(["systemctl", "disable", "--now", LINUX_UNIT], timeout=60)
+        h.call("remove_file", path=str(linux.UNIT_DIR / LINUX_UNIT))
+        h.run(["systemctl", "daemon-reload"])
+        log.info("Служба %s удалена", LINUX_UNIT)
+
     def remove_services(self) -> None:
         """Аналог «Remove Services» из service.bat."""
+        if winutil.IS_LINUX:
+            self._linux_service_remove()
+            self.kill_winws()
+            log.info("Служба zapret удалена")
+            return
         winutil.service_stop_delete(SERVICE_NAME)
         self.kill_winws()
         for name in ("WinDivert", "WinDivert14"):
@@ -608,7 +793,9 @@ class ZapretManager:
             self.start_process(strategy)
 
     def stop(self) -> None:
-        if winutil.service_state(SERVICE_NAME) is not None:
+        if winutil.IS_LINUX:
+            self._linux_service_remove()
+        elif winutil.service_state(SERVICE_NAME) is not None:
             winutil.service_stop_delete(SERVICE_NAME)
         self.kill_winws()
         log.info("zapret остановлен")
@@ -616,6 +803,8 @@ class ZapretManager:
     # ---------------------------------------------------------- hosts
     @staticmethod
     def hosts_path() -> Path:
+        if winutil.IS_LINUX:
+            return linux.HOSTS
         return Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "drivers" / "etc" / "hosts"
 
     HOSTS_BEGIN = "# >>> BypassHub: zapret-discord-youtube hosts >>>"
@@ -642,6 +831,16 @@ class ZapretManager:
     def hosts_apply(self, block: str) -> None:
         path = self.hosts_path()
         current = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        if winutil.IS_LINUX:
+            h = linux.helper()
+            if not LINUX_HOSTS_BACKUP.exists():
+                h.call("write_file", path=str(LINUX_HOSTS_BACKUP), text=current)
+            text = self._strip_block(current).rstrip("\n")
+            text += f"\n\n{self.HOSTS_BEGIN}\n{block.strip()}\n{self.HOSTS_END}\n"
+            h.call("write_file", path=str(path), text=text.lstrip("\n").replace("\r\n", "\n"))
+            _flush_dns_linux()
+            log.info("hosts обновлён (резервная копия: %s)", LINUX_HOSTS_BACKUP)
+            return
         backup = path.with_name("hosts.bypasshub.bak")
         if not backup.exists():
             shutil.copyfile(path, backup)
@@ -657,6 +856,11 @@ class ZapretManager:
         stripped = self._strip_block(current)
         if stripped == current:
             return False
+        if winutil.IS_LINUX:
+            linux.helper().call("write_file", path=str(path), text=stripped.rstrip("\r\n") + "\n")
+            _flush_dns_linux()
+            log.info("Записи BypassHub удалены из hosts")
+            return True
         path.write_text(stripped.rstrip("\r\n") + "\r\n", encoding="utf-8")
         winutil.run_logged(["ipconfig", "/flushdns"])
         log.info("Записи BypassHub удалены из hosts")
@@ -664,6 +868,9 @@ class ZapretManager:
 
     # ---------------------------------------------------------- тесты
     def run_tests(self) -> None:
+        if not winutil.IS_WINDOWS:
+            raise RuntimeError("Тест из zapret-discord-youtube написан на PowerShell и работает только в Windows. "
+                               "Используйте «Автоподбор стратегии».")
         script = self.utils / "test zapret.ps1"
         if not script.exists():
             raise FileNotFoundError(script.name)
@@ -674,8 +881,9 @@ class ZapretManager:
 
     # ---------------------------------------------------------- установка / обновление
     def install_release(self, zip_path: Path, strategy: str, mode: str,
-                        restore_running: bool = True) -> str:
+                        restore_running: bool = True, nfqws: Optional[Tuple[Path, str]] = None) -> str:
         """Ставит релиз из zip поверх текущей версии, сохраняя пользовательские настройки.
+        nfqws — (файл, версия) свежего nfqws для Linux; без него переносится прежний.
 
         Возвращает стратегию, которая используется после обновления."""
         parent = self.root.parent
@@ -706,6 +914,14 @@ class ZapretManager:
 
         new.ensure_user_lists()
         (new.utils / "check_updates.enabled").unlink(missing_ok=True)  # обновлениями занимается BypassHub
+        if nfqws is not None:
+            new.bin.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(nfqws[0], new.bin / NFQWS)
+            os.chmod(new.bin / NFQWS, 0o755)
+            new.nfqws_version_file.write_text(nfqws[1], encoding="utf-8")
+        if winutil.IS_LINUX and not (new.bin / NFQWS).exists():
+            shutil.rmtree(staging, ignore_errors=True)
+            raise RuntimeError("нет nfqws для Linux — не удалось скачать его из релизов bol-van/zapret")
 
         if self.root.exists():
             self.remove_services()
@@ -750,6 +966,14 @@ def _retry(fn, message: str, attempts: int = 6) -> None:
     raise RuntimeError(f"{message}: {last}")
 
 
+def _flush_dns_linux() -> None:
+    if linux.which("resolvectl"):
+        try:
+            linux.helper().run(["resolvectl", "flush-caches"], timeout=15)
+        except Exception as exc:
+            log.debug("resolvectl flush-caches: %r", exc)
+
+
 def _find_zapret_root(base: Path) -> Optional[Path]:
     if (base / "bin" / "winws.exe").exists():
         return base
@@ -767,6 +991,12 @@ def _migrate_user_data(old: ZapretManager, new: ZapretManager) -> None:
         src = old.lists / name
         if src.exists():
             shutil.copyfile(src, new.lists / name)
+    # nfqws (Linux) в релизе Flowseal нет — переносим прежний
+    for name in (NFQWS, NFQWS_VERSION_FILE):
+        src = old.bin / name
+        if src.exists() and not (new.bin / name).exists():
+            new.bin.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, new.bin / name)
     if old.game_filter_file.exists():
         shutil.copyfile(old.game_filter_file, new.game_filter_file)
     results = old.utils / "test results"
