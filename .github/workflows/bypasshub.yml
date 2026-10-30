@@ -95,6 +95,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: Android/core/go.mod
+          cache-dependency-path: Android/core/go.sum
+
+      - name: Build AmneziaWG engine (bypasshub-awg)
+        working-directory: Android/core
+        run: |
+          CGO_ENABLED=0 go build -tags "$CORE_TAGS" -trimpath -buildvcs=false \
+            -ldflags "-s -w -buildid= -checklinkname=0" -o ../../BypassHub/bypasshub-awg ./cmd/bypasshub-awg
+
       - name: System libraries (Qt, Tk)
         run: |
           sudo apt-get update -q
@@ -107,13 +118,15 @@ jobs:
       - name: Tests
         env:
           QT_QPA_PLATFORM: offscreen
+          BYPASSHUB_AWG_BIN: ${{ github.workspace }}/BypassHub/bypasshub-awg
         run: python -m pytest -q
 
       - name: Build
         run: >
           python -m PyInstaller --noconfirm --onefile --windowed
           --name BypassHub-linux-x86_64
-          --add-data "assets:assets" --collect-data customtkinter --collect-data certifi
+          --add-data "assets:assets" --add-binary "bypasshub-awg:bin"
+          --collect-data customtkinter --collect-data certifi
           main.py
 
       - name: Smoke test

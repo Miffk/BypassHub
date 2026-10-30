@@ -115,7 +115,11 @@ build.bat
   остальные параметры у nfqws те же. nfqws запускается с `--qnum=200 --uid=<пользователь>`; служба —
   `bypasshub-zapret.service` с копией nfqws в `/usr/local/lib/bypasshub/`.
 - sing-box: `sing-box-<версия>-linux-amd64.tar.gz`; «Весь трафик» (TUN) запускает помощник, «Системный прокси» —
-  от пользователя. AmneziaWG — системный `awg-quick` (amneziawg-tools), через помощника.
+  от пользователя. AmneziaWG — `bypasshub-awg` (`Android/core/cmd/bypasshub-awg`: ядро AmneziaWG из Android-версии,
+  в пространстве пользователя, без root), встроен в сборку (`--add-binary … :bin`); он отдаёт SOCKS5 на 127.0.0.1,
+  а sing-box направляет в него трафик (outbound `socks`) во всех режимах.
+- Собранная программа при старте возвращает `LD_LIBRARY_PATH` (`winutil.restore_library_path`): иначе запущенные
+  ей TgWsProxy, kwriteconfig6, xdg-open получают библиотеки Qt/GLib из сборки BypassHub и ломаются.
 - Горячие клавиши: `BypassHub --action toggle_zapret|toggle_tg|toggle_vpn|show_window|check_services` — запущенная
   копия выполняет действие (файл `action-*.flag` в папке данных).
 - Сборка: `./build.sh` или job `linux` в `bypasshub.yml` (Ubuntu 22.04, файл `BypassHub-linux-x86_64`).

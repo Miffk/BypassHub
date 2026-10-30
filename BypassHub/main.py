@@ -55,6 +55,7 @@ def main() -> int:
     ap.add_argument("--root-helper", metavar="DATA_DIR", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
 
+    winutil.restore_library_path()  # Linux: дочерним программам — системные библиотеки, а не наши
     if args.root_helper:  # помощник с правами root (Linux, запускается через pkexec)
         from bypasshub import linux
         return linux.serve(args.root_helper)

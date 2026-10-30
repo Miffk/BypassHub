@@ -265,36 +265,76 @@ def test_linux_proxy_commands():
     assert any(c.endswith("org.gnome.system.proxy mode 'none'") for c in back)
 
 
+def _fake_engine(tmp_path: Path, port: int = 12345) -> Path:
+    eng = tmp_path / "engine" / "bypasshub-awg"
+    eng.parent.mkdir()
+    eng.write_text(f"#!/bin/sh\necho 'SOCKS5 127.0.0.1:{port}'\nexec sleep 3\n")
+    eng.chmod(0o755)
+    return eng
+
+
 @linux_only
-def test_awg_linux_start_stop(tmp_path, fake_helper, monkeypatch):
+def test_awg_linux_runs_userspace_engine(tmp_path, monkeypatch):
+    """AmneziaWG в Linux — bypasshub-awg от пользователя (без root), порт SOCKS5 — из его вывода."""
     from test_vpn import CONF
-    monkeypatch.setattr(linux, "which", lambda name: f"/usr/bin/{name}" if name != "resolvconf" else None)
-    up = {"v": False}
-    monkeypatch.setattr(awg.AwgManager, "_linux_up", staticmethod(lambda: up["v"]))
-    m = awg.AwgManager(tmp_path)
+    engine = _fake_engine(tmp_path)
+    monkeypatch.setattr(awg, "linux_engine", lambda: engine)
+    m = awg.AwgManager(tmp_path / "awg")
     assert m.is_installed()
-    m.start(awg.parse_conf(CONF), split=True)
-    conf = m.conf_file.read_text()
-    assert "Table = off" in conf and "DNS" not in conf and oct(m.conf_file.stat().st_mode & 0o777) == "0o600"
-    argvs = [a["argv"] for c, a in fake_helper.calls if c == "run"]
-    assert ["awg-quick", "up", str(m.conf_file)] in argvs
-    assert any(a[:3] == ["ip", "route", "replace"] for a in argvs)
-    up["v"] = True
-    m.stop()
-    assert ["awg-quick", "down", str(m.conf_file)] in [a["argv"] for c, a in fake_helper.calls if c == "run"]
-
-
-def test_awg_split_dns():
-    conf, dns = awg.split_dns("[Interface]\nDNS = 1.1.1.1, 8.8.8.8\nAddress = 10.0.0.2/32\n")
-    assert dns == ["1.1.1.1", "8.8.8.8"] and "DNS" not in conf and "Address" in conf
+    port = m.start(awg.parse_conf(CONF), split=True)
+    try:
+        assert port == 12345
+        conf = m.conf_file.read_text()
+        assert "Table = off" in conf and "DNS" not in conf and oct(m.conf_file.stat().st_mode & 0o777) == "0o600"
+        assert m.linux_exe.exists()
+    finally:
+        m.stop()
 
 
 @linux_only
-def test_awg_missing_tools_hint(monkeypatch):
-    monkeypatch.setattr(linux, "which", lambda name: None)
+def test_awg_linux_engine_fails(tmp_path, monkeypatch):
+    eng = tmp_path / "bad"
+    eng.write_text("#!/bin/sh\necho 'настройки AmneziaWG: bad key' >&2\nexit 1\n")
+    eng.chmod(0o755)
+    monkeypatch.setattr(awg, "linux_engine", lambda: eng)
+    from test_vpn import CONF
+    with pytest.raises(RuntimeError, match="bad key"):
+        awg.AwgManager(tmp_path / "awg").start(awg.parse_conf(CONF))
+
+
+@linux_only
+def test_awg_missing_engine_hint(monkeypatch):
+    monkeypatch.setattr(awg, "linux_engine", lambda: None)
     assert not awg.AwgManager(Path("/nonexistent")).is_installed()
-    with pytest.raises(RuntimeError, match="amneziawg-tools"):
+    with pytest.raises(RuntimeError, match="bypasshub-awg"):
         awg.latest_release()
+
+
+def test_parse_socks_port_and_outbound():
+    assert awg.parse_socks_port("SOCKS5 127.0.0.1:40123\n") == 40123
+    assert awg.parse_socks_port("starting\n") == 0
+    ob = vpn.socks_outbound(40123)
+    assert ob == {"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": 40123, "version": "5"}
+    cfg = vpn.build_config(ob, "tun", True, bypass=["203.0.113.5"])
+    assert cfg["inbounds"][0]["route_exclude_address"] == ["203.0.113.5/32"]  # сервер — мимо TUN
+
+
+@pytest.mark.skipif(not os.environ.get("BYPASSHUB_AWG_BIN"), reason="нужен собранный bypasshub-awg")
+def test_awg_real_engine_opens_socks(tmp_path, monkeypatch):
+    """Настоящий bypasshub-awg (собирается в CI): туннель поднимается и принимает SOCKS5."""
+    import socket
+    from test_vpn import CONF
+    monkeypatch.setattr(awg, "linux_engine", lambda: Path(os.environ["BYPASSHUB_AWG_BIN"]))
+    m = awg.AwgManager(tmp_path / "awg")
+    port = m.start(awg.parse_conf(CONF))
+    try:
+        assert m.status().running and m.socks_port() == port
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as c:
+            c.sendall(b"\x05\x01\x00")  # SOCKS5, без пароля
+            assert c.recv(2) == b"\x05\x00"
+    finally:
+        m.stop()
+    assert not m.status().running
 
 
 @linux_only
@@ -408,3 +448,18 @@ def test_helper_protocol_end_to_end(tmp_path):
     finally:
         proc.stdin.close()
         assert proc.wait(10) == 0
+
+
+@linux_only
+def test_restore_library_path_for_children(monkeypatch):
+    """Собранный BypassHub не передаёт запускаемым программам свои библиотеки (TgWsProxy зависал)."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", "/tmp/_MEI123", raising=False)
+    env = {"LD_LIBRARY_PATH": "/tmp/_MEI123:/usr/lib/x", "LD_LIBRARY_PATH_ORIG": "/usr/lib/x",
+           "QT_PLUGIN_PATH": "/tmp/_MEI123/PySide6/Qt/plugins", "HOME": "/home/u"}
+    winutil.restore_library_path(env)
+    assert env == {"LD_LIBRARY_PATH": "/usr/lib/x", "HOME": "/home/u"}
+    env = {"LD_LIBRARY_PATH": "/tmp/_MEI123"}
+    assert winutil.restore_library_path(env) == {}
+    env = winutil.clean_env()
+    assert "/tmp/_MEI123" not in env.get("LD_LIBRARY_PATH", "")

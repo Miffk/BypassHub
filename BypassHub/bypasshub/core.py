@@ -290,18 +290,19 @@ class Core:
         exclude = vpn.clean_exe_names(s.get("vpn", "exclude_apps") or []) if mode == "tun" else []
         if profile is not None and profile.kind == "awg":
             conf = awg.parse_conf(profile.data, profile.name)
-            # раздельное туннелирование, режим прокси и программы мимо VPN — через sing-box поверх туннеля
-            split = ru_direct or mode == "proxy" or bool(exclude)
+            # раздельное туннелирование, режим прокси и программы мимо VPN — через sing-box поверх туннеля;
+            # в Linux — всегда: туннель там отдаёт SOCKS5, а не сетевой адаптер
+            split = ru_direct or mode == "proxy" or bool(exclude) or winutil.IS_LINUX
             self._ensure_engines(split, True, progress)
             self.singbox.stop()
             if not split:
                 self.awg.start(conf, bool(s.get("vpn", "lan_access")))
                 return
             bypass = awg.endpoint_ips(conf)
-            self.awg.start(conf, split=True)
+            socks = self.awg.start(conf, split=True)
+            outbound = vpn.socks_outbound(socks) if winutil.IS_LINUX else vpn.awg_outbound(awg.TUNNEL_NAME)
             try:
-                self.singbox.start(vpn.awg_outbound(awg.TUNNEL_NAME), profile.name, mode, ru_direct, port, bypass,
-                                   exclude)
+                self.singbox.start(outbound, profile.name, mode, ru_direct, port, bypass, exclude)
             except Exception:
                 self.awg.stop()
                 raise

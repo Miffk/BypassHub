@@ -241,7 +241,7 @@ chmod +x BypassHub-linux-x86_64
 | Режим «служба» | служба Windows | служба **systemd** `bypasshub-zapret` — обход работает с момента включения компьютера, без BypassHub и без пароля |
 | TG WS Proxy | TgWsProxy.exe | официальная сборка `TgWsProxy_linux_amd64` |
 | VPN VLESS / Hysteria2 | sing-box | sing-box; «Системный прокси» прописывается в настройки KDE Plasma и GNOME |
-| VPN AmneziaWG | клиент скачивается сам | нужны пакеты **amneziawg-tools** и **amneziawg-dkms** (или amneziawg-go): `paru -S amneziawg-tools amneziawg-dkms` |
+| VPN AmneziaWG | клиент скачивается сам | встроен в BypassHub (то же ядро, что в версии для Android), ставить ничего не нужно |
 | Горячие клавиши | задаются в программе | назначаются в системе на команду `BypassHub-linux-x86_64 --action toggle_zapret` (команды — в «Настройках») |
 | Автозапуск | Планировщик заданий | ярлык в `~/.config/autostart` |
 | Данные | `C:\ProgramData\BypassHub` | `~/.local/share/BypassHub` |
