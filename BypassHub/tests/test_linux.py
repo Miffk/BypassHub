@@ -338,10 +338,61 @@ def test_awg_real_engine_opens_socks(tmp_path, monkeypatch):
 
 
 @linux_only
-def test_tg_linux_asset():
-    assert tgproxy.choose_asset("auto") == "TgWsProxy_linux_amd64"
-    assert tgproxy.choose_asset("TgWsProxy_windows.exe") == "TgWsProxy_linux_amd64"
-    assert tgproxy.EXE_NAME == "TgWsProxy"
+def test_tg_linux_runs_from_source(tmp_path):
+    """В Linux tg-ws-proxy — исходники релиза, запуск встроенным Python BypassHub без окна."""
+    assert tgproxy.choose_asset("auto") == tgproxy.LINUX_ASSET
+    assert tgproxy.choose_asset("TgWsProxy_windows.exe") == tgproxy.LINUX_ASSET
+    m = tgproxy.TgProxyManager(tmp_path / "tg")
+    assert not m.is_installed()
+    archive = _tar(tmp_path / "src.tar.gz", {
+        "tg-ws-proxy-1.11.3/proxy/__init__.py": b"__version__ = '1.11.3'\n",
+        "tg-ws-proxy-1.11.3/proxy/tg_ws_proxy.py": b"def main(): pass\n",
+        "tg-ws-proxy-1.11.3/utils/logging_setup.py": b"",
+        "tg-ws-proxy-1.11.3/utils/tray_common.py": b"import pystray\n",
+        "tg-ws-proxy-1.11.3/linux.py": b"",
+    })
+    tgproxy.extract_source(archive, m.source_dir)
+    assert m.is_installed()
+    assert (m.source_dir / "utils" / "__init__.py").exists()
+    assert not (m.source_dir / "utils" / "tray_common.py").exists() and not (m.source_dir / "linux.py").exists()
+    cfg = m.ensure_config()
+    cmd = m.launch_command(cfg)
+    i = cmd.index("--run-tg-proxy")
+    assert cmd[i + 1] == str(m.source_dir) and cmd[i + 2] == "--"
+    assert ["--port", "1443"] == cmd[cmd.index("--port"):cmd.index("--port") + 2]
+    assert cmd[cmd.index("--log-file") + 1] == str(m.log_file)
+    assert tgproxy.source_url("v1.11.3") == "https://github.com/Flowseal/tg-ws-proxy/archive/refs/tags/v1.11.3.tar.gz"
+
+
+def test_tg_cli_args_from_config():
+    cfg = dict(tgproxy.DEFAULT_CONFIG, secret="ab" * 16, verbose=True, cfproxy=False, h2=False,
+               cfproxy_user_domain_enabled=True, cfproxy_user_domain=["a.com", "b.com"],
+               cfproxy_worker_enabled=False, cfproxy_worker_domain=["w.dev"], no_secure=True)
+    args = tgproxy.cli_args(cfg, Path("/x/proxy.log"))
+    assert args[:4] == ["--host", "127.0.0.1", "--port", "1443"]
+    assert ["--secret", "ab" * 16] == args[4:6]
+    assert args.count("--dc-ip") == 2 and "2:149.154.167.220" in args
+    for flag in ("--verbose", "--no-cfproxy", "--no-h2", "--no-secure"):
+        assert flag in args
+    assert args.count("--cfproxy-domain") == 2 and "--cfproxy-worker-domain" not in args
+    assert tgproxy.cli_args(dict(cfg, dc_ip=[]), Path("/x")).count("--dc-ip") == 1
+    assert "--force-test-dc" not in args
+
+
+def test_run_tg_proxy_entry(tmp_path, monkeypatch):
+    """BypassHub --run-tg-proxy <src> -- <аргументы> вызывает proxy.tg_ws_proxy.main с этими аргументами."""
+    from bypasshub import tgrun
+    pkg = tmp_path / "src" / "proxy"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "tg_ws_proxy.py").write_text("import sys\nSEEN = []\ndef main():\n    SEEN.append(list(sys.argv))\n")
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    assert tgrun.run(str(tmp_path / "src"), ["--port", "1"]) == 0
+    import proxy.tg_ws_proxy as mod
+    assert mod.SEEN == [["tg-ws-proxy", "--port", "1"]]
+    sys.modules.pop("proxy.tg_ws_proxy", None)
+    sys.modules.pop("proxy", None)
 
 
 @linux_only

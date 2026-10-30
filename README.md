@@ -239,7 +239,7 @@ chmod +x BypassHub-linux-x86_64
 |---|---|---|
 | Zapret | winws.exe + WinDivert | **nfqws** из [bol-van/zapret](https://github.com/bol-van/zapret) + правила nftables (или iptables). Стратегии, списки и фейки — те же, из zapret-discord-youtube |
 | Режим «служба» | служба Windows | служба **systemd** `bypasshub-zapret` — обход работает с момента включения компьютера, без BypassHub и без пароля |
-| TG WS Proxy | TgWsProxy.exe | официальная сборка `TgWsProxy_linux_amd64` |
+| TG WS Proxy | TgWsProxy.exe | официальные исходники того же релиза; прокси запускается встроенным Python BypassHub, без окна и значка в трее |
 | VPN VLESS / Hysteria2 | sing-box | sing-box; «Системный прокси» прописывается в настройки KDE Plasma и GNOME |
 | VPN AmneziaWG | клиент скачивается сам | встроен в BypassHub (то же ядро, что в версии для Android), ставить ничего не нужно |
 | Горячие клавиши | задаются в программе | назначаются в системе на команду `BypassHub-linux-x86_64 --action toggle_zapret` (команды — в «Настройках») |

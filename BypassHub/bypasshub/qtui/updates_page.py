@@ -128,6 +128,12 @@ class UpdatesPage(Page):
             W.set_label_color(row["state"], color)
             avail = bool(info and info.available)
             btn = row["btn"]
+            if key == "awg" and winutil.IS_LINUX:  # ядро AmneziaWG встроено в BypassHub — скачивать нечего
+                W.set_text(row["state"], "Встроен в BypassHub, обновляется вместе с ним")
+                W.set_label_color(row["state"], S.P.muted)
+                btn.setText("Встроен")
+                btn.setEnabled(False)
+                continue
             if key == "self":
                 btn.setText("Обновить")
                 btn.setEnabled(avail and not self.busy and selfupdate.is_frozen())

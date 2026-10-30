@@ -436,6 +436,8 @@ class Core:
 
     def check_awg(self) -> UpdateInfo:
         installed = self.awg.local_version() if self.awg.is_installed() else ""
+        if winutil.IS_LINUX and installed:  # встроен в BypassHub — обновляется вместе с ним
+            return UpdateInfo("awg", "VPN: AmneziaWG", installed, installed, None)
         try:
             rel = awg.latest_release()
         except Exception as exc:

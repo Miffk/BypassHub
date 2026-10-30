@@ -4,8 +4,11 @@
 рядом с ним лежит папка TgWsProxy_data, поэтому его config.json и логи живут
 внутри папки BypassHub и не пересекаются с отдельно установленной копией.
 Все настройки из окна «Настройки» tg-ws-proxy редактируются здесь и
-записываются в этот config.json. В Linux — та же схема с официальной сборкой
-TgWsProxy_linux_amd64 (портативный режим включается папкой TgWsProxy_data рядом).
+записываются в этот config.json.
+
+В Linux вместо сборки для трея скачиваются исходники того же релиза, а сам прокси
+запускается встроенным Python BypassHub без окна (см. tgrun.py); настройки из config.json
+передаются ему аргументами командной строки, журнал — тот же TgWsProxy_data/proxy.log.
 """
 from __future__ import annotations
 
@@ -13,7 +16,9 @@ import ipaddress
 import json
 import math
 import os
+import shutil
 import socket
+import tarfile
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -34,9 +39,9 @@ WINDOWS_ASSETS = {
     "TgWsProxy_windows_7_64bit.exe": "Windows 7 x64",
     "TgWsProxy_windows_7_32bit.exe": "Windows 7 x32",
 }
-LINUX_ASSET = "TgWsProxy_linux_amd64"
+LINUX_ASSET = "source"  # Linux: исходники релиза, запуск без окна
 # сборки, из которых можно выбрать в «Обновлениях» (только для этой ОС)
-ASSETS = {LINUX_ASSET: "Linux x86_64"} if winutil.IS_LINUX else WINDOWS_ASSETS
+ASSETS = {LINUX_ASSET: "Исходники (без окна)"} if winutil.IS_LINUX else WINDOWS_ASSETS
 
 # Совпадает с utils/default_config.py из tg-ws-proxy
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -231,6 +236,63 @@ def phone_link(cfg: Dict[str, Any], server: Optional[str] = None) -> Optional[st
     return proxy_link(cfg, server=server, web=True)
 
 
+def source_url(tag: str) -> str:
+    return f"https://github.com/{REPO}/archive/refs/tags/{tag}.tar.gz"
+
+
+def extract_source(archive: Path, dest: Path) -> None:
+    """Из архива исходников — пакет proxy и utils/logging_setup.py (больше прокси ничего не нужно)."""
+    with tarfile.open(archive) as tf:
+        members = [m for m in tf.getmembers() if m.isfile()]
+        found = False
+        for m in members:
+            parts = m.name.split("/", 1)
+            rel = parts[1] if len(parts) == 2 else ""
+            if not (rel.startswith("proxy/") and rel.endswith(".py")) and rel != "utils/logging_setup.py":
+                continue
+            if ".." in rel.split("/"):
+                continue
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tf.extractfile(m) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+            found = found or rel == "proxy/tg_ws_proxy.py"
+    if not found:
+        raise IOError(f"в архиве {archive.name} нет proxy/tg_ws_proxy.py")
+    (dest / "utils" / "__init__.py").touch()
+
+
+def cli_args(cfg: Dict[str, Any], log_file: Path) -> List[str]:
+    """Настройки config.json → аргументы tg-ws-proxy (как их применяет приложение для трея)."""
+    args = ["--host", str(cfg.get("host", DEFAULT_CONFIG["host"])), "--port", str(int(cfg.get("port", 1443))),
+            "--secret", str(cfg.get("secret", "")), "--log-file", str(log_file),
+            "--log-max-mb", str(cfg.get("log_max_mb", DEFAULT_CONFIG["log_max_mb"])),
+            "--buf-kb", str(int(cfg.get("buf_kb", DEFAULT_CONFIG["buf_kb"]))),
+            "--pool-size", str(int(cfg.get("pool_size", DEFAULT_CONFIG["pool_size"])))]
+    dc = [str(x).strip() for x in cfg.get("dc_ip", DEFAULT_CONFIG["dc_ip"]) or [] if str(x).strip()]
+    for entry in dc:
+        args += ["--dc-ip", entry]
+    if not dc:
+        args.append("--dc-ip")  # без значения: ни одного правила DC → IP
+    if cfg.get("verbose"):
+        args.append("--verbose")
+    if not cfg.get("cfproxy", True):
+        args.append("--no-cfproxy")
+    if not cfg.get("h2", True):
+        args.append("--no-h2")
+    if cfg.get("no_secure"):
+        args.append("--no-secure")
+    if cfg.get("force_test_dc"):
+        args.append("--force-test-dc")
+    if cfg.get("cfproxy_user_domain_enabled"):
+        for d in coerce_domain_list(cfg.get("cfproxy_user_domain")):
+            args += ["--cfproxy-domain", d]
+    if cfg.get("cfproxy_worker_enabled"):
+        for d in coerce_domain_list(cfg.get("cfproxy_worker_domain")):
+            args += ["--cfproxy-worker-domain", d]
+    return args
+
+
 def choose_asset(preference: str = "auto") -> str:
     if preference in ASSETS:
         return preference
@@ -301,7 +363,14 @@ class TgProxyManager:
     def version_file(self) -> Path:
         return self.root / "version.txt"
 
+    @property
+    def source_dir(self) -> Path:
+        """Linux: исходники прокси из релиза."""
+        return self.root / "src"
+
     def is_installed(self) -> bool:
+        if winutil.IS_LINUX:
+            return (self.source_dir / "proxy" / "tg_ws_proxy.py").exists()
         return self.exe.exists()
 
     def local_version(self) -> str:
@@ -358,13 +427,32 @@ class TgProxyManager:
 
     # ---------------------------------------------------------- статус
     def _own_processes(self) -> List[winutil.ProcInfo]:
+        if winutil.IS_LINUX:
+            return self._linux_processes()
         return [p for p in winutil.find_processes_like("tgwsproxy")
                 if p.exe and winutil.same_path(p.exe, self.exe)]
 
+    def _linux_processes(self) -> List[winutil.ProcInfo]:
+        """BypassHub --run-tg-proxy <наша папка исходников> (у собранной программы — два процесса)."""
+        from .tgrun import FLAG
+        try:
+            import psutil
+        except ImportError:
+            return []
+        src = str(self.source_dir)
+        found = []
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
+            cmd = p.info.get("cmdline") or []
+            if FLAG in cmd and cmd.index(FLAG) + 1 < len(cmd) and winutil.same_path(cmd[cmd.index(FLAG) + 1], src):
+                found.append(winutil.ProcInfo(p.info["pid"], p.info.get("name") or "", cmd[0]))
+        return found
+
     def status(self) -> TgStatus:
         st = TgStatus(installed=self.is_installed(), version=self.local_version())
+        if winutil.IS_LINUX:
+            st.pids = [p.pid for p in self._linux_processes()]
         for p in winutil.find_processes_like("tgwsproxy"):
-            if p.exe and winutil.same_path(p.exe, self.exe):
+            if p.exe and winutil.same_path(p.exe, self.exe) and not winutil.IS_LINUX:
                 st.pids.append(p.pid)
             elif p.exe:
                 st.foreign.append(p.exe)
@@ -380,15 +468,17 @@ class TgProxyManager:
             raise RuntimeError("tg-ws-proxy ещё не скачан — нажмите «Проверить обновления»")
         if self._own_processes():
             return
+        if winutil.IS_LINUX:
+            self._stop_legacy_binary()
         foreign = [p for p in winutil.find_processes_like("tgwsproxy")
-                   if not (p.exe and winutil.same_path(p.exe, self.exe))]
+                   if winutil.IS_LINUX or not (p.exe and winutil.same_path(p.exe, self.exe))]
         if foreign:
             raise RuntimeError("Уже запущен другой TgWsProxy:\n" + "\n".join(p.exe or p.name for p in foreign)
                                + "\nЗакройте его (значок в трее → Выход) и попробуйте снова.")
         cfg = self.ensure_config()
         for attempt in range(2):
             log.info("Запуск tg-ws-proxy")
-            winutil.popen_hidden([str(self.exe)], cwd=self.root, detached=True)
+            winutil.popen_hidden(self.launch_command(cfg), cwd=self.root, detached=True)
             for _ in range(20):
                 time.sleep(0.25)
                 if self._own_processes():
@@ -402,6 +492,19 @@ class TgProxyManager:
             log.warning("tg-ws-proxy не открыл порт %s — перезапуск", cfg.get("port"))
             self.stop()
             time.sleep(1.0)
+
+    def _stop_legacy_binary(self) -> None:
+        """Linux: сборка для трея, которую ставили 1.9.0–1.9.1, — останавливаем, порт нужен прокси."""
+        for p in winutil.find_processes_like("tgwsproxy"):
+            if p.exe and winutil.same_path(p.exe, self.root / "TgWsProxy"):
+                winutil.kill_pid_tree(p.pid)
+
+    def launch_command(self, cfg: Dict[str, Any]) -> List[str]:
+        if not winutil.IS_LINUX:
+            return [str(self.exe)]
+        from . import linux
+        from .tgrun import FLAG
+        return linux.self_command([FLAG, str(self.source_dir), "--"] + cli_args(cfg, self.log_file))
 
     def _wait_listening(self, cfg: Dict[str, Any]) -> bool:
         """Дождаться, пока прокси откроет порт (False — не открыл или процесс завершился)."""
@@ -429,8 +532,33 @@ class TgProxyManager:
         self.start()
 
     # ---------------------------------------------------------- обновление
+    def _install_source(self, release: github.Release, download_dir: Path,
+                        progress: Optional[github.ProgressCb]) -> None:
+        archive = download_dir / f"tg-ws-proxy-{release.tag}.tar.gz"
+        github.download(source_url(release.tag), archive, progress)
+        staging = self.root / "src.new"
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            extract_source(archive, staging)
+        finally:
+            archive.unlink(missing_ok=True)
+        was_running = bool(self._own_processes())
+        self.stop()
+        self._stop_legacy_binary()
+        shutil.rmtree(self.source_dir, ignore_errors=True)
+        staging.rename(self.source_dir)
+        self.exe.unlink(missing_ok=True)  # сборка для трея из 1.9.0–1.9.1 больше не нужна
+        self.version_file.write_text(release.version, encoding="utf-8")
+        self.ensure_config()
+        log.info("tg-ws-proxy %s установлен (исходники, запуск без окна)", release.version)
+        if was_running:
+            self.start()
+
     def install_release(self, release: github.Release, asset_name: str, download_dir: Path,
                         progress: Optional[github.ProgressCb] = None) -> None:
+        if winutil.IS_LINUX:
+            self._install_source(release, download_dir, progress)
+            return
         asset = release.asset(asset_name)
         tmp = download_dir / asset_name
         github.download(asset.url, tmp, progress, asset.sha256)
