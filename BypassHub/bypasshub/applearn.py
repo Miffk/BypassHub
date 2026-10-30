@@ -1,6 +1,6 @@
 """Экспериментальное исключение программ по IP-адресам.
 
-Раз в несколько секунд смотрит (в локальной таблице соединений Windows, без
+Раз в несколько секунд смотрит (в локальной таблице соединений ОС, без
 сетевых запросов), к каким адресам подключены процессы выбранных программ, и
 дописывает эти адреса в ipset-exclude-user.txt. winws сам перечитывает список
 при изменении файла, перезапуск обхода не нужен.
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -35,6 +36,10 @@ APP_PROCESSES: Dict[str, List[str]] = {
     "FACEIT": ["faceit.exe", "faceitclient.exe"],
     "Xbox / Microsoft Store": ["xboxpcapp.exe", "gamingservices.exe"],
 }
+if sys.platform.startswith("linux"):
+    # в Linux — свои программы; игры и лаунчеры через Wine/Proton видны под именами .exe (они уже в списке)
+    for _app, _names in {"Steam": ["steam", "steamwebhelper"], "Epic Games": ["heroic", "legendary"]}.items():
+        APP_PROCESSES[_app] = APP_PROCESSES[_app] + _names
 PROTECTED_DOMAINS = [
     "discord.com", "gateway.discord.gg", "cdn.discordapp.com", "media.discordapp.net",
     "www.youtube.com", "i.ytimg.com", "redirector.googlevideo.com", "www.google.com",

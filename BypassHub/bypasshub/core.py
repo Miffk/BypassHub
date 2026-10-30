@@ -4,9 +4,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import awg, github, selfupdate, tgproxy, vpn, zapret
+from . import awg, github, selfupdate, tgproxy, vpn, winutil, zapret
 from .applearn import AppLearner
 from .awg import AwgManager
 from .log import log
@@ -446,7 +447,7 @@ class Core:
         if self.singbox.is_installed():
             infos.append(self.check_singbox())
             self.singbox.update_rule_sets()  # базы раздельного туннелирования, если устарели
-        if self.awg.is_installed():
+        if self.awg.is_installed() and not winutil.IS_LINUX:  # в Linux AmneziaWG обновляет менеджер пакетов
             infos.append(self.check_awg())
         if self.settings.get("updates", "self_update"):
             infos.append(self.check_self())
@@ -483,14 +484,40 @@ class Core:
                     self.tg.start()
             info.installed = info.release.version
 
+    def _fetch_nfqws(self, cb) -> Optional[Tuple[Path, str]]:
+        """Linux: свежий nfqws из релизов bol-van/zapret, если его ещё нет или вышла новая версия.
+        None — оставить установленный."""
+        try:
+            rel = github.latest_release(zapret.NFQWS_REPO)
+        except Exception as exc:
+            if self.zapret.winws.exists():
+                log.warning("nfqws: не удалось проверить обновления (%s), оставляю установленный", exc)
+                return None
+            raise RuntimeError(f"не удалось скачать nfqws для Linux: {exc}") from None
+        if self.zapret.winws.exists() and self.zapret.nfqws_version() == rel.version:
+            return None
+        asset = rel.asset(zapret.nfqws_asset(rel.tag))
+        archive = self.paths.downloads / asset.name
+        github.download(asset.url, archive, cb, asset.sha256)
+        try:
+            dest = self.paths.downloads / zapret.NFQWS
+            zapret.extract_nfqws(archive, dest)
+        finally:
+            archive.unlink(missing_ok=True)
+        log.info("nfqws %s скачан", rel.version)
+        return dest, rel.version
+
     def _install_zapret(self, rel: github.Release, cb) -> None:
         asset = rel.asset(f"zapret-discord-youtube-{rel.tag}.zip")
         zip_path = self.paths.downloads / asset.name
+        nfqws = self._fetch_nfqws(cb) if winutil.IS_LINUX else None
         github.download(asset.url, zip_path, cb, asset.sha256)
         try:
-            strategy = self.zapret.install_release(zip_path, self.strategy, self.zapret_mode)
+            strategy = self.zapret.install_release(zip_path, self.strategy, self.zapret_mode, nfqws=nfqws)
         finally:
             zip_path.unlink(missing_ok=True)
+            if nfqws is not None:
+                nfqws[0].unlink(missing_ok=True)
         self.settings.set("zapret", "strategy", strategy, save=False)
         self.settings.set("zapret", "installed_version", rel.version)
         log.info("Zapret %s установлен", rel.version)

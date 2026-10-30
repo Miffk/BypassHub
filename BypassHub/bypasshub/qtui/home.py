@@ -437,7 +437,7 @@ class HomePage(Page):
         def with_avail(text: str, avail: str) -> str:
             return "\n".join(x for x in (text, avail) if x)
 
-        mode = "служба Windows" if zs.service_installed else "программа"
+        mode = ("служба systemd" if winutil.IS_LINUX else "служба Windows") if zs.service_installed else "программа"
         if not zs.installed:
             self.zapret_card.set_state(False, "Не установлен", None, "Загрузка начнётся автоматически.",
                                        tile_details="Скачивается…")
@@ -445,7 +445,8 @@ class HomePage(Page):
             strategy = (zs.service_strategy + ".bat") if zs.service_strategy else core.strategy
             details = f"Стратегия: {strategy} · режим: {mode} · версия {zs.version}"
             if zs.foreign_processes:
-                details += "\nВнимание: запущен winws.exe из другой папки: " + ", ".join(zs.foreign_processes)
+                details += (f"\nВнимание: запущен {core.zapret.engine_name} из другой папки: "
+                            + ", ".join(zs.foreign_processes))
             self.zapret_card.set_state(True, "● Работает", S.green(), with_avail(details, avail_z),
                                        tile_details=with_avail(strategy.removesuffix(".bat"), avail_z))
         elif zs.service_installed:

@@ -459,6 +459,15 @@ class App(QMainWindow):
             except OSError:
                 pass
             self.show_window()
+        from ..hotkeys import ACTIONS
+        for action in ACTIONS:  # BypassHub --action … (свои горячие клавиши в Linux)
+            flag = self.core.paths.action_flag(action)
+            if flag.exists():
+                try:
+                    flag.unlink()
+                except OSError:
+                    continue
+                self._on_hotkey(action)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 — имя Qt
         if self._closing:
@@ -512,6 +521,7 @@ def run(core: Core, start_minimized: bool = False) -> int:
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     qapp = QApplication.instance() or QApplication([])
     qapp.setApplicationName(APP_NAME)
+    qapp.setDesktopFileName("bypasshub")  # Wayland: значок окна и панели — из ярлыка bypasshub.desktop
     qapp.setQuitOnLastWindowClosed(False)  # окно прячется в трей, выход — через меню
     qapp.setFont(S.base_font())
     log.info("Интерфейс: Qt %s", qVersion())

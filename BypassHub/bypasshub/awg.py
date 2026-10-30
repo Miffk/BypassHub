@@ -5,12 +5,17 @@
 amneziawg.exe, а BypassHub ставит туннель как службу командой
 `amneziawg.exe /installtunnelservice <файл.conf>` — так же, как это делает сам
 клиент. Отдельно ставить AmneziaWG или AmneziaVPN не нужно.
+
+В Linux туннель поднимает awg-quick из пакета amneziawg-tools (с модулем ядра
+amneziawg-dkms или amneziawg-go) — его ставит пользователь, BypassHub вызывает
+awg-quick через помощника с правами root (linux.py).
 """
 from __future__ import annotations
 
 import base64
 import binascii
 import json
+import os
 import re
 import shutil
 import time
@@ -19,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import github, winutil
+from . import github, linux, winutil
 from .log import log
 
 REPO = "amnezia-vpn/amneziawg-windows-client"
@@ -29,6 +34,9 @@ SERVICE_NAME = f"AmneziaWGTunnel${TUNNEL_NAME}"
 START_TIMEOUT = 60                        # сколько ждать запуска службы туннеля, с
 FALLBACK_METRIC = 9000
 WINTUN_DLL = "wintun.dll"  # драйвер сетевого адаптера; служба загружает его из папки amneziawg.exe
+LINUX_HINT = ("Для ключей AmneziaVPN в Linux нужен AmneziaWG: пакеты amneziawg-tools и amneziawg-dkms "
+              "(или amneziawg-go), например из AUR: paru -S amneziawg-tools amneziawg-dkms. "
+              "После установки включите VPN ещё раз.")
 
 
 # ====================================================================== ключи
@@ -202,6 +210,20 @@ def prepare_conf(conf: str, lan_access: bool = True, split: bool = False) -> str
 
 # ====================================================================== релизы клиента
 
+def split_dns(conf: str) -> "tuple[str, List[str]]":
+    """Убирает строки DNS = из конфига и возвращает их адреса (в Linux без resolvconf
+    awg-quick с DNS не запускается — тогда DNS туннеля задаём через resolvectl)."""
+    dns: List[str] = []
+    lines = []
+    for ln in conf.splitlines():
+        m = re.match(r"(?i)\s*DNS\s*=\s*(.*)$", ln)
+        if m:
+            dns += [d.strip() for d in m.group(1).split(",") if d.strip()]
+            continue
+        lines.append(ln)
+    return "\n".join(lines) + "\n", dns
+
+
 def asset_name(version: str) -> str:
     arch = winutil.machine_arch()
     name = "arm64" if "ARM64" in arch else ("amd64" if arch.endswith("64") else "x86")
@@ -209,6 +231,8 @@ def asset_name(version: str) -> str:
 
 
 def latest_release() -> github.Release:
+    if winutil.IS_LINUX:  # в Linux AmneziaWG ставится пакетами системы
+        raise RuntimeError(LINUX_HINT)
     return github.latest_release(REPO)
 
 
@@ -239,21 +263,71 @@ class AwgManager:
         return self.root / "version.txt"
 
     def is_installed(self) -> bool:
+        if winutil.IS_LINUX:
+            return bool(linux.which("awg-quick") and linux.which("awg"))
         # без wintun.dll рядом служба туннеля сразу останавливается (так было в 1.3.0 до исправления)
         return self.exe.exists() and (self.root / WINTUN_DLL).exists()
 
     def local_version(self) -> str:
+        if winutil.IS_LINUX:
+            awg_bin = linux.which("awg")
+            if not awg_bin:
+                return ""
+            m = re.search(r"v?(\d+(?:\.\d+)+)", winutil.run([awg_bin, "--version"], timeout=10).stdout)
+            return m.group(1) if m else ""
         try:
             return self.version_file.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
 
+    @staticmethod
+    def _linux_up() -> bool:
+        try:
+            import psutil
+            return TUNNEL_NAME in psutil.net_if_stats()
+        except Exception:
+            return False
+
     def status(self) -> AwgStatus:
+        if winutil.IS_LINUX:
+            up = self._linux_up()
+            return AwgStatus(installed=self.is_installed(), version=self.local_version() if up else "",
+                             running=up, state="RUNNING" if up else None)
         state = winutil.service_state(SERVICE_NAME)
         return AwgStatus(installed=self.is_installed(), version=self.local_version(),
                          running=state in ("RUNNING", "START_PENDING"), state=state)
 
+    def _start_linux(self, profile: AwgProfile, split: bool) -> None:
+        if not self.is_installed():
+            raise RuntimeError(LINUX_HINT)
+        self.stop()
+        # доступ к локальной сети awg-quick сохраняет сам (suppress_prefixlength), а половинки
+        # 0.0.0.0/1 + 128.0.0.0/1 в Linux завернули бы в туннель и пакеты к самому серверу
+        conf = prepare_conf(profile.conf, lan_access=False, split=split)
+        conf, dns = split_dns(conf)
+        use_resolvconf = bool(dns) and not split and bool(linux.which("resolvconf"))
+        if use_resolvconf:
+            conf = re.sub(r"(?im)^(\s*\[Interface\]\s*)$", lambda m: m.group(1) + "\nDNS = " + ", ".join(dns),
+                          conf, count=1)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.conf_file.write_text(conf, encoding="utf-8")
+        os.chmod(self.conf_file, 0o600)  # в файле закрытый ключ
+        log.info("Запуск AmneziaWG: %s (%s)", profile.name, profile.endpoint)
+        h = linux.helper()
+        res = h.run(["awg-quick", "up", str(self.conf_file)], timeout=90)
+        if res["rc"] != 0:
+            raise RuntimeError("Туннель AmneziaWG не запустился:\n" + (res["out"].strip()[-1500:] or
+                                                                     f"код {res['rc']}"))
+        if split:
+            h.run(["ip", "route", "replace", "default", "dev", TUNNEL_NAME, "metric", str(FALLBACK_METRIC)])
+        elif dns and not use_resolvconf and linux.which("resolvectl"):
+            h.run(["resolvectl", "dns", TUNNEL_NAME] + dns)
+            h.run(["resolvectl", "domain", TUNNEL_NAME, "~."])
+
     def start(self, profile: AwgProfile, lan_access: bool = True, split: bool = False) -> None:
+        if winutil.IS_LINUX:
+            self._start_linux(profile, split)
+            return
         if not self.is_installed():
             raise RuntimeError("Клиент AmneziaWG ещё не скачан")
         self.stop()
@@ -331,6 +405,14 @@ class AwgManager:
         log.warning("AmneziaWG: не удалось добавить маршрут через туннель")
 
     def stop(self) -> None:
+        if winutil.IS_LINUX:
+            if not self._linux_up():
+                return
+            h = linux.helper()
+            if h.run(["awg-quick", "down", str(self.conf_file)], timeout=60)["rc"] != 0 and self._linux_up():
+                h.run(["ip", "link", "delete", TUNNEL_NAME])
+            log.info("AmneziaWG выключен")
+            return
         if winutil.service_state(SERVICE_NAME) is None:
             return
         if self.exe.exists():
@@ -346,6 +428,8 @@ class AwgManager:
     def install_release(self, release: github.Release, download_dir: Path,
                         progress: Optional[github.ProgressCb] = None) -> None:
         """Скачивает .msi и достаёт из него amneziawg.exe и wintun.dll (msiexec /a — распаковка без установки)."""
+        if winutil.IS_LINUX:
+            raise RuntimeError(LINUX_HINT)
         asset = release.asset(asset_name(release.version))
         msi = download_dir / asset.name
         github.download(asset.url, msi, progress, asset.sha256)

@@ -2,7 +2,7 @@
 
 Работающий exe нельзя перезаписать, но можно переименовать: новый файл
 кладётся на его место, старый становится BypassHub.old.exe и удаляется
-следующим запуском.
+следующим запуском. В Linux так же обновляется файл BypassHub-linux-x86_64.
 """
 from __future__ import annotations
 
@@ -18,7 +18,14 @@ from .log import log
 
 REPO = "Miffk/BypassHub"
 TAG_PREFIX = "bypasshub-v"
-ASSET = "BypassHub.exe"
+ASSET = "BypassHub-linux-x86_64" if winutil.IS_LINUX else "BypassHub.exe"
+
+
+def _neighbour(exe: Path, kind: str) -> Path:
+    """BypassHub.old.exe / BypassHub.new.exe; в Linux — <файл>.old / <файл>.new."""
+    if winutil.IS_WINDOWS:
+        return exe.with_name(f"BypassHub.{kind}.exe")
+    return exe.with_name(f"{exe.name}.{kind}")
 
 
 def is_frozen() -> bool:
@@ -64,7 +71,7 @@ def cleanup_old(attempts: int = 40, delay: float = 0.5) -> bool:
     if not is_frozen():
         return True
     import time
-    old = Path(sys.executable).with_name("BypassHub.old.exe")
+    old = _neighbour(Path(sys.executable), "old")
     for _ in range(attempts):
         try:
             old.unlink(missing_ok=True)
@@ -84,9 +91,11 @@ def install(release: github.Release, progress: Optional[github.ProgressCb] = Non
         raise RuntimeError(f"в релизе {release.tag} нет файла {ASSET}")
     asset = release.assets[ASSET]
     exe = Path(sys.executable)
-    new = exe.with_name("BypassHub.new.exe")
-    old = exe.with_name("BypassHub.old.exe")
+    new = _neighbour(exe, "new")
+    old = _neighbour(exe, "old")
     github.download(asset.url, new, progress, asset.sha256)
+    if not winutil.IS_WINDOWS:
+        os.chmod(new, 0o755)
     old.unlink(missing_ok=True)
     exe.rename(old)
     try:
@@ -97,4 +106,4 @@ def install(release: github.Release, progress: Optional[github.ProgressCb] = Non
     log.info("BypassHub обновлён до %s, перезапуск", version_of(release))
     flags = winutil.DETACHED_PROCESS | winutil.CREATE_NEW_PROCESS_GROUP if winutil.IS_WINDOWS else 0
     subprocess.Popen([str(exe), "--wait-pid", str(os.getpid())], creationflags=flags, close_fds=True,
-                     env=winutil.clean_env())
+                     env=winutil.clean_env(), start_new_session=not winutil.IS_WINDOWS)

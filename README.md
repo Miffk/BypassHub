@@ -7,11 +7,12 @@
 [![Последний релиз](https://img.shields.io/github/v/release/Miffk/BypassHub?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=7f5af0)](https://github.com/Miffk/BypassHub/releases/latest)
 [![Скачивания](https://img.shields.io/github/downloads/Miffk/BypassHub/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F&color=2cb67d)](https://github.com/Miffk/BypassHub/releases)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)
+![Linux](https://img.shields.io/badge/Linux-CachyOS%20%C2%B7%20Arch%20%C2%B7%20x86__64-1793d1)
 ![Android 7+](https://img.shields.io/badge/Android-7%2B%20%C2%B7%20TV-3ddc84)
 ![iOS 15+](https://img.shields.io/badge/iOS-15%2B-lightgrey)
 [![Сборка](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml/badge.svg)](https://github.com/Miffk/BypassHub/actions/workflows/bypasshub.yml)
 
-**[⬇ Скачать для Windows](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub.exe)** &nbsp;·&nbsp; **[⬇ Скачать для Android](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk)** &nbsp;·&nbsp; **[⬇ Скачать для iOS](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-ios.ipa)**
+**[⬇ Скачать для Windows](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub.exe)** &nbsp;·&nbsp; **[⬇ Скачать для Linux](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-linux-x86_64)** &nbsp;·&nbsp; **[⬇ Скачать для Android](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-android.apk)** &nbsp;·&nbsp; **[⬇ Скачать для iOS](https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-ios.ipa)**
 
 <sub>iOS-версия ставится только с вашим сертификатом через ESign, Sideloadly и т. п. — см. [iPhone и iPad](#iphone-и-ipad)</sub>
 
@@ -33,7 +34,8 @@ BypassHub — программа для Windows, которая собирает
 в меню слева. Не нужно запускать `.bat`-файлы, искать новые версии на GitHub и переносить свои списки после
 обновления: BypassHub делает это сам.
 
-Есть и **[версия для Android](#android)** — для телефонов, планшетов и Android TV: обход блокировок без VPN,
+Есть и **[версия для Linux](#linux)** (делалась под CachyOS с KDE Plasma): то же окно, те же три кнопки.
+И **[версия для Android](#android)** — для телефонов, планшетов и Android TV: обход блокировок без VPN,
 TG WS Proxy и тот же VPN с раздельным туннелированием, root не нужен. И **[версия для iPhone и iPad](#iphone-и-ipad)** —
 то же самое на iOS (ставится со своим сертификатом).
 
@@ -43,6 +45,7 @@ TG WS Proxy и тот же VPN с раздельным туннелирован�
 - [Скриншоты](#скриншоты)
 - [Установка и первый запуск](#установка-и-первый-запуск)
 - [VPN и раздельное туннелирование](#vpn-и-раздельное-туннелирование)
+- [Linux](#linux)
 - [Android](#android)
 - [iPhone и iPad](#iphone-и-ipad)
 - [Telegram на телефоне](#telegram-на-телефоне)
@@ -212,6 +215,44 @@ TG WS Proxy и тот же VPN с раздельным туннелирован�
 
 <br clear="right">
 
+## Linux
+
+Версия для Linux — тот же BypassHub с тем же окном. Делалась под **CachyOS** (KDE Plasma, Wayland), должна работать
+и на других дистрибутивах x86_64 (Arch, EndeavourOS, Fedora, Ubuntu…).
+
+**Установка:**
+
+```bash
+mkdir -p ~/Applications && cd ~/Applications
+curl -LO https://github.com/Miffk/BypassHub/releases/latest/download/BypassHub-linux-x86_64
+chmod +x BypassHub-linux-x86_64
+./BypassHub-linux-x86_64
+```
+
+После первого запуска BypassHub появится в меню приложений (его можно закрепить на панели), а программа будет
+обновляться сама. Окно работает от имени пользователя; когда нужны права администратора — для zapret, VPN
+«Весь трафик», файла `/etc/hosts` или службы systemd, — система **один раз за сеанс** спросит пароль (pkexec).
+
+**Чем отличается от Windows:**
+
+| | Windows | Linux |
+|---|---|---|
+| Zapret | winws.exe + WinDivert | **nfqws** из [bol-van/zapret](https://github.com/bol-van/zapret) + правила nftables (или iptables). Стратегии, списки и фейки — те же, из zapret-discord-youtube |
+| Режим «служба» | служба Windows | служба **systemd** `bypasshub-zapret` — обход работает с момента включения компьютера, без BypassHub и без пароля |
+| TG WS Proxy | TgWsProxy.exe | официальная сборка `TgWsProxy_linux_amd64` |
+| VPN VLESS / Hysteria2 | sing-box | sing-box; «Системный прокси» прописывается в настройки KDE Plasma и GNOME |
+| VPN AmneziaWG | клиент скачивается сам | нужны пакеты **amneziawg-tools** и **amneziawg-dkms** (или amneziawg-go): `paru -S amneziawg-tools amneziawg-dkms` |
+| Горячие клавиши | задаются в программе | назначаются в системе на команду `BypassHub-linux-x86_64 --action toggle_zapret` (команды — в «Настройках») |
+| Автозапуск | Планировщик заданий | ярлык в `~/.config/autostart` |
+| Данные | `C:\ProgramData\BypassHub` | `~/.local/share/BypassHub` |
+
+Для zapret нужен **nftables** (если его нет — `sudo pacman -S nftables`) или iptables.
+Если включён брандмауэр ufw или firewalld, при «Подключить телефон» BypassHub сам откроет порт прокси.
+
+> [!NOTE]
+> «Тест в PowerShell» из zapret-discord-youtube есть только в Windows — в Linux для подбора стратегии
+> используйте кнопку **«Подобрать стратегию»**.
+
 ## Android
 
 BypassHub для Android работает на телефонах, планшетах и Android TV (Android 7.0 и новее), root не нужен.
@@ -368,7 +409,8 @@ zapret работает на уровне сетевых пакетов и не 
 
 ## Где хранятся данные
 
-Все данные лежат в `C:\ProgramData\BypassHub` — путь без кириллицы и вне OneDrive, так zapret работает надёжнее:
+Все данные лежат в `C:\ProgramData\BypassHub` (в Linux — `~/.local/share/BypassHub`) — путь без кириллицы и вне
+OneDrive, так zapret работает надёжнее:
 
 ```
 C:\ProgramData\BypassHub\
@@ -393,6 +435,9 @@ C:\ProgramData\BypassHub\
 - Ключи VPN хранятся только у вас, в `C:\ProgramData\BypassHub\settings.json`.
 - Права администратора нужны только для zapret (драйвер WinDivert), служб Windows, файла `hosts`, правила брандмауэра
   и сетевого адаптера VPN.
+- В Linux окно работает от имени пользователя, а действия с правами root выполняет помощник, которого запускает
+  pkexec: он принимает только свои команды (правила перехвата, запуск nfqws и sing-box из папки BypassHub, `/etc/hosts`,
+  служба `bypasshub-zapret`) и завершается вместе с окном.
 
 ## Сборка из исходников
 
@@ -406,6 +451,9 @@ build.bat
 
 Готовый файл — `dist\BypassHub.exe`. Запуск без сборки: `pip install -r requirements.txt` и `python main.py`.
 Тесты: `python -m pytest`. Подробности для разработчиков — в [BypassHub/README.md](BypassHub/README.md).
+
+В Linux: `cd BypassHub/BypassHub && ./build.sh` — получится `dist/BypassHub-linux-x86_64`. Запуск без сборки — так же,
+`pip install -r requirements.txt` и `python main.py`.
 
 Версия для Android (Go + Kotlin) собирается в GitHub Actions; как собрать её самому — в [Android/README.md](Android/README.md).
 Версия для iOS (то же ядро на Go + SwiftUI) — тоже в GitHub Actions, без подписи; сборка — в [iOS/README.md](iOS/README.md).

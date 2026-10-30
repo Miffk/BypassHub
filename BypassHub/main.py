@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 
 from bypasshub import APP_NAME, __version__, winutil
+from bypasshub.hotkeys import ACTIONS
 from bypasshub.log import log, setup_logging
 from bypasshub.paths import Paths
 
@@ -23,13 +24,40 @@ def _wait_for_exit(pid: int, timeout: float = 30.0) -> None:
         time.sleep(0.3)
 
 
+def _linux_setup(paths: Paths) -> None:
+    """Linux: папка данных для помощника с правами root и ярлык в меню приложений."""
+    from bypasshub import linux
+    linux.set_data_root(paths.root)
+    try:
+        import io
+        from PIL import Image
+        from bypasshub.paths import resource_path
+        buf = io.BytesIO()
+        with Image.open(resource_path("assets/icon.ico")) as img:
+            img.size = max(img.ico.sizes())  # самый крупный значок из .ico
+            img.convert("RGBA").save(buf, "PNG")
+        icon = buf.getvalue()
+    except Exception as exc:
+        log.debug("значок для меню: %r", exc)
+        icon = None
+    linux.install_menu_entry(icon)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog=APP_NAME)
     ap.add_argument("--minimized", action="store_true", help="запуск свёрнутым в трей")
-    ap.add_argument("--data-dir", type=Path, default=None, help="папка данных (по умолчанию C:\\ProgramData\\BypassHub)")
+    ap.add_argument("--data-dir", type=Path, default=None,
+                    help="папка данных (по умолчанию C:\\ProgramData\\BypassHub, в Linux ~/.local/share/BypassHub)")
     ap.add_argument("--wait-pid", type=int, default=0, help=argparse.SUPPRESS)  # после самообновления
     ap.add_argument("--classic-ui", action="store_true", help="старый интерфейс (Tk) вместо Qt")
+    ap.add_argument("--action", choices=sorted(ACTIONS), default=None,
+                    help="передать запущенному BypassHub действие (для своих горячих клавиш в Linux)")
+    ap.add_argument("--root-helper", metavar="DATA_DIR", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
+
+    if args.root_helper:  # помощник с правами root (Linux, запускается через pkexec)
+        from bypasshub import linux
+        return linux.serve(args.root_helper)
 
     if args.wait_pid:
         _wait_for_exit(args.wait_pid)
@@ -43,8 +71,11 @@ def main() -> int:
     paths = Paths(args.data_dir)
     paths.ensure()
 
-    if not winutil.acquire_single_instance():
-        paths.show_flag.touch()  # попросить уже запущенную копию показать окно
+    if args.action:  # уже запущенная копия (или эта, после запуска) выполнит действие
+        paths.action_flag(args.action).touch()
+    if not winutil.acquire_single_instance(lock_file=paths.lock_file):
+        if not args.action:
+            paths.show_flag.touch()  # попросить уже запущенную копию показать окно
         return 0
 
     setup_logging(paths.log_file)
@@ -54,11 +85,14 @@ def main() -> int:
         if getattr(sys, name) is None:
             setattr(sys, name, open(paths.logs / "console.log", "a", encoding="utf-8", buffering=1))
     log.info("%s %s запущен, данные: %s", APP_NAME, __version__, paths.root)
+    if winutil.IS_LINUX:
+        _linux_setup(paths)
+    minimized_by_action = bool(args.action) and args.action != "show_window"
 
     from bypasshub.core import Core
 
     core = Core(paths)
-    minimized = args.minimized or bool(core.settings.get("app", "start_minimized"))
+    minimized = args.minimized or minimized_by_action or bool(core.settings.get("app", "start_minimized"))
     if not args.classic_ui:
         try:
             from bypasshub.qtui.app import run

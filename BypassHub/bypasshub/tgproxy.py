@@ -4,7 +4,8 @@
 рядом с ним лежит папка TgWsProxy_data, поэтому его config.json и логи живут
 внутри папки BypassHub и не пересекаются с отдельно установленной копией.
 Все настройки из окна «Настройки» tg-ws-proxy редактируются здесь и
-записываются в этот config.json.
+записываются в этот config.json. В Linux — та же схема с официальной сборкой
+TgWsProxy_linux_amd64 (портативный режим включается папкой TgWsProxy_data рядом).
 """
 from __future__ import annotations
 
@@ -23,16 +24,19 @@ from . import github, winutil
 from .log import log
 
 REPO = "Flowseal/tg-ws-proxy"
-EXE_NAME = "TgWsProxy.exe"
+EXE_NAME = "TgWsProxy" if winutil.IS_LINUX else "TgWsProxy.exe"
 PORTABLE_DIR = "TgWsProxy_data"
 START_TIMEOUT = 12.0  # сколько ждать, пока прокси откроет порт, с
 
-ASSETS = {
+WINDOWS_ASSETS = {
     "TgWsProxy_windows.exe": "Windows 10/11 x64",
     "TgWsProxy_windows_arm64.exe": "Windows 10/11 ARM64",
     "TgWsProxy_windows_7_64bit.exe": "Windows 7 x64",
     "TgWsProxy_windows_7_32bit.exe": "Windows 7 x32",
 }
+LINUX_ASSET = "TgWsProxy_linux_amd64"
+# сборки, из которых можно выбрать в «Обновлениях» (только для этой ОС)
+ASSETS = {LINUX_ASSET: "Linux x86_64"} if winutil.IS_LINUX else WINDOWS_ASSETS
 
 # Совпадает с utils/default_config.py из tg-ws-proxy
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -230,6 +234,8 @@ def phone_link(cfg: Dict[str, Any], server: Optional[str] = None) -> Optional[st
 def choose_asset(preference: str = "auto") -> str:
     if preference in ASSETS:
         return preference
+    if winutil.IS_LINUX:
+        return LINUX_ASSET
     if winutil.IS_WINDOWS and winutil.windows_major_version() < 10:
         return "TgWsProxy_windows_7_64bit.exe" if winutil.machine_arch().endswith("64") \
             else "TgWsProxy_windows_7_32bit.exe"
@@ -430,6 +436,8 @@ class TgProxyManager:
         github.download(asset.url, tmp, progress, asset.sha256)
         if tmp.stat().st_size < 1024 * 1024:
             raise IOError("скачанный файл слишком маленький — похоже, это не exe")
+        if not winutil.IS_WINDOWS:
+            os.chmod(tmp, 0o755)
         was_running = bool(self._own_processes())
         self.stop()
         self.root.mkdir(parents=True, exist_ok=True)

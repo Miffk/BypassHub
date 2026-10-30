@@ -81,6 +81,66 @@ jobs:
             exit 1
           fi
 
+  # Linux (делалось под CachyOS): один файл BypassHub-linux-x86_64. Собирается на Ubuntu 22.04 —
+  # со старой glibc, чтобы запускаться и на свежих дистрибутивах.
+  linux:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: BypassHub
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System libraries (Qt, Tk)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libtk8.6 nftables
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Build
+        run: >
+          python -m PyInstaller --noconfirm --onefile --windowed
+          --name BypassHub-linux-x86_64
+          --add-data "assets:assets" --collect-data customtkinter --collect-data certifi
+          main.py
+
+      - name: Smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # собранный файл запускается и открывает окно Qt; помощник для root отвечает
+          data="$RUNNER_TEMP/bh-data"
+          ./dist/BypassHub-linux-x86_64 --data-dir "$data" --minimized &
+          pid=$!
+          sleep 25
+          log=$(cat "$data/logs/bypasshub.log" 2>/dev/null || true)
+          echo "$log"
+          kill $pid 2>/dev/null || true
+          if ! echo "$log" | grep -q "Qt 6\."; then
+            echo "::error::Окно Qt не запустилось в собранной программе"
+            exit 1
+          fi
+          reply=$(printf '{"id":1,"cmd":"ping","args":{}}\n' | sudo ./dist/BypassHub-linux-x86_64 --root-helper "$data" | tail -n 1)
+          echo "$reply"
+          echo "$reply" | grep -q pong || { echo "::error::Помощник с правами root не отвечает"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BypassHub-linux
+          path: BypassHub/dist/BypassHub-linux-x86_64
+
   android:
     runs-on: ubuntu-latest
     outputs:
@@ -193,7 +253,7 @@ jobs:
           path: iOS/BypassHub-ios.ipa
 
   release:
-    needs: [windows, android, ios]
+    needs: [windows, linux, android, ios]
     if: startsWith(github.ref, 'refs/tags/bypasshub-v') || inputs.release != ''
     runs-on: ubuntu-latest
     steps:
@@ -205,11 +265,11 @@ jobs:
       - name: Files
         id: files
         run: |
-          files="dist/BypassHub.exe"$'\n'"dist/BypassHub-ios.ipa"
+          files="dist/BypassHub.exe"$'\n'"dist/BypassHub-linux-x86_64"$'\n'"dist/BypassHub-ios.ipa"
           if [ "${{ needs.android.outputs.signed }}" = "true" ]; then
             files="$files"$'\n'"dist/BypassHub-android.apk"
           else
-            echo "::warning::APK не подписан ключом релизов — в релиз попадут BypassHub.exe и BypassHub-ios.ipa, без APK"
+            echo "::warning::APK не подписан ключом релизов — в релиз попадут BypassHub.exe, BypassHub-linux-x86_64 и BypassHub-ios.ipa, без APK"
           fi
           { echo "list<<EOF"; echo "$files"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
@@ -224,6 +284,10 @@ jobs:
             **Windows** — скачайте **BypassHub.exe** ниже и запустите его (нужны права администратора).
             При первом запуске программа сама скачает zapret и tg-ws-proxy.
 
+            **Linux** (CachyOS, Arch, Fedora, Ubuntu и др., x86_64) — скачайте **BypassHub-linux-x86_64**, сделайте
+            его исполняемым (`chmod +x BypassHub-linux-x86_64`) и запустите. Права администратора программа попросит
+            сама, когда они понадобятся. Подробнее — в [README](https://github.com/Miffk/BypassHub#linux).
+
             **Android** (телефоны, планшеты, Android TV) — скачайте **BypassHub-android.apk** и установите
             (Android попросит разрешить установку из этого источника).
 
@@ -231,5 +295,5 @@ jobs:
             в ESign, Sideloadly или zsign (не удаляя плагины) и установите. Без сертификата iOS-версию не установить —
             подробнее в [README](https://github.com/Miffk/BypassHub#iphone-и-ipad).
 
-            Windows и Android обновятся сами; на iPhone новую версию нужно подписать и установить заново
+            Windows, Linux и Android обновятся сами; на iPhone новую версию нужно подписать и установить заново
             (серверы и настройки сохранятся).

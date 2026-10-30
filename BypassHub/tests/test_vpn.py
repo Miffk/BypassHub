@@ -1,5 +1,6 @@
 import base64
 import json
+import sys
 import zlib
 from urllib.parse import quote
 
@@ -203,7 +204,7 @@ def test_proxy_backup_restored_after_crash(tmp_path):
     assert not m.proxy_backup.exists()
 
 
-def test_awg_needs_wintun_next_to_exe(tmp_path):
+def test_awg_needs_wintun_next_to_exe(tmp_path, windows_behavior):
     m = awg.AwgManager(tmp_path)
     m.exe.write_bytes(b"x")
     assert not m.is_installed()          # без wintun.dll служба туннеля не стартует — нужна переустановка
@@ -291,6 +292,7 @@ def test_subscription_auto_refresh(tmp_path, monkeypatch):
     assert len(core.vpn_profiles()) == 2 and problems  # сбой сервиса — серверы на месте
 
 
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="в Linux имена без .exe — см. test_linux.py")
 def test_exclude_apps_rule():
     assert vpn.clean_exe_names([r'"C:\Games\Dota 2\dota2.exe"', "CS2", "cs2.exe", "", "league of legends.exe"]) \
         == ["dota2.exe", "cs2.exe", "league of legends.exe"]
@@ -383,7 +385,7 @@ def test_fetch_falls_back_to_doh(monkeypatch):
         netfetch.fetch("https://sub.example.com/x", {})   # не DNS — запасной путь не нужен
 
 
-def test_awg_waits_for_slow_adapter(tmp_path, monkeypatch):
+def test_awg_waits_for_slow_adapter(tmp_path, monkeypatch, windows_behavior):
     """Служба туннеля долго создаёт адаптер (START_PENDING больше 10 с) — это ещё не ошибка."""
     import subprocess
     from bypasshub import winutil

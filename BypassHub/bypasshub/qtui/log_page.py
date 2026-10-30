@@ -28,7 +28,7 @@ class LogPage(QWidget):
         lay.addWidget(self.box, 1)
         lay.addLayout(W.button_bar(
             W.button("Открыть файл лога", lambda: winutil.open_path(app.core.paths.log_file)),
-            W.button("Лог winws.exe", lambda: self._open(app.core.paths.winws_log)),
+            W.button("Лог nfqws" if winutil.IS_LINUX else "Лог winws.exe", lambda: self._open(app.core.paths.winws_log)),
             W.button("Лог прокси", lambda: self._open(app.core.tg.log_file)),
             W.button("Очистить", self.box.clear)))
         self.box.setPlainText("\n".join(memory_handler.lines))

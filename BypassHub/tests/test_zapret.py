@@ -16,6 +16,7 @@ def make_zapret(root: Path, version: str = "1.10.3") -> ZapretManager:
     (root / "lists").mkdir()
     (root / "utils").mkdir()
     (root / "bin" / "winws.exe").write_bytes(b"MZ")
+    (root / "bin" / "nfqws").write_bytes(b"\x7fELF")  # в Linux вместо winws.exe
     for name in ("quic_initial_www_google_com.bin", "stun.bin", "tls_clienthello_4pda_to.bin"):
         (root / "bin" / name).write_bytes(name.encode())
     shutil.copyfile(root / "bin" / "stun.bin", root / "bin" / "ACTIVE_DISCORD_UDP.bin")
@@ -173,7 +174,7 @@ def test_install_release_unknown_strategy_falls_back(tmp_path):
     assert zm.install_release(_release_zip(tmp_path, "1.0"), "gone.bat", "process") == "general.bat"
 
 
-def test_hosts_block(tmp_path, monkeypatch):
+def test_hosts_block(tmp_path, monkeypatch, windows_behavior):
     zm = ZapretManager(tmp_path / "zapret", tmp_path / "winws.log")
     hosts = tmp_path / "hosts"
     hosts.write_text("127.0.0.1 localhost\n")

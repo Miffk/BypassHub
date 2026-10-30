@@ -2,7 +2,7 @@
 
 По умолчанию всё хранится в C:\\ProgramData\\BypassHub: путь без кириллицы и
 вне OneDrive (zapret плохо работает из таких папок), а программа всё равно
-запускается с правами администратора.
+запускается с правами администратора. В Linux — ~/.local/share/BypassHub.
 """
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ def _default_root() -> Path:
         return Path(override)
     if sys.platform == "win32":
         return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / APP_NAME
+    if sys.platform.startswith("linux"):
+        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        return Path(base) / APP_NAME
     return Path.home() / f".{APP_NAME.lower()}"
 
 
@@ -36,6 +39,11 @@ class Paths:
         self.amneziawg = self.root / "vpn" / "amneziawg"
         self.vpn_log = self.logs / "vpn.log"
         self.show_flag = self.root / "show.flag"
+        self.lock_file = self.root / "instance.lock"
+
+    def action_flag(self, action: str) -> Path:
+        """Файл-просьба к запущенной копии выполнить действие (BypassHub --action …)."""
+        return self.root / f"action-{action}.flag"
 
     def ensure(self) -> None:
         for p in (self.root, self.logs, self.downloads):
