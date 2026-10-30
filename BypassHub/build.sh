@@ -11,6 +11,7 @@ python3 -m venv .venv-build
 .venv-build/bin/python -m PyInstaller --noconfirm --onefile --windowed \
   --name BypassHub-linux-x86_64 \
   --add-data "assets:assets" --add-binary "bypasshub-awg:bin" --collect-data customtkinter --collect-data certifi \
+  --collect-submodules httpx --collect-submodules httpcore --collect-submodules anyio --collect-submodules h2 \
   main.py
 echo
 echo "Готово: dist/BypassHub-linux-x86_64"

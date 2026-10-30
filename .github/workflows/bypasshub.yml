@@ -127,6 +127,8 @@ jobs:
           --name BypassHub-linux-x86_64
           --add-data "assets:assets" --add-binary "bypasshub-awg:bin"
           --collect-data customtkinter --collect-data certifi
+          --collect-submodules httpx --collect-submodules httpcore --collect-submodules anyio
+          --collect-submodules h2
           main.py
 
       - name: Smoke test
@@ -148,6 +150,20 @@ jobs:
           reply=$(printf '{"id":1,"cmd":"ping","args":{}}\n' | sudo ./dist/BypassHub-linux-x86_64 --root-helper "$data" | tail -n 1)
           echo "$reply"
           echo "$reply" | grep -q pong || { echo "::error::Помощник с правами root не отвечает"; exit 1; }
+          # tg-ws-proxy: исходники релиза скачаны при запуске, прокси без окна открывает порт
+          src="$data/tgwsproxy/src"
+          test -f "$src/proxy/tg_ws_proxy.py" || { echo "::error::Исходники tg-ws-proxy не скачались"; exit 1; }
+          ./dist/BypassHub-linux-x86_64 --run-tg-proxy "$src" -- --port 14443 --secret 0123456789abcdef0123456789abcdef \
+            --log-file "$RUNNER_TEMP/tg.log" &
+          tg=$!
+          ok=1
+          for i in $(seq 1 40); do
+            if (exec 3<>/dev/tcp/127.0.0.1/14443) 2>/dev/null; then ok=0; break; fi
+            sleep 0.5
+          done
+          kill $tg 2>/dev/null || true
+          cat "$RUNNER_TEMP/tg.log" || true
+          [ $ok -eq 0 ] || { echo "::error::tg-ws-proxy не открыл порт"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:

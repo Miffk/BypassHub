@@ -44,6 +44,11 @@ def _linux_setup(paths: Paths) -> None:
 
 
 def main() -> int:
+    from bypasshub import tgrun
+    if len(sys.argv) > 2 and sys.argv[1] == tgrun.FLAG:  # Linux: tg-ws-proxy без окна (см. tgrun.py)
+        winutil.restore_library_path()
+        args = sys.argv[3:]
+        return tgrun.run(sys.argv[2], args[1:] if args[:1] == ["--"] else args)
     ap = argparse.ArgumentParser(prog=APP_NAME)
     ap.add_argument("--minimized", action="store_true", help="запуск свёрнутым в трей")
     ap.add_argument("--data-dir", type=Path, default=None,

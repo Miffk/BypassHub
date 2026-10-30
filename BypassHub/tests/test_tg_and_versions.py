@@ -159,6 +159,8 @@ def test_tg_restarted_when_port_stays_closed(tmp_path, monkeypatch):
     tg = tgproxy.TgProxyManager(tmp_path)
     tg.exe.parent.mkdir(parents=True, exist_ok=True)
     tg.exe.write_bytes(b"x")
+    (tg.source_dir / "proxy").mkdir(parents=True)  # в Linux прокси — из исходников
+    (tg.source_dir / "proxy" / "tg_ws_proxy.py").write_text("")
     state = {"running": False, "launches": 0}
     monkeypatch.setattr(tg, "_own_processes", lambda: [object()] if state["running"] else [])
     monkeypatch.setattr(winutil, "find_processes_like", lambda name: [])

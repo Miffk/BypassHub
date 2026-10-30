@@ -114,6 +114,10 @@ build.bat
   `to_nfqws_args` переводит аргументы winws: `--wf-tcp/--wf-udp` становятся портами в правилах nftables,
   остальные параметры у nfqws те же. nfqws запускается с `--qnum=200 --uid=<пользователь>`; служба —
   `bypasshub-zapret.service` с копией nfqws в `/usr/local/lib/bypasshub/`.
+- tg-ws-proxy: в Linux — исходники релиза (`archive/refs/tags/<тег>.tar.gz`, только `proxy/` и
+  `utils/logging_setup.py`) в `tgwsproxy/src`; прокси запускается `BypassHub --run-tg-proxy <src> -- <аргументы>`
+  (`tgrun.py`, консольная команда tg-ws-proxy), настройки config.json → аргументы (`tgproxy.cli_args`).
+  Готовая сборка для трея там на части систем не открывала порт (своя OpenSSL падала на X25519).
 - sing-box: `sing-box-<версия>-linux-amd64.tar.gz`; «Весь трафик» (TUN) запускает помощник, «Системный прокси» —
   от пользователя. AmneziaWG — `bypasshub-awg` (`Android/core/cmd/bypasshub-awg`: ядро AmneziaWG из Android-версии,
   в пространстве пользователя, без root), встроен в сборку (`--add-binary … :bin`); он отдаёт SOCKS5 на 127.0.0.1,
