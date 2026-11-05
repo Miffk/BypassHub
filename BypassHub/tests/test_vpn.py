@@ -576,3 +576,47 @@ def test_group_delays_retry_when_busy(tmp_path, monkeypatch):
     monkeypatch.setattr(vpn.time, "sleep", lambda s: None)
     assert m.test_delays() == {"a": 25}
     assert all(p.startswith("/group/proxy/delay") for p in paths) and len(paths) == 2
+
+
+def test_awg_log_shows_cause_not_worker_noise():
+    """В ошибке — строки с причиной, а не «encryption worker stopped» (следствие остановки)."""
+    dump = "\n".join([
+        "2026-11-05 09:50:00.000000: [TUN] [BypassHub] Old run",
+        "2026-11-05 09:54:11.700000: [TUN] [BypassHub] Starting AmneziaWG/0.1",
+        "2026-11-05 09:54:11.710000: [TUN] [BypassHub] Unable to create Wintun adapter: Cannot create a file when that file already exists",
+        "2026-11-05 09:54:11.720000: [MGR] other line",
+    ] + [f"2026-11-05 09:54:11.732437: [TUN] [BypassHub] Routine: encryption worker {i} - stopped" for i in range(2, 10)])
+    import datetime
+    since = datetime.datetime(2026, 11, 5, 9, 54, 11).timestamp()
+    text = awg.pick_log_lines(dump, since)
+    assert text.splitlines() == ["2026-11-05 09:54:11.710000: [TUN] [BypassHub] Unable to create Wintun adapter: "
+                                 "Cannot create a file when that file already exists"]
+    # без строк с ошибкой — последние осмысленные строки этой попытки
+    calm = dump.replace("Unable to create Wintun adapter: Cannot create a file when that file already exists",
+                        "Created adapter")
+    assert awg.pick_log_lines(calm, since).splitlines() == [
+        "2026-11-05 09:54:11.700000: [TUN] [BypassHub] Starting AmneziaWG/0.1",
+        "2026-11-05 09:54:11.710000: [TUN] [BypassHub] Created adapter"]
+
+
+def test_awg_retries_after_immediate_stop(tmp_path, monkeypatch):
+    """Туннель сразу остановился (остатки прежнего после сбоя) — уборка и вторая попытка."""
+    from bypasshub import winutil
+    m = awg.AwgManager(tmp_path)
+    for name in (awg.EXE_NAME, awg.WINTUN_DLL):
+        (tmp_path / name).write_bytes(b"x")
+    monkeypatch.setattr(winutil, "IS_LINUX", False)
+    results = iter(["STOPPED", "RUNNING"])
+    monkeypatch.setattr(m, "_install_and_wait", lambda: next(results))
+    cleanups = []
+    monkeypatch.setattr(m, "_cleanup_leftovers", lambda remove_adapter=False: cleanups.append(remove_adapter))
+    monkeypatch.setattr(m, "stop", lambda: None)
+    monkeypatch.setattr(m, "service_log_tail", lambda lines=10, since=0: "")
+    monkeypatch.setattr(awg.AwgManager, "_wait_adapter_gone", staticmethod(lambda timeout=10: None))
+    assert m.start(awg.parse_conf(CONF)) == 0
+    assert cleanups == [False, True]
+    # и вторая неудача — уже ошибка
+    results = iter(["STOPPED", "STOPPED"])
+    monkeypatch.setattr(m, "_install_and_wait", lambda: next(results))
+    with pytest.raises(RuntimeError, match="служба: STOPPED"):
+        m.start(awg.parse_conf(CONF))

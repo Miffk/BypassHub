@@ -251,6 +251,33 @@ class AwgStatus:
     state: Optional[str] = None
 
 
+_LOG_NOISE = re.compile(r"Routine: .*worker .*- (stopped|started)|Routine: (receive|sequential|handshake)", re.I)
+_LOG_IMPORTANT = re.compile(r"error|fail|unable|cannot|can't|denied|exist|invalid|refus|not found|panic|"
+                            r"ошибк|не удалось", re.I)
+
+
+def pick_log_lines(dump: str, since: float = 0, lines: int = 10) -> str:
+    """Из журнала службы (amneziawg /dumplog) — строки нашего туннеля за эту попытку, без шума
+    («worker stopped» и т.п. — следствие, а не причина); сначала строки с ошибками."""
+    import datetime
+    out = []
+    for ln in dump.splitlines():
+        if not ln.strip() or TUNNEL_NAME not in ln:
+            continue
+        if since:
+            try:
+                ts = datetime.datetime.strptime(ln[:26], "%Y-%m-%d %H:%M:%S.%f").timestamp()
+                if ts < since - 2:
+                    continue
+            except ValueError:
+                pass
+        out.append(ln)
+    useful = [ln for ln in out if not _LOG_NOISE.search(ln)]
+    important = [ln for ln in useful if _LOG_IMPORTANT.search(ln)]
+    picked = important[-lines:] or useful[-lines:] or out[-lines:]
+    return "\n".join(picked)
+
+
 class AwgManager:
     def __init__(self, root: Path):
         self.root = root
@@ -354,11 +381,35 @@ class AwgManager:
         if not self.is_installed():
             raise RuntimeError("Клиент AmneziaWG ещё не скачан")
         self.stop()
+        self._cleanup_leftovers()
         self._wait_adapter_gone()
         self.root.mkdir(parents=True, exist_ok=True)
         # Файл читает служба SYSTEM; права на папку — как у всей папки BypassHub
         self.conf_file.write_text(prepare_conf(profile.conf, lan_access, split), encoding="utf-8")
-        log.info("Запуск AmneziaWG: %s (%s)", profile.name, profile.endpoint)
+        for attempt in range(2):
+            log.info("Запуск AmneziaWG: %s (%s)", profile.name, profile.endpoint)
+            started = time.time()
+            state = self._install_and_wait()
+            if state == "RUNNING":
+                if split:
+                    self._add_fallback_route()
+                return 0
+            details = self.service_log_tail(since=started)
+            self.stop()
+            if attempt == 0 and state in (None, "STOPPED"):
+                # служба сразу остановилась — чаще всего мешают остатки прежнего туннеля после сбоя
+                # (процесс службы или сетевой адаптер «BypassHub»): убираем их и пробуем ещё раз
+                log.warning("AmneziaWG: туннель сразу остановился — убираю остатки прежнего и пробую снова")
+                self._cleanup_leftovers(remove_adapter=True)
+                self._wait_adapter_gone()
+                continue
+            raise RuntimeError("Туннель AmneziaWG не запустился (служба: "
+                               f"{state or 'нет'}). Если открыт AmneziaVPN, отключитесь в нём и "
+                               "попробуйте снова." + (f"\n\nЖурнал AmneziaWG:\n{details}" if details else ""))
+        return 0
+
+    def _install_and_wait(self) -> Optional[str]:
+        """Ставит службу туннеля и ждёт, пока она запустится; возвращает её состояние."""
         res = winutil.run([str(self.exe), "/installtunnelservice", str(self.conf_file)], timeout=60,
                           encoding="utf-8")
         if res.returncode != 0:
@@ -368,20 +419,32 @@ class AwgManager:
         deadline = time.monotonic() + START_TIMEOUT
         while time.monotonic() < deadline:
             state = winutil.service_state(SERVICE_NAME)
-            if state == "RUNNING":
-                if split:
-                    self._add_fallback_route()
-                return
-            if state in (None, "STOPPED"):
-                break
+            if state == "RUNNING" or state in (None, "STOPPED"):
+                return state
             time.sleep(0.25)
-        state = winutil.service_state(SERVICE_NAME)
-        if state != "RUNNING":
-            details = self.service_log_tail()
-            self.stop()
-            raise RuntimeError("Туннель AmneziaWG не запустился (служба: "
-                               f"{state or 'нет'}). Если открыт AmneziaVPN, отключитесь в нём и "
-                               "попробуйте снова." + (f"\n\nЖурнал AmneziaWG:\n{details}" if details else ""))
+        return winutil.service_state(SERVICE_NAME)
+
+    def _cleanup_leftovers(self, remove_adapter: bool = False) -> None:
+        """Остатки прежнего туннеля после сбоя, из-за которых новый не поднимается до перезагрузки:
+        процессы нашего amneziawg.exe без службы (зависшая служба туннеля) и, если нужно, сетевой
+        адаптер «BypassHub», оставшийся в системе."""
+        if winutil.service_state(SERVICE_NAME) is not None:
+            return
+        for p in winutil.find_processes(EXE_NAME):
+            if p.exe and winutil.same_path(p.exe, self.exe):
+                log.warning("AmneziaWG: завершаю оставшийся процесс туннеля (PID %s)", p.pid)
+                winutil.kill_pid_tree(p.pid)
+        if remove_adapter:
+            # адаптер Wintun нашего туннеля — только с именем BypassHub; другие подключения не трогаем
+            script = (f"$a = Get-NetAdapter -Name '{TUNNEL_NAME}' -IncludeHidden -ErrorAction SilentlyContinue; "
+                      "if ($a) { pnputil /remove-device $a.PnPDeviceID | Out-Null; 'removed' }")
+            try:
+                res = winutil.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                                  timeout=60, encoding="utf-8")
+                if "removed" in res.stdout:
+                    log.warning("AmneziaWG: удалён оставшийся сетевой адаптер %s", TUNNEL_NAME)
+            except Exception as exc:
+                log.debug("AmneziaWG: удаление адаптера: %r", exc)
 
     @staticmethod
     def _wait_adapter_gone(timeout: float = 10) -> None:
@@ -401,16 +464,14 @@ class AwgManager:
             time.sleep(0.25)
         log.warning("AmneziaWG: адаптер прежнего туннеля ещё не удалён")
 
-    def service_log_tail(self, lines: int = 8) -> str:
-        """Последние строки журнала службы туннеля — там причина, если туннель не запустился."""
+    def service_log_tail(self, lines: int = 10, since: float = 0) -> str:
+        """Строки журнала службы туннеля с причиной, если туннель не запустился."""
         try:
             res = winutil.run([str(self.exe), "/dumplog"], timeout=15, encoding="utf-8")
         except Exception as exc:
             log.debug("amneziawg /dumplog: %r", exc)
             return ""
-        out = [ln for ln in res.stdout.splitlines() if ln.strip()]
-        ours = [ln for ln in out if TUNNEL_NAME in ln] or out
-        text = "\n".join(ours[-lines:])
+        text = pick_log_lines(res.stdout, since, lines)
         if text:
             log.warning("Журнал AmneziaWG:\n%s", text)
         return text
