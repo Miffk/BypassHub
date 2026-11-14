@@ -589,8 +589,9 @@ func confFromAmneziaKey(key string) (*awgConf, error) {
 	}
 	for _, k := range []string{"api_config", "auth_data", "api_key"} {
 		if _, ok := data[k]; ok {
-			return nil, errors.New("Это ключ подписки Amnezia Premium — в нём нет настроек сервера. " +
-				"Подойдёт ключ от своего сервера (AmneziaVPN → «Поделиться»).")
+			return nil, errors.New("Это ключ подписки Amnezia Premium — в нём нет настроек сервера, их выдаёт только " +
+				"приложение AmneziaVPN. Возьмите там файл: сервер подписки → «Файлы конфигурации» → страна → " +
+				"«Скачать файл конфигурации», и добавьте этот .conf сюда.")
 		}
 	}
 	return nil, errors.New("В ключе нет настроек AmneziaWG. В AmneziaVPN откройте «Поделиться» и выберите AmneziaWG.")

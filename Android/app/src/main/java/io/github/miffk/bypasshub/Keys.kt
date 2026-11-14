@@ -348,8 +348,9 @@ object Keys {
             }
         }
         if (data.has("api_config") || data.has("auth_data") || data.has("api_key")) {
-            throw KeyException("Это ключ подписки Amnezia Premium — в нём нет настроек сервера. " +
-                "Подойдёт ключ от своего сервера (AmneziaVPN → «Поделиться»).")
+            throw KeyException("Это ключ подписки Amnezia Premium — в нём нет настроек сервера, их выдаёт только " +
+                "приложение AmneziaVPN. Возьмите там файл: сервер подписки → «Файлы конфигурации» → страна → " +
+                "«Скачать файл конфигурации», и добавьте этот .conf сюда.")
         }
         throw KeyException("В ключе нет настроек AmneziaWG. В AmneziaVPN откройте «Поделиться» и выберите AmneziaWG.")
     }
