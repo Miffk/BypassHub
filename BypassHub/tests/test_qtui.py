@@ -68,3 +68,29 @@ def test_dialogs(window):
         qa.processEvents()
         d.grab()
         d.close()
+
+
+def test_add_several_conf_files(window, tmp_path, monkeypatch):
+    """Можно выбрать сразу несколько .conf (по файлу на страну из AmneziaVPN): каждый — свой сервер
+    с названием по имени файла."""
+    import time
+    from PySide6.QtWidgets import QFileDialog
+    from test_vpn import CONF
+    qa, w = window
+    paths = []
+    for i, country in enumerate(("Germany", "Netherlands")):
+        p = tmp_path / f"{country}.conf"
+        p.write_text(CONF.replace("203.0.113.5", f"203.0.113.{20 + i}"), encoding="utf-8")
+        paths.append(str(p))
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", staticmethod(lambda *a, **kw: (paths, "")))
+    shown = []
+    monkeypatch.setattr(w, "info", lambda text, *a, **kw: shown.append(text))
+    monkeypatch.setattr(w, "error", lambda text, *a, **kw: shown.append("ERROR " + text))
+    w.pages["vpn"][1].add_from_file()
+    deadline = time.time() + 10
+    while not shown and time.time() < deadline:
+        qa.processEvents()
+        time.sleep(0.02)
+    assert shown and not shown[0].startswith("ERROR"), shown
+    names = {p.name for p in w.core.vpn_profiles() if p.kind == "awg"}
+    assert {"Germany", "Netherlands"} <= names

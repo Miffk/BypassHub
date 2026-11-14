@@ -113,8 +113,9 @@ def conf_from_amnezia_key(key: str) -> "AwgProfile":
                 conf = re.sub(r"(?im)^(\s*\[Interface\]\s*)$", rf"\1\nMTU = {mtu}", conf, count=1)
             return parse_conf(conf, name)
     if any(k in data for k in ("api_config", "auth_data", "api_key")):
-        raise ValueError("Это ключ подписки Amnezia Premium — в нём нет настроек сервера. "
-                         "Подойдёт ключ от своего сервера (AmneziaVPN → «Поделиться»).")
+        raise ValueError("Это ключ подписки Amnezia Premium — в нём нет настроек сервера, их выдаёт только "
+                         "приложение AmneziaVPN. Возьмите там файл: сервер подписки → «Файлы конфигурации» → "
+                         "страна → «Скачать файл конфигурации», и добавьте этот .conf сюда.")
     raise ValueError("В ключе нет настроек AmneziaWG. В AmneziaVPN откройте «Поделиться» и выберите "
                      "протокол AmneziaWG.")
 

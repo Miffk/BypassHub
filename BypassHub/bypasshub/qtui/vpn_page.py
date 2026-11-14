@@ -51,7 +51,7 @@ class VpnPage(Page):
         body.addWidget(self.input)
         self.add_btn = W.button("Добавить", self.add_from_box, primary=True, width=120)
         body.addLayout(W.button_bar(self.add_btn, W.button("Вставить из буфера", self.add_from_clipboard),
-                                    W.button("Из файла .conf…", self.add_from_file)))
+                                    W.button("Из файлов .conf…", self.add_from_file)))
         body.addWidget(W.label("Ключ — это пароль от вашего сервера: не публикуйте его и не отправляйте посторонним.",
                                "small", wrap=True))
 
@@ -217,29 +217,41 @@ class VpnPage(Page):
         self._add(text)
 
     def add_from_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Конфиг AmneziaWG", "",
-                                              "Конфиг AmneziaWG / WireGuard (*.conf);;Все файлы (*.*)")
-        if not path:
+        # можно выбрать сразу несколько файлов — например, по файлу на каждую страну из AmneziaVPN
+        paths, _ = QFileDialog.getOpenFileNames(self, "Конфиги AmneziaWG", "",
+                                                "Конфиг AmneziaWG / WireGuard (*.conf);;Все файлы (*.*)")
+        if not paths:
             return
-        try:
-            with open(path, encoding="utf-8-sig") as f:
-                text = f.read(1024 * 1024)
-        except OSError as exc:
-            self.app.error(str(exc), "Конфиг")
-            return
-        self._add(text, name=Path(path).stem)  # имя сервера — по имени файла, как в AmneziaWG
+        files = []
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8-sig") as f:
+                    files.append((f.read(1024 * 1024), Path(path).stem))  # имя сервера — по имени файла
+            except OSError as exc:
+                self.app.error(f"{Path(path).name}: {exc}", "Конфиг")
+                return
+        self._add_many(files)
 
     def _add(self, text: str, clear: bool = False, name: str = "") -> None:
         if not text.strip():
             self.app.info("Вставьте ключ в поле выше.")
             return
+        self._add_many([(text, name)], clear)
+
+    def _add_many(self, items, clear: bool = False) -> None:
+        """items — [(текст, имя)]: имя даётся серверу AmneziaWG из одного конфига (по имени файла)."""
         self.add_btn.setEnabled(False)
         core = self.app.core
 
         def work():
-            added, problems = core.vpn_add(text)
-            if name and len(added) == 1 and added[0].kind == "awg":
-                core.vpn_rename(added[0].id, name)
+            added, problems = [], []
+            for text, name in items:
+                got, extra = core.vpn_add(text)
+                if name and len(got) == 1 and got[0].kind == "awg":
+                    core.vpn_rename(got[0].id, name)
+                    got[0].name = name
+                added += got
+                problems += [f"{name}: {x}" if name and len(items) > 1 else x for x in extra]
             return added, problems
 
         def done(result, err):
