@@ -726,8 +726,10 @@ def outbound(key: VlessKey, tag: str = "proxy") -> Dict[str, Any]:
 
 
 def awg_outbound(interface: str, tag: str = "proxy") -> Dict[str, Any]:
-    """«Через VPN» = в туннель AmneziaWG: исходящие соединения привязываются к его адаптеру."""
-    return {"type": "direct", "tag": tag, "bind_interface": interface}
+    """«Через VPN» = в туннель AmneziaWG: исходящие соединения привязываются к его адаптеру.
+    Адреса сайтов узнаются тоже через туннель (DNS по HTTPS): DNS провайдера подменяет ответы для
+    заблокированных сайтов (Instagram и др.), и соединение через VPN уходило бы на ложный адрес."""
+    return {"type": "direct", "tag": tag, "bind_interface": interface, "domain_resolver": "dns-remote"}
 
 
 def socks_outbound(port: int, tag: str = "proxy") -> Dict[str, Any]:

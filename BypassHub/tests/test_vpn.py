@@ -117,7 +117,8 @@ def test_build_config_tun_and_proxy(tmp_path):
 
 def test_build_config_over_amneziawg():
     cfg = vpn.build_config(vpn.awg_outbound("BypassHub"), "tun", True, bypass=["203.0.113.5"])
-    assert cfg["outbounds"][0] == {"type": "direct", "tag": "proxy", "bind_interface": "BypassHub"}
+    assert cfg["outbounds"][0] == {"type": "direct", "tag": "proxy", "bind_interface": "BypassHub",
+                                   "domain_resolver": "dns-remote"}
     # сервер AmneziaWG — мимо sing-box, иначе туннель завернётся сам в себя
     assert cfg["inbounds"][0]["route_exclude_address"] == ["203.0.113.5/32"]
     assert {"ip_cidr": ["203.0.113.5/32"], "outbound": "direct"} in cfg["route"]["rules"]
@@ -620,3 +621,14 @@ def test_awg_retries_after_immediate_stop(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_install_and_wait", lambda: next(results))
     with pytest.raises(RuntimeError, match="служба: STOPPED"):
         m.start(awg.parse_conf(CONF))
+
+
+def test_awg_resolves_names_through_tunnel():
+    """AmneziaWG через sing-box: имена сайтов — через DNS в туннеле, а не через DNS провайдера
+    (он подменяет адреса заблокированных сайтов) — в любом режиме, даже без списков российских сайтов."""
+    for mode in ("proxy", "tun"):
+        cfg = vpn.build_config(vpn.awg_outbound("BypassHub"), mode, ru_direct=False, bypass=["203.0.113.5"])
+        proxy = next(o for o in cfg["outbounds"] if o["tag"] == "proxy")
+        assert proxy["bind_interface"] == "BypassHub" and proxy["domain_resolver"] == "dns-remote"
+        remote = next(s for s in cfg["dns"]["servers"] if s["tag"] == "dns-remote")
+        assert remote["detour"] == "proxy" and remote["server"] == "1.1.1.1"
