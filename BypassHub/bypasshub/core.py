@@ -578,6 +578,11 @@ class Core:
 
     def restore_state(self) -> None:
         self.update_learner()
+        if not self.awg.status().running:
+            try:
+                self.awg.restore_dns()  # правило DNS от прежнего туннеля, если программа упала
+            except Exception as exc:
+                log.debug("Возврат DNS: %r", exc)
         if not self.settings.get("app", "restore_state"):
             return
         if self.settings.get("zapret", "enabled"):

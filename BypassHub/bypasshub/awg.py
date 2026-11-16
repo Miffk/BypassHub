@@ -259,6 +259,41 @@ _LOG_IMPORTANT = re.compile(r"error|fail|unable|cannot|can't|denied|exist|invali
 
 HANDSHAKE_TIMEOUT = 20  # сколько ждать ответа сервера после запуска туннеля, с
 
+# Правило NRPT «все имена — через DNS туннеля». Без него Windows спрашивает адреса сайтов и у DNS
+# провайдера (через основное подключение) и берёт тот ответ, что пришёл первым. Провайдер же отвечает
+# адресами «под себя»: для заблокированных — подменёнными, для Instagram и др. — адресом кэш-сервера
+# в своей сети, который недоступен с сервера VPN. Итог — VPN включён, а сайт не открывается.
+DNS_RULE_COMMENT = "BypassHub AmneziaWG"
+DEFAULT_DNS = "1.1.1.1"
+
+
+def conf_dns_servers(conf: str) -> List[str]:
+    """IP-адреса из строк «DNS = …» (там же бывают домены поиска — их пропускаем)."""
+    import ipaddress
+    out: List[str] = []
+    for m in re.finditer(r"(?im)^\s*DNS\s*=\s*(.*)$", conf):
+        for item in m.group(1).split(","):
+            item = item.strip()
+            try:
+                ipaddress.ip_address(item)
+            except ValueError:
+                continue
+            if item not in out:
+                out.append(item)
+    return out
+
+
+def dns_rule_script(servers: List[str]) -> str:
+    """PowerShell: убрать наше правило NRPT и, если даны серверы, поставить новое; сбросить кэш DNS
+    (в нём могут остаться адреса, полученные от провайдера до включения VPN)."""
+    parts = [f"Get-DnsClientNrptRule | Where-Object {{ $_.Comment -eq '{DNS_RULE_COMMENT}' }} | "
+             "ForEach-Object { Remove-DnsClientNrptRule -Name $_.Name -Force }"]
+    if servers:
+        parts.append("Add-DnsClientNrptRule -Namespace '.' -NameServers " +
+                     ",".join(f"'{s}'" for s in servers) + f" -Comment '{DNS_RULE_COMMENT}'")
+    parts.append("Clear-DnsClientCache")
+    return "; ".join(parts)
+
 
 def _our_lines_since(dump: str, since: float):
     import datetime
@@ -300,6 +335,11 @@ class AwgManager:
     @property
     def conf_file(self) -> Path:
         return self.root / f"{TUNNEL_NAME}.conf"
+
+    @property
+    def dns_marker(self) -> Path:
+        """Есть файл — стоит наше правило DNS (нужно убрать при выключении, в том числе после сбоя)."""
+        return self.root / "dns-rule"
 
     @property
     def version_file(self) -> Path:
@@ -406,6 +446,8 @@ class AwgManager:
             if state == "RUNNING":
                 if split:
                     self._add_fallback_route()
+                else:
+                    self._force_tunnel_dns(profile.conf)
                 import threading
                 threading.Thread(target=self._watch_handshake, args=(started,), daemon=True,
                                  name="awg-handshake").start()
@@ -533,6 +575,37 @@ class AwgManager:
             time.sleep(0.25)
         log.warning("AmneziaWG: не удалось добавить маршрут через туннель")
 
+    @staticmethod
+    def _run_dns_script(script: str) -> bool:
+        try:
+            res = winutil.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                              timeout=60, encoding="utf-8")
+        except Exception as exc:
+            log.debug("AmneziaWG: правило DNS: %r", exc)
+            return False
+        if res.returncode != 0:
+            log.debug("AmneziaWG: правило DNS: код %s\n%s", res.returncode, (res.stdout + res.stderr).strip())
+        return res.returncode == 0
+
+    def _force_tunnel_dns(self, conf: str) -> None:
+        servers = conf_dns_servers(conf) or [DEFAULT_DNS]
+        try:
+            self.dns_marker.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
+        if self._run_dns_script(dns_rule_script(servers)):
+            log.info("AmneziaWG: адреса сайтов — только через DNS в туннеле (%s)", ", ".join(servers))
+        else:
+            log.warning("AmneziaWG: не удалось направить DNS в туннель — часть сайтов может не открываться")
+
+    def restore_dns(self) -> None:
+        """Убирает наше правило DNS, если оно осталось (VPN выключен или программа упала)."""
+        if winutil.IS_LINUX or not self.dns_marker.exists():
+            return
+        if self._run_dns_script(dns_rule_script([])):
+            self.dns_marker.unlink(missing_ok=True)
+            log.info("AmneziaWG: DNS снова как в системе")
+
     def stop(self) -> None:
         if winutil.IS_LINUX:
             procs = self._linux_procs()
@@ -542,6 +615,7 @@ class AwgManager:
                 log.info("AmneziaWG выключен")
             return
         if winutil.service_state(SERVICE_NAME) is None:
+            self.restore_dns()
             return
         if self.exe.exists():
             winutil.run_logged([str(self.exe), "/uninstalltunnelservice", TUNNEL_NAME], timeout=60)
@@ -551,6 +625,7 @@ class AwgManager:
             time.sleep(0.25)
         else:  # клиент не справился (служба зависла) — останавливаем и удаляем её сами
             winutil.service_stop_delete(SERVICE_NAME)
+        self.restore_dns()
         log.info("AmneziaWG выключен")
 
     def install_release(self, release: github.Release, download_dir: Path,
