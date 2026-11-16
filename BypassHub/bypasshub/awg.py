@@ -257,22 +257,32 @@ _LOG_IMPORTANT = re.compile(r"error|fail|unable|cannot|can't|denied|exist|invali
                             r"ошибк|не удалось", re.I)
 
 
-def pick_log_lines(dump: str, since: float = 0, lines: int = 10) -> str:
-    """Из журнала службы (amneziawg /dumplog) — строки нашего туннеля за эту попытку, без шума
-    («worker stopped» и т.п. — следствие, а не причина); сначала строки с ошибками."""
+HANDSHAKE_TIMEOUT = 20  # сколько ждать ответа сервера после запуска туннеля, с
+
+
+def _our_lines_since(dump: str, since: float):
     import datetime
-    out = []
     for ln in dump.splitlines():
-        if not ln.strip() or TUNNEL_NAME not in ln:
+        if TUNNEL_NAME not in ln:
             continue
         if since:
             try:
-                ts = datetime.datetime.strptime(ln[:26], "%Y-%m-%d %H:%M:%S.%f").timestamp()
-                if ts < since - 2:
+                if datetime.datetime.strptime(ln[:26], "%Y-%m-%d %H:%M:%S.%f").timestamp() < since - 2:
                     continue
             except ValueError:
                 pass
-        out.append(ln)
+        yield ln
+
+
+def handshake_done(dump: str, since: float = 0) -> bool:
+    """Сервер ответил на рукопожатие (строка журнала WireGuard/AmneziaWG «Received handshake response»)."""
+    return any("handshake response" in ln.lower() for ln in _our_lines_since(dump, since))
+
+
+def pick_log_lines(dump: str, since: float = 0, lines: int = 10) -> str:
+    """Из журнала службы (amneziawg /dumplog) — строки нашего туннеля за эту попытку, без шума
+    («worker stopped» и т.п. — следствие, а не причина); сначала строки с ошибками."""
+    out = [ln for ln in _our_lines_since(dump, since) if ln.strip()]
     useful = [ln for ln in out if not _LOG_NOISE.search(ln)]
     important = [ln for ln in useful if _LOG_IMPORTANT.search(ln)]
     picked = important[-lines:] or useful[-lines:] or out[-lines:]
@@ -387,6 +397,8 @@ class AwgManager:
         self.root.mkdir(parents=True, exist_ok=True)
         # Файл читает служба SYSTEM; права на папку — как у всей папки BypassHub
         self.conf_file.write_text(prepare_conf(profile.conf, lan_access, split), encoding="utf-8")
+        if profile.extras:  # только названия параметров, без значений
+            log.info("AmneziaWG: параметры маскировки в конфиге: %s", ", ".join(k.upper() for k in profile.extras))
         for attempt in range(2):
             log.info("Запуск AmneziaWG: %s (%s)", profile.name, profile.endpoint)
             started = time.time()
@@ -394,6 +406,9 @@ class AwgManager:
             if state == "RUNNING":
                 if split:
                     self._add_fallback_route()
+                import threading
+                threading.Thread(target=self._watch_handshake, args=(started,), daemon=True,
+                                 name="awg-handshake").start()
                 return 0
             details = self.service_log_tail(since=started)
             self.stop()
@@ -408,6 +423,35 @@ class AwgManager:
                                f"{state or 'нет'}). Если открыт AmneziaVPN, отключитесь в нём и "
                                "попробуйте снова." + (f"\n\nЖурнал AmneziaWG:\n{details}" if details else ""))
         return 0
+
+    def _watch_handshake(self, started: float, timeout: float = HANDSHAKE_TIMEOUT) -> Optional[bool]:
+        """Служба запущена — но ответил ли сервер? Без рукопожатия трафик через VPN не идёт
+        (например, провайдер режет подключение к серверу). Пишем итог в журнал программы."""
+        try:
+            return self._check_handshake(started, timeout)
+        except Exception as exc:  # проверка только для журнала — работу VPN она не трогает
+            log.debug("AmneziaWG: проверка рукопожатия: %r", exc)
+            return None
+
+    def _check_handshake(self, started: float, timeout: float) -> Optional[bool]:
+        deadline = time.monotonic() + timeout
+        dump = ""
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            if winutil.service_state(SERVICE_NAME) != "RUNNING":
+                return None  # туннель уже выключили
+            try:
+                dump = winutil.run([str(self.exe), "/dumplog"], timeout=15, encoding="utf-8").stdout
+            except Exception as exc:
+                log.debug("amneziawg /dumplog: %r", exc)
+                return None
+            if handshake_done(dump, started):
+                log.info("AmneziaWG: сервер ответил, туннель работает")
+                return True
+        log.warning("AmneziaWG: сервер не ответил на подключение за %d с — через VPN ничего не откроется. "
+                    "Возможно, провайдер блокирует подключение к этому серверу.\n%s",
+                    timeout, pick_log_lines(dump, started))
+        return False
 
     def _install_and_wait(self) -> Optional[str]:
         """Ставит службу туннеля и ждёт, пока она запустится; возвращает её состояние."""
