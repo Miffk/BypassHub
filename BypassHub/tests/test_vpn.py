@@ -655,3 +655,39 @@ def test_awg_handshake_detection(tmp_path, monkeypatch):
     clock = iter(range(0, 100, 3))
     monkeypatch.setattr(awg.time, "monotonic", lambda: next(clock))
     assert m._watch_handshake(since, timeout=5) is False
+
+
+def test_awg_forces_dns_through_tunnel(tmp_path, monkeypatch):
+    """Весь трафик через AmneziaWG: адреса сайтов Windows спрашивает только у DNS туннеля (правило NRPT),
+    иначе провайдер отвечает адресами «под себя», недоступными с сервера VPN. При выключении правило убираем."""
+    from bypasshub import winutil
+    m = awg.AwgManager(tmp_path)
+    for name in (awg.EXE_NAME, awg.WINTUN_DLL):
+        (tmp_path / name).write_bytes(b"x")
+    monkeypatch.setattr(winutil, "IS_LINUX", False)
+    scripts = []
+    monkeypatch.setattr(awg.AwgManager, "_run_dns_script", staticmethod(lambda s: scripts.append(s) or True))
+    monkeypatch.setattr(m, "_install_and_wait", lambda: "RUNNING")
+    monkeypatch.setattr(m, "_cleanup_leftovers", lambda remove_adapter=False: None)
+    monkeypatch.setattr(m, "_watch_handshake", lambda started: None)
+    monkeypatch.setattr(awg.AwgManager, "_wait_adapter_gone", staticmethod(lambda timeout=10: None))
+    state = {"v": None}
+    monkeypatch.setattr(winutil, "service_state", lambda name: state["v"])
+    m.start(awg.parse_conf(CONF))
+    assert m.dns_marker.exists() and len(scripts) == 1
+    assert "Add-DnsClientNrptRule -Namespace '.'" in scripts[0] and "'1.1.1.1'" in scripts[0]
+    state["v"] = None   # служба уже удалена (например, после сбоя) — правило всё равно убираем
+    m.stop()
+    assert not m.dns_marker.exists() and "Add-DnsClientNrptRule" not in scripts[-1]
+    assert "Remove-DnsClientNrptRule" in scripts[-1]
+    # раздельное туннелирование: DNS решает sing-box, правило не ставим
+    scripts.clear()
+    monkeypatch.setattr(m, "_add_fallback_route", lambda: None)
+    m.start(awg.parse_conf(CONF), split=True)
+    assert not m.dns_marker.exists() and not any("Add-DnsClientNrptRule" in s for s in scripts)
+
+
+def test_conf_dns_servers():
+    conf = "[Interface]\nDNS = 1.1.1.1, 1.0.0.1, corp.local\nDNS = 2606:4700:4700::1111\n"
+    assert awg.conf_dns_servers(conf) == ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111"]
+    assert awg.conf_dns_servers("[Interface]\nAddress = 10.8.1.2/32\n") == []
