@@ -632,3 +632,26 @@ def test_awg_resolves_names_through_tunnel():
         assert proxy["bind_interface"] == "BypassHub" and proxy["domain_resolver"] == "dns-remote"
         remote = next(s for s in cfg["dns"]["servers"] if s["tag"] == "dns-remote")
         assert remote["detour"] == "proxy" and remote["server"] == "1.1.1.1"
+
+
+def test_awg_handshake_detection(tmp_path, monkeypatch):
+    """После запуска туннеля проверяем, ответил ли сервер: без рукопожатия через VPN ничего не идёт."""
+    import datetime
+    from bypasshub import winutil
+    since = datetime.datetime(2026, 11, 16, 22, 12, 0).timestamp()
+    old = "2026-11-16 22:00:00.000000: [TUN] [BypassHub] peer(abc) - Received handshake response"
+    sent = "2026-11-16 22:12:05.000000: [TUN] [BypassHub] peer(abc) - Sending handshake initiation"
+    got = "2026-11-16 22:12:06.000000: [TUN] [BypassHub] peer(abc) - Received handshake response"
+    assert not awg.handshake_done(f"{old}\n{sent}", since)   # ответ от прошлого запуска не в счёт
+    assert awg.handshake_done(f"{old}\n{sent}\n{got}", since)
+
+    m = awg.AwgManager(tmp_path)
+    monkeypatch.setattr(winutil, "service_state", lambda name: "RUNNING")
+    monkeypatch.setattr(awg.time, "sleep", lambda s: None)
+    dumps = iter([sent, f"{sent}\n{got}"])
+    monkeypatch.setattr(winutil, "run", lambda *a, **kw: __import__("subprocess").CompletedProcess(a, 0, next(dumps), ""))
+    assert m._watch_handshake(since, timeout=5) is True
+    monkeypatch.setattr(winutil, "run", lambda *a, **kw: __import__("subprocess").CompletedProcess(a, 0, sent, ""))
+    clock = iter(range(0, 100, 3))
+    monkeypatch.setattr(awg.time, "monotonic", lambda: next(clock))
+    assert m._watch_handshake(since, timeout=5) is False
