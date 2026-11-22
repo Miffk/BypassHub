@@ -4,9 +4,9 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Tuple
 
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout, QWidget
 
 from .. import vpn, winutil
 from ..vpn import Profile
@@ -92,23 +92,23 @@ class VpnPage(Page):
                          "Отмеченные программы ходят в интернет напрямую, даже когда VPN включён, — например, "
                          "игры, в которых через VPN растёт пинг. Работает в режиме «Весь трафик»: в режиме "
                          "«Системный прокси» игры и так идут мимо VPN.")
-        grid = W.grid(2)
+        self.exclude_grid = W.grid(2)
         self.exclude_checks = {}
-        for i, title in enumerate(vpn.EXCLUDE_PRESETS):
-            cb = W.checkbox(title, lambda _on: self._exclude_changed())
-            grid.addWidget(cb, i // 2, i % 2)
-            self.exclude_checks[title] = cb
-        body.addLayout(grid)
+        body.addLayout(self.exclude_grid)
         self.exclude_entry = W.entry("game, other" if winutil.IS_LINUX else "game.exe, other.exe")
-        self.exclude_entry.returnPressed.connect(self._exclude_changed)
-        ex_label = W.label("Другие программы")
-        ex_label.setFixedWidth(150)
+        self.exclude_entry.returnPressed.connect(self._exclude_add)
+        ex_label = W.label("Добавить программу")
+        ex_label.setFixedWidth(170)
         body.addLayout(W.hbox(ex_label, self.exclude_entry, W.button("Выбрать…", self._exclude_pick),
-                              W.button("Применить", self._exclude_changed, primary=True), stretch_last=False))
-        body.addWidget(W.label("Имена файлов программ через запятую. «Выбрать…» — указать файл игры в папке, куда она "
-                               "установлена." if winutil.IS_LINUX else
-                               "Имена файлов программ через запятую. «Выбрать…» — указать .exe игры в папке, куда она "
-                               "установлена.", "small", wrap=True))
+                              W.button("Добавить", self._exclude_add, primary=True), stretch_last=False))
+        body.addWidget(W.label("Впишите имя файла программы (можно несколько через запятую) или нажмите «Выбрать…» "
+                               "и укажите файл игры в папке, куда она установлена. Программа появится в списке "
+                               "выше с галочкой; снимите галочку, чтобы она снова шла через VPN, или нажмите ✕, "
+                               "чтобы убрать её из списка." if winutil.IS_LINUX else
+                               "Впишите имя .exe (можно несколько через запятую) или нажмите «Выбрать…» и укажите "
+                               ".exe игры в папке, куда она установлена. Программа появится в списке выше с "
+                               "галочкой; снимите галочку, чтобы она снова шла через VPN, или нажмите ✕, чтобы "
+                               "убрать её из списка.", "small", wrap=True))
 
         body = W.section(self.lay, "AmneziaWG",
                          "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
@@ -321,28 +321,66 @@ class VpnPage(Page):
         if self.app.vpn_state.mode == "proxy":
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
+    def _exclude_state(self) -> Tuple[List[str], List[str]]:
+        """(отмеченные программы, свои программы в списке). Свои — и те, что вписаны раньше, до списка с
+        галочками (тогда они хранились только среди отмеченных)."""
+        s = self.app.core.settings
+        names = vpn.clean_exe_names(s.get("vpn", "exclude_apps") or [])
+        in_presets = {e for exes in vpn.EXCLUDE_PRESETS.values() for e in exes}
+        custom = vpn.clean_exe_names((s.get("vpn", "exclude_custom") or [])
+                                     + [n for n in names if n not in in_presets])
+        return names, [c for c in custom if c not in in_presets]
+
     def _exclude_load(self) -> None:
-        names = vpn.clean_exe_names(self.app.core.settings.get("vpn", "exclude_apps") or [])
-        in_presets = set()
-        for title, exes in vpn.EXCLUDE_PRESETS.items():
-            W.set_checked(self.exclude_checks[title], all(e in names for e in exes))
-            in_presets.update(exes)
-        self.exclude_entry.setText(", ".join(n for n in names if n not in in_presets))
+        names, custom = self._exclude_state()
+        W.clear_layout(self.exclude_grid)
+        self.exclude_checks = {}
+        items = [(title, exes) for title, exes in vpn.EXCLUDE_PRESETS.items()] + [(c, [c]) for c in custom]
+        for i, (title, exes) in enumerate(items):
+            cb = W.checkbox(title)
+            W.set_checked(cb, all(e in names for e in exes))
+            cb.toggled.connect(lambda _on: self._exclude_changed())
+            if title in vpn.EXCLUDE_PRESETS:
+                cell = cb
+            else:
+                remove = W.button("✕", lambda n=title: self._exclude_remove(n), flat=True)
+                remove.setToolTip("Убрать из списка")
+                remove.setFixedWidth(28)
+                cell = QWidget()
+                cell.setLayout(W.hbox(cb, remove, spacing=2))
+            self.exclude_grid.addWidget(cell, i // 2, i % 2)
+            self.exclude_checks[title] = (cb, exes)
+
+    def _exclude_save(self, names: List[str], custom: List[str]) -> None:
+        s = self.app.core.settings
+        names, custom = vpn.clean_exe_names(names), vpn.clean_exe_names(custom)
+        changed = names != vpn.clean_exe_names(s.get("vpn", "exclude_apps") or [])
+        rebuild = custom != self._exclude_state()[1]
+        s.set("vpn", "exclude_custom", custom, save=False)
+        s.set("vpn", "exclude_apps", names)
+        if rebuild:  # новые или убранные программы; при щелчке по галочке список не пересобираем
+            self._exclude_load()
+        if changed and s.get("vpn", "mode") == "tun":
+            self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
     def _exclude_changed(self) -> None:
-        names = []
-        for title, exes in vpn.EXCLUDE_PRESETS.items():
-            if self.exclude_checks[title].isChecked():
+        names: List[str] = []
+        for cb, exes in self.exclude_checks.values():
+            if cb.isChecked():
                 names += exes
-        names += [x for x in re.split(r"[,;\n]", self.exclude_entry.text()) if x.strip()]
-        names = vpn.clean_exe_names(names)
-        s = self.app.core.settings
-        if names == vpn.clean_exe_names(s.get("vpn", "exclude_apps") or []):
+        self._exclude_save(names, self._exclude_state()[1])
+
+    def _exclude_add(self) -> None:
+        new = vpn.clean_exe_names([x for x in re.split(r"[,;\n]", self.exclude_entry.text()) if x.strip()])
+        if not new:
             return
-        s.set("vpn", "exclude_apps", names)
-        self._exclude_load()
-        if s.get("vpn", "mode") == "tun":
-            self.app.pages["home"][1].apply_vpn("Применение настроек…")
+        self.exclude_entry.clear()
+        names, custom = self._exclude_state()
+        self._exclude_save(names + new, custom + new)
+
+    def _exclude_remove(self, name: str) -> None:
+        names, custom = self._exclude_state()
+        self._exclude_save([n for n in names if n != name], [c for c in custom if c != name])
 
     def _exclude_pick(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Программа мимо VPN", "",
@@ -350,9 +388,8 @@ class VpnPage(Page):
                                               else "Программы (*.exe);;Все файлы (*.*)")
         if not path:
             return
-        current = self.exclude_entry.text().strip()
-        self.exclude_entry.setText((current + ", " if current else "") + vpn.clean_exe_names([path])[0])
-        self._exclude_changed()
+        self.exclude_entry.setText(vpn.clean_exe_names([path])[0])
+        self._exclude_add()
 
     def restart(self) -> None:
         self.app.pages["home"][1].toggle_vpn(True)

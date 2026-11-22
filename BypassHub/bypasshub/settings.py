@@ -22,6 +22,7 @@ DEFAULTS: Dict[str, Any] = {
         "strategy": "general.bat",
         "mode": "process",         # process — winws.exe запускается программой; service — служба Windows
         "installed_version": "",
+        "pinned_version": "",      # выбранная вручную версия: не обновлять до новой («» — всегда последняя)
         "learn_apps": False,       # экспериментально: исключать IP, к которым подключаются выбранные программы
     },
     "tg": {
@@ -40,6 +41,7 @@ DEFAULTS: Dict[str, Any] = {
         "subscriptions": [],       # ссылки на подписки
         "subs_meta": {},           # {ссылка: {"checked": время обновления, "hours": интервал}}
         "exclude_apps": [],        # программы мимо VPN (имена .exe), только режим «Весь трафик»
+        "exclude_custom": [],      # свои программы в списке «мимо VPN» (отмеченные и нет)
         "hwid": "",                # код устройства для подписок с лимитом устройств (создаётся сам)
     },
     "updates": {
@@ -55,6 +57,7 @@ DEFAULTS: Dict[str, Any] = {
         "close_to_tray": True,
         "restore_state": True,     # при запуске включать то, что было включено
         "stop_on_exit": True,      # выключать zapret (режим process) и прокси при выходе
+        "last_boot": 0,            # время включения ПК при прошлом запуске (VPN после перезагрузки выключается)
     },
     "hotkeys": {
         "enabled": True,
