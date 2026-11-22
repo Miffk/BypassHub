@@ -18,16 +18,20 @@ ASSET = "assets/butterflies.png"
 Frame = Optional[Tuple[int, int, QImage]]  # (x, y, картинка) в масштабе показа; None — пустой кадр
 
 
-def _edge_fade(width: int, height: int, part: float = 0.14):
-    """Маска прозрачности: к краям кадра изображение плавно гаснет — у свечения нет видимой рамки."""
-    from PIL import Image
-    def ramp(n: int) -> List[int]:
-        k = max(1, int(min(width, height) * part))
-        return [min(255, int(255 * min(i, n - 1 - i) / k)) for i in range(n)]
-    cols, rows = ramp(width), ramp(height)
-    col = Image.frombytes("L", (width, 1), bytes(cols)).resize((width, height))
-    row = Image.frombytes("L", (1, height), bytes(rows)).resize((width, height))
-    from PIL import ImageChops
+def _edge_fade(width: int, height: int, side: float = 0.38, ends: float = 0.2):
+    """Маска прозрачности: к краям кадра изображение плавно растворяется (по бокам — шире, вверху и внизу —
+    уже), чтобы у дымки вокруг бабочки не было видимых краёв."""
+    from PIL import Image, ImageChops
+
+    def ramp(n: int, part: float) -> bytes:
+        k = max(1.0, n * part)
+        out = []
+        for i in range(n):
+            t = min(1.0, min(i, n - 1 - i) / k)
+            out.append(int(255 * t * t * (3 - 2 * t)))  # плавная S-кривая, без заметной границы
+        return bytes(out)
+    col = Image.frombytes("L", (width, 1), ramp(width, side)).resize((width, height))
+    row = Image.frombytes("L", (1, height), ramp(height, ends)).resize((width, height))
     return ImageChops.multiply(col, row)
 
 
