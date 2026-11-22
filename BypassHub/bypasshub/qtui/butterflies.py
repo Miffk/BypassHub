@@ -60,17 +60,42 @@ def load_frames(scale: float, path=None) -> Tuple[Tuple[int, int], int, List[Fra
     return (round(width * scale), round(height * scale)), max(20, duration), frames
 
 
-class ButterflyArea(QWidget):
-    """Пустое место в левом меню (между пунктами и «Поддержать проект»); play() — один пролёт бабочки.
-    Пока бабочки нет, ничего не рисует, место просто растягивается."""
+class ButterflySlot(QWidget):
+    """Пустое место в раскладке меню. Сама бабочка (ButterflyArea) рисуется на всю ширину меню — от края
+    до края, без отступов раскладки — и чуть заходит вверх и вниз под соседние пункты (позади них)."""
 
-    def __init__(self, call_ui: Callable[[Callable[[], None]], None]):
+    OVERLAP = 50
+
+    def __init__(self, area: "ButterflyArea"):
         super().__init__()
+        self.area = area
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(0)
+
+    def _place(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.area.setGeometry(0, self.y() - self.OVERLAP, parent.width(), self.height() + 2 * self.OVERLAP)
+        self.area.lower()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._place()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._place()
+
+
+class ButterflyArea(QWidget):
+    """Бабочка в левом меню; play() — один пролёт. Пока бабочки нет, ничего не рисует."""
+
+    def __init__(self, call_ui: Callable[[Callable[[], None]], None], parent: Optional[QWidget] = None):
+        super().__init__(parent)
         self.call_ui = call_ui
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(0)
         self.frames: List[Frame] = []
         self.canvas = (0, 0)
         self.index = -1
@@ -83,11 +108,11 @@ class ButterflyArea(QWidget):
         return self.loading or self.index >= 0
 
     def scale(self) -> float:
-        """По высоте свободного места; по ширине — с небольшим запасом: края кадра всё равно гаснут."""
-        return min(0.75, self.height() / 880, self.width() * 1.25 / 450)
+        """На всю ширину меню, если хватает высоты."""
+        return min(0.75, self.height() / 880, self.width() / 450)
 
     def play(self) -> None:
-        if self.busy or not self.isVisible() or self.height() < 140:
+        if self.busy or not self.isVisible() or self.height() < 200:
             return
         self.loading = True
         scale = self.scale()

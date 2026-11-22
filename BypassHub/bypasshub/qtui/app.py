@@ -164,10 +164,9 @@ class App(QMainWindow):
             nav_lay.addWidget(item)
             self.nav_items[key] = item
         # свободное место меню — для бабочек (пролетают при открытии главной и раз в 2 минуты)
-        from .butterflies import ButterflyArea
-        nav_lay.addSpacing(8)
-        self.butterflies = ButterflyArea(self.call_ui)
-        nav_lay.addWidget(self.butterflies, 1)
+        from .butterflies import ButterflyArea, ButterflySlot
+        self.butterflies = ButterflyArea(self.call_ui, self.nav)
+        nav_lay.addWidget(ButterflySlot(self.butterflies), 1)
         self._butterflies_at = 0.0
         self._butterfly_timer = QTimer(self)
         self._butterfly_timer.timeout.connect(self.play_butterflies)
