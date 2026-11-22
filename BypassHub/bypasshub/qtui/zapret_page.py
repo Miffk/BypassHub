@@ -56,6 +56,19 @@ class ZapretPage(Page):
         self.service_label = W.label("", "muted")
         body.addWidget(self.service_label)
 
+        # --- версия
+        body = W.section(self.lay, "Версия zapret",
+                         "Если на новой версии обход стал работать хуже, поставьте одну из прошлых. Выбранная "
+                         "версия не обновляется автоматически; чтобы снова получать обновления, установите "
+                         "последнюю.")
+        self.version_label = W.label("", "muted")
+        body.addWidget(self.version_label)
+        self.version_box = W.row(body, "Версия", W.combo())
+        self.version_btn = W.button("Установить", self._install_version, primary=True)
+        body.addLayout(W.button_bar(self.version_btn, W.button("Обновить список", self._load_versions)))
+        self._releases: list = []
+        self._versions_requested = False
+
         # --- Game Filter
         body = W.section(self.lay, "Game Filter",
                          "Обход для игр и других сервисов, использующих TCP/UDP на портах выше 1023. "
@@ -154,6 +167,60 @@ class ZapretPage(Page):
     # ------------------------------------------------------------------ загрузка значений
     def on_show(self) -> None:
         self.reload()
+        if not self._versions_requested:
+            self._load_versions()
+
+    # ------------------------------------------------------------------ версия zapret
+    def _version_text(self) -> str:
+        zm = self.app.core.zapret
+        if not zm.is_installed():
+            return "zapret ещё не загружен"
+        pinned = self.app.core.settings.get("zapret", "pinned_version")
+        return (f"Установлена версия {zm.local_version()}"
+                + (" — выбрана вручную, не обновляется" if pinned else " — обновляется автоматически"))
+
+    def _load_versions(self) -> None:
+        self._versions_requested = True
+        W.set_combo(self.version_box, ["Загрузка списка версий…"], "")
+        self.version_btn.setEnabled(False)
+
+        def done(releases, err):
+            if err or not releases:
+                self._versions_requested = False  # попробуем снова при следующем открытии страницы
+                W.set_combo(self.version_box, ["Не удалось загрузить список версий"], "")
+                return
+            self._releases = list(releases)
+            installed = self.app.core.zapret.local_version() if self.app.core.zapret.is_installed() else ""
+            items = [self._version_item(r, i == 0) for i, r in enumerate(self._releases)]
+            current = next((it for it, r in zip(items, self._releases) if r.version == installed), items[0])
+            W.set_combo(self.version_box, items, current)
+            self.version_btn.setEnabled(True)
+        self.app.run_task(self.app.core.zapret_versions, done)
+
+    @staticmethod
+    def _version_item(rel, latest: bool) -> str:
+        return rel.version + (" — последняя" if latest else "")
+
+    def _install_version(self) -> None:
+        i = self.version_box.currentIndex()
+        if not (0 <= i < len(self._releases)):
+            return
+        rel, latest = self._releases[i], i == 0
+        home = self.app.pages["home"][1]
+        home.zapret_card.set_busy(True, f"Установка zapret {rel.version}…")
+        self.version_btn.setEnabled(False)
+
+        def done(_, err):
+            home.zapret_card.set_busy(False)
+            self.version_btn.setEnabled(True)
+            self.reload()
+            if err:
+                self.app.error(f"Не удалось установить zapret {rel.version}: {err}", "Zapret")
+            else:
+                self.app.info(f"Установлен zapret {rel.version}."
+                              + ("" if latest else " Он не будет обновляться автоматически, пока вы не "
+                                                   "установите последнюю версию."), "Zapret")
+        self.app.run_task(lambda: self.app.core.zapret_install_version(rel, latest), done)
 
     def sync_from_settings(self) -> None:
         self.mode_btn.set(MODE_LABELS[self.app.core.zapret_mode])
@@ -161,6 +228,7 @@ class ZapretPage(Page):
     def reload(self) -> None:
         zm = self.app.core.zapret
         installed = zm.is_installed()
+        W.set_text(self.version_label, self._version_text())
         self.not_installed.setVisible(not installed)
         names = zm.strategies()
         cur = self.app.core.strategy

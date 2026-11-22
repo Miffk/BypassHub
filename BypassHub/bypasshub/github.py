@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 
 from . import APP_NAME, __version__
@@ -70,6 +70,10 @@ def _release_from_api(repo: str) -> Release:
     with _open(f"https://api.github.com/repos/{repo}/releases/latest", 15,
                "application/vnd.github+json") as resp:
         data = json.loads(resp.read().decode("utf-8"))
+    return _release_from_json(repo, data)
+
+
+def _release_from_json(repo: str, data: dict) -> Release:
     tag = (data.get("tag_name") or "").strip()
     if not tag:
         raise ValueError("в ответе GitHub нет tag_name")
@@ -109,6 +113,27 @@ def latest_release(repo: str) -> Release:
         raise RuntimeError(f"GitHub ответил HTTP {exc.code}") from None
     except URLError as exc:
         raise RuntimeError(f"нет соединения с GitHub ({exc.reason})") from None
+
+
+def list_releases(repo: str, limit: int = 20) -> List[Release]:
+    """Последние релизы (новые первыми), без черновиков и предварительных."""
+    try:
+        with _open(f"https://api.github.com/repos/{repo}/releases?per_page={int(limit)}", 15,
+                   "application/vnd.github+json") as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"GitHub ответил HTTP {exc.code}") from None
+    except URLError as exc:
+        raise RuntimeError(f"нет соединения с GitHub ({exc.reason})") from None
+    out: List[Release] = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict) or item.get("draft") or item.get("prerelease"):
+            continue
+        try:
+            out.append(_release_from_json(repo, item))
+        except ValueError:
+            continue
+    return out
 
 
 def fetch_text(url: str, timeout: float = 15) -> str:

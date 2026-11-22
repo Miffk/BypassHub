@@ -113,13 +113,17 @@ class UpdatesPage(Page):
         for key, row in self.rows.items():
             info = self.infos.get(key)
             latest = info.latest if info and info.latest else "?"
-            W.set_text(row["ver"], f"установлена: {installed[key] or 'не установлен'} · последняя: {latest}")
+            W.set_text(row["ver"], f"установлена: {installed[key] or 'не установлен'} (выбрана вручную)"
+                       if info and info.pinned else
+                       f"установлена: {installed[key] or 'не установлен'} · последняя: {latest}")
             if info is None and key in LAZY and not installed[key]:
                 text, color = "Скачается при первом включении VPN", S.P.muted
             elif info is None:
                 text, color = "", S.P.muted
             elif info.error:
                 text, color = f"Не удалось проверить: {info.error}", S.red()
+            elif info.pinned:
+                text, color = "Версия выбрана вручную и не обновляется — сменить на странице Zapret", S.P.muted
             elif info.available:
                 text, color = "Доступно обновление", S.yellow()
             else:

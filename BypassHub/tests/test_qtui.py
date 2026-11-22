@@ -29,6 +29,9 @@ def window(tmp_path_factory):
     mp.setattr(appmod.App, "_status_loop", lambda self: None)
     mp.setattr(appmod.App, "_init_tray", lambda self: None)
     mp.setattr(appmod.App, "_check_show_flag", lambda self: None)
+    from bypasshub import github
+    mp.setattr(Core, "zapret_versions", lambda self: [github.Release("x/y", "1.9.1", ""),
+                                                      github.Release("x/y", "1.9.0", "")])
     qa = QApplication.instance() or QApplication([])
     qa.setFont(S.base_font())
     w = appmod.App(core)
@@ -94,3 +97,39 @@ def test_add_several_conf_files(window, tmp_path, monkeypatch):
     assert shown and not shown[0].startswith("ERROR"), shown
     names = {p.name for p in w.core.vpn_profiles() if p.kind == "awg"}
     assert {"Germany", "Netherlands"} <= names
+
+
+def test_exclude_apps_become_checkboxes(window, monkeypatch):
+    """Своя программа в «мимо VPN» появляется в списке с галочкой; снятая галочка — остаётся в списке
+    неотмеченной; ✕ — убирает из списка."""
+    qa, w = window
+    page = w.pages["vpn"][1]
+    s = w.core.settings
+    monkeypatch.setattr(w.pages["home"][1], "apply_vpn", lambda *a, **kw: None)
+    page.exclude_entry.setText("DeadByDaylight.exe, Repo.exe")
+    page._exclude_add()
+    qa.processEvents()
+    assert page.exclude_entry.text() == ""
+    for name in ("deadbydaylight.exe", "repo.exe"):
+        assert page.exclude_checks[name][0].isChecked()
+    assert {"deadbydaylight.exe", "repo.exe"} <= set(s.get("vpn", "exclude_apps"))
+    page.exclude_checks["repo.exe"][0].setChecked(False)
+    qa.processEvents()
+    assert "repo.exe" not in s.get("vpn", "exclude_apps")
+    assert "repo.exe" in page.exclude_checks and not page.exclude_checks["repo.exe"][0].isChecked()
+    page._exclude_remove("repo.exe")
+    qa.processEvents()
+    assert "repo.exe" not in page.exclude_checks and "repo.exe" not in s.get("vpn", "exclude_custom")
+
+
+def test_zapret_version_list(window):
+    qa, w = window
+    import time
+    page = w.pages["zapret"][1]
+    page._load_versions()
+    deadline = time.time() + 5
+    while page.version_box.count() < 2 and time.time() < deadline:
+        qa.processEvents()
+        time.sleep(0.02)
+    assert [page.version_box.itemText(i) for i in range(page.version_box.count())] == \
+        ["1.9.1 — последняя", "1.9.0"]

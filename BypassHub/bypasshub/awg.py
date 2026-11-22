@@ -444,6 +444,7 @@ class AwgManager:
             started = time.time()
             state = self._install_and_wait()
             if state == "RUNNING":
+                self._manual_start()
                 if split:
                     self._add_fallback_route()
                 else:
@@ -574,6 +575,16 @@ class AwgManager:
                 return
             time.sleep(0.25)
         log.warning("AmneziaWG: не удалось добавить маршрут через туннель")
+
+    @staticmethod
+    def _manual_start() -> None:
+        """Клиент ставит службу туннеля с автозапуском — после перезагрузки она поднималась сама, без
+        BypassHub (и без sing-box при раздельном туннелировании) и VPN «был включён, но не работал».
+        Служба запускается только из BypassHub."""
+        try:
+            winutil.run_logged(["sc", "config", SERVICE_NAME, "start=", "demand"], timeout=15)
+        except Exception as exc:
+            log.debug("AmneziaWG: тип запуска службы: %r", exc)
 
     @staticmethod
     def _run_dns_script(script: str) -> bool:

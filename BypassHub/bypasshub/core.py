@@ -28,6 +28,7 @@ class UpdateInfo:
     latest: str
     release: Optional[github.Release]
     error: str = ""
+    pinned: bool = False    # версия выбрана вручную — не обновляется
 
     @property
     def available(self) -> bool:
@@ -400,6 +401,10 @@ class Core:
     # ------------------------------------------------------------ обновления
     def check_zapret(self) -> UpdateInfo:
         installed = self.zapret.local_version() if self.zapret.is_installed() else ""
+        pinned = self.settings.get("zapret", "pinned_version") or ""
+        if pinned and installed:
+            # версия выбрана вручную — не обновляем, пока пользователь не вернёт «последнюю»
+            return UpdateInfo("zapret", "Zapret", installed, installed, None, pinned=True)
         try:
             rel = github.latest_release(zapret.REPO)
         except Exception as exc:
@@ -409,6 +414,23 @@ class Core:
             except Exception:
                 return UpdateInfo("zapret", "Zapret", installed, "", None, str(exc))
         return UpdateInfo("zapret", "Zapret", installed, rel.version, rel)
+
+    def zapret_versions(self) -> List[github.Release]:
+        """Версии zapret для выбора вручную: последние релизы, новые первыми."""
+        return github.list_releases(zapret.REPO, 20)
+
+    def zapret_install_version(self, rel: github.Release, latest: bool,
+                               progress: Optional[ProgressCb] = None) -> None:
+        """Ставит выбранную версию zapret. latest — это самая новая: дальше обновляться как обычно;
+        иначе версия закрепляется и автообновление zapret её не меняет."""
+        cb = (lambda done, total: progress("zapret", done, total)) if progress else None
+        with self.lock:
+            self._install_zapret(rel, cb)
+            self.settings.set("zapret", "pinned_version", "" if latest else rel.version)
+            if latest:
+                log.info("Zapret: дальше обновляется до последней версии")
+            else:
+                log.info("Zapret: закреплена версия %s — автообновление её не меняет", rel.version)
 
     def check_tg(self) -> UpdateInfo:
         installed = self.tg.local_version() if self.tg.is_installed() else ""
@@ -458,6 +480,8 @@ class Core:
         for i in infos:
             if i.error:
                 log.warning("%s: не удалось проверить обновления: %s", i.title, i.error)
+            elif i.pinned:
+                log.info("%s: выбрана версия %s, автообновление выключено", i.title, i.installed)
             elif i.available:
                 log.info("%s: доступна версия %s (установлена %s)", i.title, i.latest, i.installed or "—")
             else:
@@ -511,7 +535,10 @@ class Core:
         return dest, rel.version
 
     def _install_zapret(self, rel: github.Release, cb) -> None:
-        asset = rel.asset(f"zapret-discord-youtube-{rel.tag}.zip")
+        name = f"zapret-discord-youtube-{rel.tag}.zip"
+        if name not in rel.assets:  # в старых релизах архив мог называться иначе
+            name = next((n for n in rel.assets if n.lower().endswith(".zip") and "zapret" in n.lower()), name)
+        asset = rel.asset(name)
         zip_path = self.paths.downloads / asset.name
         nfqws = self._fetch_nfqws(cb) if winutil.IS_LINUX else None
         github.download(asset.url, zip_path, cb, asset.sha256)
@@ -576,8 +603,61 @@ class Core:
         else:
             self.learner.stop()
 
+    @staticmethod
+    def _session_started() -> int:
+        """Когда начался текущий сеанс: позже из времени загрузки системы и входа пользователя.
+        Вход нужен из-за «быстрого запуска» Windows: при выключении ядро уходит в гибернацию, и время
+        загрузки после включения прежнее, а вход в систему — новый."""
+        import getpass
+        import psutil
+        started = int(psutil.boot_time())
+        try:
+            me = getpass.getuser().lower()
+            users = psutil.users()
+            mine = [u.started for u in users if (u.name or "").split("\\")[-1].lower() == me] or \
+                [u.started for u in users]
+            if mine:
+                started = max(started, int(max(mine)))
+        except Exception:
+            pass
+        return started
+
+    def _first_start_after_boot(self) -> bool:
+        """Первый запуск программы после включения компьютера или входа в Windows
+        (не перезапуск после обновления)."""
+        try:
+            boot = self._session_started()
+        except Exception:
+            return False
+        last = int(self.settings.get("app", "last_boot") or 0)
+        if abs(boot - last) <= 120:   # время включения ПК может «плавать» на секунды
+            return False
+        self.settings.set("app", "last_boot", boot)
+        return last != 0              # самый первый запуск этой версии — не перезагрузка
+
+    def vpn_off_after_boot(self) -> bool:
+        """После включения компьютера VPN выключен: туннель от прошлого сеанса (служба AmneziaWG,
+        прокси Windows) мог остаться и делать вид, что работает. True — если что-то выключили."""
+        if not self._first_start_after_boot():
+            return False
+        with self.lock:
+            was = bool(self.settings.get("vpn", "enabled")) or self.vpn_running()
+            self.settings.set("vpn", "enabled", False)
+            for stop in (self.singbox.stop, self.awg.stop):
+                try:
+                    stop()
+                except Exception as exc:
+                    log.warning("VPN после перезагрузки: %r", exc)
+            if was:
+                log.info("Компьютер был перезагружен — VPN выключен. Включите его, когда понадобится.")
+            return was
+
     def restore_state(self) -> None:
         self.update_learner()
+        try:
+            self.vpn_off_after_boot()
+        except Exception as exc:
+            log.warning("VPN после перезагрузки: %r", exc)
         if not self.awg.status().running:
             try:
                 self.awg.restore_dns()  # правило DNS от прежнего туннеля, если программа упала

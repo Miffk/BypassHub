@@ -691,3 +691,66 @@ def test_conf_dns_servers():
     conf = "[Interface]\nDNS = 1.1.1.1, 1.0.0.1, corp.local\nDNS = 2606:4700:4700::1111\n"
     assert awg.conf_dns_servers(conf) == ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111"]
     assert awg.conf_dns_servers("[Interface]\nAddress = 10.8.1.2/32\n") == []
+
+
+def test_vpn_off_after_reboot(tmp_path, monkeypatch):
+    """Первый запуск после включения ПК: VPN выключается (служба туннеля могла подняться сама и не работать).
+    Перезапуск программы в том же сеансе (обновление) VPN не трогает."""
+    import psutil
+    from bypasshub.core import Core
+    from bypasshub.paths import Paths
+    core = Core(Paths(tmp_path / "data"))
+    stopped = []
+    monkeypatch.setattr(core.singbox, "stop", lambda: stopped.append("singbox"))
+    monkeypatch.setattr(core.awg, "stop", lambda: stopped.append("awg"))
+    monkeypatch.setattr(core, "vpn_running", lambda: False)
+    boot = {"t": 1_000_000}
+    monkeypatch.setattr(psutil, "boot_time", lambda: 900_000)
+    monkeypatch.setattr(psutil, "users", lambda: [type("U", (), {"name": "someone", "started": boot["t"]})()])
+    core.settings.set("vpn", "enabled", True)
+    assert core.vpn_off_after_boot() is False          # самый первый запуск — только запоминаем
+    assert core.settings.get("vpn", "enabled") and not stopped
+    boot["t"] += 30                                      # тот же сеанс (время «плавает»)
+    assert core.vpn_off_after_boot() is False
+    boot["t"] += 86400          # компьютер включили снова («быстрый запуск»: загрузка прежняя, вход — новый)
+    assert core.vpn_off_after_boot() is True
+    assert not core.settings.get("vpn", "enabled") and stopped == ["singbox", "awg"]
+    assert core.vpn_off_after_boot() is False            # второй запуск в этом сеансе
+
+
+def test_zapret_pinned_version_not_updated(tmp_path, monkeypatch):
+    from bypasshub import github
+    from bypasshub.core import Core
+    from bypasshub.paths import Paths
+    core = Core(Paths(tmp_path / "data"))
+    monkeypatch.setattr(core.zapret, "is_installed", lambda: True)
+    monkeypatch.setattr(core.zapret, "local_version", lambda: "1.9.0")
+    monkeypatch.setattr(github, "latest_release", lambda repo: github.Release(repo, "1.10.4", ""))
+    assert core.check_zapret().available
+    core.settings.set("zapret", "pinned_version", "1.9.0")
+    info = core.check_zapret()
+    assert info.pinned and not info.available
+    installed = []
+    monkeypatch.setattr(core, "_install_zapret", lambda rel, cb: installed.append(rel.version))
+    core.zapret_install_version(github.Release("x/y", "1.10.4", ""), latest=True)
+    assert installed == ["1.10.4"] and core.settings.get("zapret", "pinned_version") == ""
+    core.zapret_install_version(github.Release("x/y", "1.9.5", ""), latest=False)
+    assert core.settings.get("zapret", "pinned_version") == "1.9.5"
+
+
+def test_list_releases_skips_drafts(monkeypatch):
+    import io
+    import json
+    from bypasshub import github
+    data = [{"tag_name": "1.10.4", "assets": [{"name": "a.zip", "browser_download_url": "u"}]},
+            {"tag_name": "1.10.5", "prerelease": True}, {"tag_name": "1.10.3"}, {"draft": True, "tag_name": "x"}]
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(github, "_open", lambda url, timeout, accept="*/*": Resp(json.dumps(data).encode()))
+    rels = github.list_releases("Flowseal/zapret-discord-youtube")
+    assert [r.version for r in rels] == ["1.10.4", "1.10.3"] and rels[0].asset("a.zip").url == "u"
