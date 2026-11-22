@@ -1,4 +1,4 @@
-"""Бабочки на главном экране: анимация (APNG из assets) поверх страницы.
+"""Бабочки в левом меню: анимация (APNG из assets) на свободном месте под пунктами.
 
 Не мешает работе: щелчки проходят сквозь неё, кадры декодируются в фоне перед каждым показом
 и освобождаются после (в памяти ~30 МБ только пока бабочка летит)."""
@@ -9,7 +9,7 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ..log import log
 from ..paths import resource_path
@@ -56,35 +56,37 @@ def load_frames(scale: float, path=None) -> Tuple[Tuple[int, int], int, List[Fra
     return (round(width * scale), round(height * scale)), max(20, duration), frames
 
 
-class ButterflyOverlay(QWidget):
-    """Прозрачный слой поверх страницы; play() — один пролёт бабочки у правого края."""
+class ButterflyArea(QWidget):
+    """Пустое место в левом меню (между пунктами и «Поддержать проект»); play() — один пролёт бабочки.
+    Пока бабочки нет, ничего не рисует, место просто растягивается."""
 
-    MARGIN = 12
-
-    def __init__(self, host: QWidget, call_ui: Callable[[Callable[[], None]], None]):
-        super().__init__(host)
-        self.host = host
+    def __init__(self, call_ui: Callable[[Callable[[], None]], None]):
+        super().__init__()
         self.call_ui = call_ui
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(0)
         self.frames: List[Frame] = []
         self.canvas = (0, 0)
         self.index = -1
         self.loading = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._next)
-        self.hide()
 
     @property
     def busy(self) -> bool:
         return self.loading or self.index >= 0
 
+    def scale(self) -> float:
+        """По высоте свободного места; по ширине — с небольшим запасом: края кадра всё равно гаснут."""
+        return min(0.75, self.height() / 880, self.width() * 1.25 / 450)
+
     def play(self) -> None:
-        if self.busy or self.host.height() < 200:
+        if self.busy or not self.isVisible() or self.height() < 140:
             return
         self.loading = True
-        scale = max(0.4, min(0.75, self.host.height() * 0.85 / 880))
+        scale = self.scale()
 
         def work():
             try:
@@ -97,13 +99,10 @@ class ButterflyOverlay(QWidget):
 
     def _start(self, result) -> None:
         self.loading = False
-        if not result or not self.host.isVisible():
+        if not result or not self.isVisible():
             return
         self.canvas, duration, self.frames = result
         self.index = 0
-        self.setGeometry(self.host.rect())
-        self.raise_()
-        self.show()
         self.timer.start(duration)
         self.update()
 
@@ -111,7 +110,7 @@ class ButterflyOverlay(QWidget):
         self.timer.stop()
         self.index = -1
         self.frames = []
-        self.hide()
+        self.update()
 
     def _next(self) -> None:
         self.index += 1
@@ -125,7 +124,7 @@ class ButterflyOverlay(QWidget):
             return
         x, y, img = self.frames[self.index]
         cw, ch = self.canvas
-        left = max(0, self.width() - cw - self.MARGIN)
+        left = (self.width() - cw) // 2
         top = max(0, (self.height() - ch) // 2)
         p = QPainter(self)
         p.drawImage(QRect(left + x, top + y, img.width(), img.height()), img)
