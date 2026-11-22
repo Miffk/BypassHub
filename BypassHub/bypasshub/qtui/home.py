@@ -128,6 +128,7 @@ class ServiceControl:
 class HomePage(Page):
     """Главная: три большие кнопки вкл/выкл. Настройки каждого сервиса — в меню слева."""
 
+    BUTTERFLY_PERIOD_MS = 120_000
     PING_MAX_AGE = 300  # с: при открытии главной/вкладки VPN пинг обновляется, если старше
     CHECK_PERIOD_MS = 180_000
 
@@ -197,6 +198,15 @@ class HomePage(Page):
         self._periodic.timeout.connect(self._periodic_check)
         QTimer.singleShot(1500, self._periodic_check)
         self._periodic.start(self.CHECK_PERIOD_MS)
+
+        # бабочки: пролетают при открытии главной и время от времени, пока она на экране
+        from .butterflies import ButterflyOverlay
+        self.butterflies = ButterflyOverlay(self, app.call_ui)
+        self._butterflies_at = 0.0
+        self._butterfly_timer = QTimer(self)
+        self._butterfly_timer.timeout.connect(self.play_butterflies)
+        self._butterfly_timer.start(self.BUTTERFLY_PERIOD_MS)
+        QTimer.singleShot(1200, self.play_butterflies)
 
     def _tile(self, grid: QGridLayout, column: int, title: str, on_toggle: Callable[[bool], None]) -> ServiceControl:
         tile = W.PowerTile(title)
@@ -386,6 +396,21 @@ class HomePage(Page):
 
     def on_show(self) -> None:
         self.ping_servers(max_age=self.PING_MAX_AGE)
+        self.play_butterflies(min_gap=20)
+
+    def play_butterflies(self, min_gap: float = 0) -> None:
+        """Пролёт бабочки, если она включена в «Оформлении» и главная на экране."""
+        if not self.app.core.settings.data["appearance"].get("butterflies", True):
+            return
+        if not (self.app.is_shown() and self.isVisible()) or time.monotonic() - self._butterflies_at < min_gap:
+            return
+        self._butterflies_at = time.monotonic()
+        self.butterflies.play()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.butterflies.isVisible():
+            self.butterflies.setGeometry(self.rect())
 
     def on_palette(self) -> None:
         self.servers.render(force=True)
