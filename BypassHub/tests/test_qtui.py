@@ -136,21 +136,21 @@ def test_zapret_version_list(window):
 
 
 def test_butterflies(window):
-    """Анимация бабочек: все кадры читаются из assets, пролёт идёт до конца и освобождает кадры."""
+    """Бабочки в меню: все кадры читаются из assets, пролёт идёт до конца и освобождает кадры."""
     from bypasshub.qtui.butterflies import load_frames
     qa, w = window
     canvas, duration, frames = load_frames(0.5)
     assert len(frames) == 48 and canvas == (225, 440) and 50 <= duration <= 200
     assert sum(f is not None for f in frames) > 40
-    home = w.pages["home"][1]
-    ov = home.butterflies
-    home.resize(900, 700)
-    ov._start((canvas, 1, frames))
+    area = w.butterflies
+    area._start((canvas, 1, frames))
+    w.grab()
     for _ in range(len(frames) + 2):
-        ov._next()
-    assert not ov.busy and ov.frames == [] and ov.isHidden()
+        area._next()
+    assert not area.busy and area.frames == []
     s = w.core.settings
     s.data["appearance"]["butterflies"] = False
-    home.play_butterflies()
-    assert not ov.busy
+    w._butterflies_at = 0
+    w.play_butterflies()
+    assert not area.busy
     s.data["appearance"]["butterflies"] = True

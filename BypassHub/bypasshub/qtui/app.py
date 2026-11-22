@@ -79,6 +79,7 @@ def tray_icon(zapret_on: bool, tg_on: bool, vpn_on: bool) -> QIcon:
 
 class App(QMainWindow):
     STATUS_INTERVAL = 3.0
+    BUTTERFLY_PERIOD_MS = 120_000  # раз в сколько пролетает бабочка в меню
 
     def __init__(self, core: Core, start_minimized: bool = False):
         super().__init__()
@@ -162,7 +163,15 @@ class App(QMainWindow):
             item.clicked.connect(lambda _=False, k=key: self.show_page(k))
             nav_lay.addWidget(item)
             self.nav_items[key] = item
-        nav_lay.addStretch(1)
+        # свободное место меню — для бабочек (пролетают при открытии главной и раз в 2 минуты)
+        from .butterflies import ButterflyArea, ButterflySlot
+        self.butterflies = ButterflyArea(self.call_ui, self.nav)
+        nav_lay.addWidget(ButterflySlot(self.butterflies), 1)
+        self._butterflies_at = 0.0
+        self._butterfly_timer = QTimer(self)
+        self._butterfly_timer.timeout.connect(self.play_butterflies)
+        self._butterfly_timer.start(self.BUTTERFLY_PERIOD_MS)
+        QTimer.singleShot(1200, self.play_butterflies)
         support = W.NavButton("Поддержать проект", "heart")
         support.setCheckable(False)
         support.clicked.connect(lambda: winutil.open_url(SUPPORT_URL))
@@ -172,6 +181,15 @@ class App(QMainWindow):
         nav_lay.addWidget(ver)
         self._restyle_nav()
         self.show_page(self.current_page)
+
+    def play_butterflies(self, min_gap: float = 0) -> None:
+        """Пролёт бабочки в меню, если она включена в «Оформлении» и окно на экране."""
+        if not self.core.settings.data["appearance"].get("butterflies", True):
+            return
+        if not self.is_shown() or time.monotonic() - self._butterflies_at < min_gap:
+            return
+        self._butterflies_at = time.monotonic()
+        self.butterflies.play()
 
     def _restyle_nav(self) -> None:
         for item in getattr(self, "nav_items", {}).values():

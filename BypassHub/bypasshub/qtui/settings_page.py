@@ -60,7 +60,7 @@ class SettingsPage(Page):
         self._shown = None
         self._refresh_appearance_controls()
         body.addSpacing(6)
-        self.butterflies = W.Toggle("Бабочки на главном экране", self._butterflies_changed)
+        self.butterflies = W.Toggle("Бабочки в меню слева", self._butterflies_changed)
         W.set_checked(self.butterflies, self._appearance.get("butterflies", True))
         body.addWidget(self.butterflies)
 
@@ -153,9 +153,8 @@ class SettingsPage(Page):
     # ------------------------------------------------------------ оформление
     def _butterflies_changed(self, on: bool) -> None:
         self.app.core.settings.set("appearance", "butterflies", bool(on))
-        home = self.app.pages["home"][1]
         if not on:
-            home.butterflies.stop()
+            self.app.butterflies.stop()
 
     @property
     def _appearance(self) -> dict:
