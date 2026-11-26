@@ -335,7 +335,10 @@ class Core:
                 return
             bypass = self._awg_endpoints(conf)
             apps = [self.singbox.exe] + ([] if winutil.IS_LINUX else [self.awg.exe])
-            self._killswitch_set(ks, lambda: Plan(apps=apps, endpoints=bypass, **tun))
+            # через адаптер AmneziaWG (Windows) — уже внутри VPN
+            addrs = [vpn.TUN_ADDRESS] + ([] if winutil.IS_LINUX else _addresses(conf.address))
+            self._killswitch_set(ks, lambda: Plan(apps=apps, endpoints=bypass, tunnel_addrs=addrs,
+                                                  tunnel_ifaces=[vpn.INTERFACE_NAME]))
             socks = self.awg.start(conf, split=True)
             outbound = vpn.socks_outbound(socks) if winutil.IS_LINUX else vpn.awg_outbound(awg.TUNNEL_NAME)
             try:
