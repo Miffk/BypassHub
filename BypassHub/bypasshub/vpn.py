@@ -797,7 +797,8 @@ def exclude_rule(names: List[str]) -> Optional[Dict[str, Any]]:
 def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
                  proxy_port: int = DEFAULT_PROXY_PORT, rule_sets: Optional[Dict[str, Path]] = None,
                  bypass: Optional[List[str]] = None, log_level: str = "info",
-                 api: Optional[Tuple[int, str]] = None, exclude_apps: Optional[List[str]] = None) -> Dict[str, Any]:
+                 api: Optional[Tuple[int, str]] = None, exclude_apps: Optional[List[str]] = None,
+                 mark: int = 0) -> Dict[str, Any]:
     """config.json для sing-box.
 
     proxy — исходящее «через VPN»: один outbound (VLESS-сервер или туннель AmneziaWG)
@@ -805,7 +806,8 @@ def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
     api — (порт, secret) встроенного API для задержек и переключения серверов;
     ru_direct — российское напрямую: .ru/.su/.рф и базы roscomvpn (если скачаны);
     bypass — адреса, которые всегда идут мимо (сервер AmneziaWG — иначе петля);
-    exclude_apps — программы мимо VPN (имена .exe; только «Весь трафик» — в режиме прокси они и так мимо)."""
+    exclude_apps — программы мимо VPN (имена .exe; только «Весь трафик» — в режиме прокси они и так мимо);
+    mark — метка исходящих пакетов самого sing-box (Linux): по ней их пропускает kill switch."""
     rule_sets = {tag: p for tag, p in (rule_sets or {}).items() if p and Path(p).exists()} if ru_direct else {}
     has = [t for t in RULE_SETS if t in rule_sets]
     bypass = [b if "/" in b else (b + "/128" if ":" in b else b + "/32") for b in (bypass or [])]
@@ -856,6 +858,8 @@ def build_config(proxy: Any, mode: str = "tun", ru_direct: bool = True,
         "auto_detect_interface": True,
         "default_domain_resolver": "dns-local",
     }
+    if mark:
+        route["default_mark"] = int(mark)
     if has:
         route["rule_set"] = [{"type": "local", "tag": tag, "format": "binary", "path": str(rule_sets[tag])}
                              for tag in has]
@@ -1025,7 +1029,8 @@ class VpnManager:
             raise RuntimeError(f"sing-box не принял настройки:\n{text}")
 
     def start(self, proxy: Any, name: str, mode: str, ru_direct: bool, proxy_port: int,
-              bypass: Optional[List[str]] = None, exclude_apps: Optional[List[str]] = None) -> None:
+              bypass: Optional[List[str]] = None, exclude_apps: Optional[List[str]] = None,
+              mark: int = 0) -> None:
         """proxy — исходящее «через VPN»: outbound(VlessKey), awg_outbound(…) или server_group(…)."""
         if not self.is_installed():
             raise RuntimeError("Движок VPN (sing-box) ещё не скачан")
@@ -1035,7 +1040,7 @@ class VpnManager:
         import secrets
         api = (_free_port(), secrets.token_hex(16))
         cfg = build_config(proxy, mode, ru_direct, proxy_port, self.rule_set_paths(), bypass, api=api,
-                           exclude_apps=exclude_apps)
+                           exclude_apps=exclude_apps, mark=mark)
         self.write_config(cfg)
         self.check_config()
         if mode == "proxy" and winutil.port_listening(proxy_port):

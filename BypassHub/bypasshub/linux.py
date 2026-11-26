@@ -819,7 +819,22 @@ def serve(data_root: str) -> int:
                    "result": dispatch(str(req.get("cmd")), dict(req.get("args") or {}), uid, gid)})
         except Exception as exc:  # ошибка одной команды не роняет помощника
             reply({"id": req.get("id"), "ok": False, "error": str(exc) or exc.__class__.__name__})
+    _drop_killswitch()
     return 0
+
+
+def _drop_killswitch() -> None:
+    """BypassHub закрылся (или упал) — kill switch больше некому обслуживать: убираем его правила,
+    чтобы не остаться без интернета."""
+    from .killswitch import linux_cleanup_command
+    argv = linux_cleanup_command()
+    exe = which(argv[0])
+    if not exe:
+        return
+    try:
+        subprocess.run([exe] + argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    except Exception:
+        pass
 
 
 def shell_join(argv: Sequence[str]) -> str:

@@ -277,7 +277,7 @@ class App(QMainWindow):
                 page.on_status(zs, ts)
             if hasattr(page, "on_vpn_status"):
                 page.on_vpn_status(vs)
-        self._update_tray(zs.running, ts.running, vs.running)
+        self._update_tray(zs.running, ts.running, vs.active)
 
     # ------------------------------------------------------------------ запуск и обновления
     def _startup(self) -> None:
