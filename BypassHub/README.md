@@ -99,6 +99,16 @@ build.bat
 - Раздельное туннелирование для AmneziaWG: туннель с `Table = off` + маршрут через него с метрикой 9000, sing-box
   (TUN) отправляет «зарубежное» в outbound `direct` с `bind_interface: BypassHub`, адрес сервера AmneziaWG — мимо TUN.
 - sing-box обновляется только в пределах `vpn.MIN_VERSION`…`vpn.MAX_VERSION` — формат конфига проверен на 1.14.
+- `bypasshub/killswitch.py` — kill switch (настройка `vpn.killswitch`, только режим TUN). Пропускается: localhost,
+  программы VPN, трафик через адрес туннеля, IP сервера AmneziaWG, локальная сеть; остальное исходящее закрыто.
+  Windows — фильтры WFP (уровни `ALE_AUTH_CONNECT_V4/V6`) в **динамическом** сеансе: Windows убирает их сама, когда
+  процесс BypassHub завершается, даже аварийно, и после перезагрузки. Linux — таблица `inet bypasshub_killswitch`
+  в nftables (ставит помощник `nft -f -`; помощник убирает её, когда окно закрывается); sing-box помечает свои
+  пакеты `route.default_mark` = `killswitch.LINUX_MARK`. Настоящие фильтры WFP проверяет
+  `test_wfp_blocks_and_releases` в сборке на Windows.
+- `Core.watch_once` (раз в 5 с, поток `vpn-watchdog`) — переподключение, если VPN, включённый в этом сеансе,
+  остановился сам; пауза между попытками растёт до 60 с. Kill switch при этом не снимается.
+  `VpnState.reconnecting`/`active` — для «⟳ Переподключение» на главной.
 
 ## Linux
 

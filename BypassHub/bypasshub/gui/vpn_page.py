@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from .. import vpn, winutil
+from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO
 from ..vpn import Profile
 from . import widgets as W
 from .surface import GradientPage
@@ -105,17 +106,17 @@ class VpnPage(GradientPage):
                                 "куда она установлена.", text_color=W.GRAY, anchor="w", justify="left",
                      wraplength=640, font=ctk.CTkFont(size=11)).pack(fill="x", pady=(4, 0))
 
-        body = W.section(self, "AmneziaWG",
-                         "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
-                         "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
-                         "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG.")
-        self.lan_access = ctk.CTkSwitch(body, text="Без раздельного туннелирования: оставить доступ к локальной "
-                                                   "сети", command=self._lan_changed)
-        self.lan_access.pack(anchor="w", pady=3)
-        ctk.CTkLabel(body, text="Принтеры, телефон для TG WS Proxy и т. п. Если выключить, интернет мимо VPN "
-                                "блокируется полностью (kill switch). При раздельном туннелировании локальная "
-                                "сеть доступна всегда.", text_color=W.GRAY, anchor="w",
+        body = W.section(self, "Kill switch", KILLSWITCH_INTRO)
+        self.killswitch = ctk.CTkSwitch(body, text="Kill switch: без VPN — без интернета",
+                                        command=self._killswitch_changed)
+        self.killswitch.pack(anchor="w", pady=3)
+        ctk.CTkLabel(body, text=KILLSWITCH_DETAILS, text_color=W.GRAY, anchor="w",
                      justify="left", wraplength=640, font=ctk.CTkFont(size=11)).pack(fill="x")
+
+        W.section(self, "AmneziaWG",
+                  "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
+                  "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
+                  "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG.")
 
         body = W.section(self, "Движки VPN", "Скачиваются с GitHub при первом включении и обновляются "
                                              "вместе с остальными компонентами.")
@@ -128,7 +129,7 @@ class VpnPage(GradientPage):
 
         self.mode.set(vpn.MODES.get(s.get("vpn", "mode"), vpn.MODES["tun"]))
         W.set_switch(self.ru_direct, s.get("vpn", "ru_direct"))
-        W.set_switch(self.lan_access, s.get("vpn", "lan_access"))
+        W.set_switch(self.killswitch, s.get("vpn", "killswitch"))
         W.set_entry(self.port, s.get("vpn", "proxy_port"))
         self._exclude_load()
         self.render()
@@ -326,10 +327,9 @@ class VpnPage(GradientPage):
         W.set_entry(self.exclude_entry, (current + ", " if current else "") + vpn.clean_exe_names([path])[0])
         self._exclude_changed()
 
-    def _lan_changed(self) -> None:
-        self.app.core.settings.set("vpn", "lan_access", bool(self.lan_access.get()))
-        vs = self.app.vpn_state
-        if vs.kind == "awg" and not (vs.singbox and vs.singbox.running):
+    def _killswitch_changed(self) -> None:
+        self.app.core.settings.set("vpn", "killswitch", bool(self.killswitch.get()))
+        if self.app.vpn_state.mode == "tun" or self.app.vpn_state.reconnecting:
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
     def _port_changed(self) -> None:

@@ -359,7 +359,7 @@ class App(ctk.CTk):
             if hasattr(page, "on_vpn_status"):
                 page.on_vpn_status(vs)
         if self.tray is not None:
-            self.tray.update(zs.running, ts.running, vs.running)
+            self.tray.update(zs.running, ts.running, vs.active)
 
     # ------------------------------------------------------------------ запуск и обновления
     def _startup(self) -> None:

@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from . import awg, github, selfupdate, tgproxy, vpn, winutil, zapret
 from .applearn import AppLearner
 from .awg import AwgManager
+from .killswitch import LINUX_MARK, KillSwitch, Plan
 from .log import log
 from .paths import Paths
 from .settings import Settings
@@ -18,6 +19,13 @@ from .vpn import Profile, VpnManager
 from .zapret import ZapretManager
 
 ProgressCb = Callable[[str, int, int], None]  # (компонент, сделано, всего)
+WATCH_INTERVAL = 5          # как часто проверять, что VPN работает, с
+RECONNECT_MAX_DELAY = 60    # пауза между попытками переподключения растёт до этого значения, с
+
+
+def _addresses(text: str) -> List[str]:
+    """Address из [Interface] конфига WireGuard: «10.8.1.2/32, fd00::2/128» → список."""
+    return [a.strip() for a in (text or "").split(",") if a.strip()]
 
 
 @dataclass
@@ -45,6 +53,13 @@ class VpnState:
     selected: str = ""      # VLESS: «auto» или id выбранного сервера
     current: str = ""       # VLESS: id сервера, через который идёт трафик сейчас
     delays: Dict[str, int] = field(default_factory=dict)  # задержки по проверкам sing-box, мс
+    killswitch: bool = False      # kill switch сейчас закрывает интернет мимо VPN
+    reconnecting: bool = False    # VPN неожиданно остановился — BypassHub подключает его снова
+
+    @property
+    def active(self) -> bool:
+        """VPN включён: работает или переподключается после сбоя."""
+        return self.running or self.reconnecting
 
 
 class Core:
@@ -61,6 +76,14 @@ class Core:
         self.last_updates: List[UpdateInfo] = []
         self.learner = AppLearner(self.zapret.lists / "ipset-exclude-user.txt")
         self.restarting_for_update = False
+        self.killswitch = KillSwitch()
+        # что запущено ради включённого VPN («singbox», «awg»); пусто — VPN не включали в этом сеансе
+        self._vpn_parts: Tuple[str, ...] = ()
+        self._endpoint_cache: Dict[str, List[str]] = {}  # IP серверов AmneziaWG: на случай, если DNS недоступен
+        self._watch_stop = threading.Event()
+        self._watch_thread: Optional[threading.Thread] = None
+        self._watch_fails = 0
+        self._watch_next = 0.0
 
     # ------------------------------------------------------------ zapret
     @property
@@ -265,7 +288,10 @@ class Core:
             kind, mode = "vless", sb.mode
         else:
             kind, mode = "", ""
-        state = VpnState(running=sb.running or aw.running, kind=kind, mode=mode, singbox=sb, awg=aw)
+        state = VpnState(running=sb.running or aw.running, kind=kind, mode=mode, singbox=sb, awg=aw,
+                         killswitch=self.killswitch.active)
+        if self._vpn_parts and self.settings.get("vpn", "enabled") and not self._vpn_healthy(sb, aw):
+            state.running, state.reconnecting = False, True
         if kind == "vless" and self.singbox.has_group():
             try:
                 state.selected, state.current, state.delays = self.singbox.group_state()
@@ -289,6 +315,9 @@ class Core:
         ru_direct = bool(s.get("vpn", "ru_direct"))
         port = int(s.get("vpn", "proxy_port"))
         exclude = vpn.clean_exe_names(s.get("vpn", "exclude_apps") or []) if mode == "tun" else []
+        ks = self.killswitch_wanted(mode)
+        mark = LINUX_MARK if ks and winutil.IS_LINUX else 0
+        tun = dict(tunnel_addrs=[vpn.TUN_ADDRESS], tunnel_ifaces=[vpn.INTERFACE_NAME])
         if profile is not None and profile.kind == "awg":
             conf = awg.parse_conf(profile.data, profile.name)
             # раздельное туннелирование, режим прокси и программы мимо VPN — через sing-box поверх туннеля;
@@ -297,16 +326,24 @@ class Core:
             self._ensure_engines(split, True, progress)
             self.singbox.stop()
             if not split:
-                self.awg.start(conf, bool(s.get("vpn", "lan_access")))
+                # без своего kill switch клиента AmneziaWG: локальная сеть доступна, а интернет мимо
+                # туннеля при включённом kill switch закрывает BypassHub
+                self._killswitch_set(ks, lambda: Plan(apps=[self.awg.exe], tunnel_addrs=_addresses(conf.address),
+                                                      endpoints=self._awg_endpoints(conf, required=False)))
+                self.awg.start(conf, lan_access=True)
+                self._vpn_parts = ("awg",)
                 return
-            bypass = awg.endpoint_ips(conf)
+            bypass = self._awg_endpoints(conf)
+            apps = [self.singbox.exe] + ([] if winutil.IS_LINUX else [self.awg.exe])
+            self._killswitch_set(ks, lambda: Plan(apps=apps, endpoints=bypass, **tun))
             socks = self.awg.start(conf, split=True)
             outbound = vpn.socks_outbound(socks) if winutil.IS_LINUX else vpn.awg_outbound(awg.TUNNEL_NAME)
             try:
-                self.singbox.start(outbound, profile.name, mode, ru_direct, port, bypass, exclude)
+                self.singbox.start(outbound, profile.name, mode, ru_direct, port, bypass, exclude, mark=mark)
             except Exception:
                 self.awg.stop()
                 raise
+            self._vpn_parts = ("awg", "singbox")
         else:
             # все серверы VLESS — одной группой: можно переключаться на лету и выбрать «авто»
             self._ensure_engines(True, False, progress)
@@ -314,8 +351,94 @@ class Core:
             servers = [vpn.outbound(vpn.parse_vless(p.data), tag=p.id) for p in self.vpn_vless()]
             selected = vpn.AUTO_TAG if auto or profile is None else profile.id
             name = "Авто — лучший сервер" if selected == vpn.AUTO_TAG else profile.name
+            self._killswitch_set(ks, lambda: Plan(apps=[self.singbox.exe], **tun))
             self.singbox.start(vpn.server_group(servers, selected), name, mode, ru_direct, port,
-                               exclude_apps=exclude)
+                               exclude_apps=exclude, mark=mark)
+            self._vpn_parts = ("singbox",)
+
+    # ------------------------------------------------------------ kill switch и переподключение
+    def killswitch_wanted(self, mode: Optional[str] = None) -> bool:
+        """Kill switch нужен: включён в настройках, режим «Весь трафик» и система его умеет."""
+        mode = mode or self.settings.get("vpn", "mode")
+        return bool(self.settings.get("vpn", "killswitch")) and mode == "tun" and self.killswitch.supported
+
+    def _killswitch_set(self, on: bool, plan: Callable[[], Plan]) -> None:
+        if not on:
+            self.killswitch.disable()
+            return
+        try:
+            self.killswitch.enable(plan())
+        except Exception as exc:
+            raise RuntimeError(f"Kill switch не включился: {exc}\n\nВыключите kill switch во вкладке VPN, "
+                               "чтобы подключаться без него.") from None
+
+    def _awg_endpoints(self, conf: awg.AwgProfile, required: bool = True) -> List[str]:
+        """IP сервера AmneziaWG. Если имя сервера не узнать (при kill switch DNS бывает закрыт,
+        пока VPN переподключается) — адреса с прошлого подключения."""
+        try:
+            ips = awg.endpoint_ips(conf)
+        except RuntimeError:
+            cached = self._endpoint_cache.get(conf.endpoint)
+            if cached:
+                log.info("AmneziaWG: адрес сервера — с прошлого подключения (%s)", ", ".join(cached))
+                return list(cached)
+            if required:
+                raise
+            return []
+        self._endpoint_cache[conf.endpoint] = ips
+        return ips
+
+    def _vpn_healthy(self, sb: Optional[vpn.VpnStatus] = None, aw: Optional[awg.AwgStatus] = None) -> bool:
+        """Работает всё, что запускали ради VPN."""
+        parts = self._vpn_parts
+        if "singbox" in parts and not (sb or self.singbox.status()).running:
+            return False
+        if "awg" in parts and not (aw or self.awg.status()).running:
+            return False
+        return True
+
+    def start_watchdog(self) -> None:
+        if self._watch_thread is None or not self._watch_thread.is_alive():
+            self._watch_stop.clear()
+            self._watch_thread = threading.Thread(target=self._watch_loop, daemon=True, name="vpn-watchdog")
+            self._watch_thread.start()
+
+    def _watch_loop(self) -> None:
+        while not self._watch_stop.wait(WATCH_INTERVAL):
+            try:
+                self.watch_once()
+            except Exception as exc:
+                log.debug("VPN: проверка: %r", exc)
+
+    def watch_once(self) -> None:
+        """VPN неожиданно остановился (упал движок, служба туннеля) — подключаем его снова.
+        Пока подключается, kill switch (если включён) не пускает интернет мимо VPN."""
+        if not self._vpn_parts or self.restarting_for_update or not self.settings.get("vpn", "enabled"):
+            self._watch_fails = 0
+            return
+        if not self.lock.acquire(blocking=False):
+            return  # VPN сейчас включают, выключают или переключают
+        try:
+            if not self._vpn_parts or self._vpn_healthy():
+                self._watch_fails = 0
+                return
+            if time.monotonic() < self._watch_next:
+                return
+            if self._watch_fails == 0:
+                log.warning("VPN неожиданно остановился — подключаю снова%s",
+                            " (kill switch не пускает интернет мимо VPN)" if self.killswitch.active else "")
+            try:
+                self._vpn_start()
+            except Exception as exc:
+                self._watch_fails += 1
+                delay = min(RECONNECT_MAX_DELAY, WATCH_INTERVAL * 2 ** (self._watch_fails - 1))
+                self._watch_next = time.monotonic() + delay
+                log.error("VPN не подключился: %s — следующая попытка через %d с", exc, delay)
+            else:
+                self._watch_fails = 0
+                log.info("VPN снова подключён")
+        finally:
+            self.lock.release()
 
     def vpn_enable(self, progress: Optional[ProgressCb] = None) -> None:
         with self.lock:
@@ -324,19 +447,35 @@ class Core:
                 self._vpn_start(progress)
             except Exception:
                 self.settings.set("vpn", "enabled", False)
+                self._vpn_parts = ()
+                self._killswitch_off()
                 raise
 
     def vpn_disable(self) -> None:
         with self.lock:
             self.settings.set("vpn", "enabled", False)
-            self.singbox.stop()
-            self.awg.stop()
+            self._vpn_parts = ()
+            try:
+                self.singbox.stop()
+                self.awg.stop()
+            finally:
+                self._killswitch_off()
+
+    def _killswitch_off(self) -> None:
+        """VPN выключен вами — интернет снова как обычно."""
+        try:
+            self.killswitch.disable()
+        except Exception as exc:
+            log.error("Не удалось выключить kill switch: %s", exc)
 
     def vpn_switch(self) -> bool:
         """Включённый VPN — на выбранный сервер. Между серверами VLESS (и «авто») —
         на лету, без переподключения; иначе — перезапуск. True — если VPN был включён."""
         with self.lock:
             if not self.vpn_running():
+                if self._vpn_parts and self.settings.get("vpn", "enabled"):  # переподключается — сразу на новый
+                    self._vpn_start()
+                    return True
                 return False
             target = vpn.AUTO_TAG if self.vpn_is_auto() else (self.vpn_active().id if self.vpn_active() else "")
             target_vless = target == vpn.AUTO_TAG or any(p.id == target for p in self.vpn_vless())
@@ -393,7 +532,7 @@ class Core:
     def vpn_apply(self) -> bool:
         """Перезапуск VPN с новыми настройками или другим сервером, если он включён."""
         with self.lock:
-            if self.vpn_running():
+            if self.vpn_running() or (self._vpn_parts and self.settings.get("vpn", "enabled")):
                 self._vpn_start()
                 return True
             return False
@@ -643,6 +782,8 @@ class Core:
         with self.lock:
             was = bool(self.settings.get("vpn", "enabled")) or self.vpn_running()
             self.settings.set("vpn", "enabled", False)
+            self._vpn_parts = ()
+            self._killswitch_off()
             for stop in (self.singbox.stop, self.awg.stop):
                 try:
                     stop()
@@ -658,6 +799,7 @@ class Core:
             self.vpn_off_after_boot()
         except Exception as exc:
             log.warning("VPN после перезагрузки: %r", exc)
+        self.start_watchdog()
         if not self.awg.status().running:
             try:
                 self.awg.restore_dns()  # правило DNS от прежнего туннеля, если программа упала
@@ -678,13 +820,17 @@ class Core:
             except Exception as exc:
                 log.error("Не удалось запустить tg-ws-proxy: %s", exc)
         if self.settings.get("vpn", "enabled") and not self.vpn_running():
-            try:
-                self._vpn_start()
-            except Exception as exc:
-                log.error("Не удалось включить VPN: %s", exc)
+            with self.lock:
+                try:
+                    self._vpn_start()
+                except Exception as exc:
+                    self._vpn_parts = ()
+                    self._killswitch_off()
+                    log.error("Не удалось включить VPN: %s", exc)
 
     def shutdown(self) -> None:
         self.learner.stop()
+        self._watch_stop.set()
         if self.restarting_for_update or not self.settings.get("app", "stop_on_exit"):
             return
         with self.lock:
@@ -698,8 +844,10 @@ class Core:
                 self.tg.stop()
             except Exception as exc:
                 log.warning("Остановка tg-ws-proxy при выходе: %r", exc)
+            self._vpn_parts = ()
             try:
                 self.singbox.stop()
                 self.awg.stop()
             except Exception as exc:
                 log.warning("Остановка VPN при выходе: %r", exc)
+            self._killswitch_off()

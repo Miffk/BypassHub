@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, List, Tuple
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout, QWidget
 
 from .. import vpn, winutil
+from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO
 from ..vpn import Profile
 from . import widgets as W
 from .app import Page
@@ -110,19 +111,18 @@ class VpnPage(Page):
                                "галочкой; снимите галочку, чтобы она снова шла через VPN, или нажмите ✕, чтобы "
                                "убрать её из списка.", "small", wrap=True))
 
-        body = W.section(self.lay, "AmneziaWG",
-                         "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
-                         "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
-                         + ("для AmneziaWG работают через sing-box. В Linux AmneziaWG встроен в BypassHub и "
-                            "работает без модуля ядра — ставить ничего не нужно."
-                            if winutil.IS_LINUX else
-                            "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG."))
-        self.lan_access = W.Toggle("Без раздельного туннелирования: оставить доступ к локальной сети",
-                                   self._lan_changed)
-        body.addWidget(self.lan_access)
-        body.addWidget(W.label("Принтеры, телефон для TG WS Proxy и т. п. Если выключить, интернет мимо VPN блокируется "
-                               "полностью (kill switch). При раздельном туннелировании локальная сеть доступна всегда.",
-                               "small", wrap=True))
+        body = W.section(self.lay, "Kill switch", KILLSWITCH_INTRO)
+        self.killswitch = W.Toggle("Kill switch: без VPN — без интернета", self._killswitch_changed)
+        body.addWidget(self.killswitch)
+        body.addWidget(W.label(KILLSWITCH_DETAILS, "small", wrap=True))
+
+        W.section(self.lay, "AmneziaWG",
+                  "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
+                  "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
+                  + ("для AmneziaWG работают через sing-box. В Linux AmneziaWG встроен в BypassHub и "
+                     "работает без модуля ядра — ставить ничего не нужно."
+                     if winutil.IS_LINUX else
+                     "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG."))
 
         body = W.section(self.lay, "Движки VPN", "Скачиваются с GitHub при первом включении и обновляются "
                                                  "вместе с остальными компонентами.")
@@ -134,7 +134,7 @@ class VpnPage(Page):
 
         self.mode.set(vpn.MODES.get(s.get("vpn", "mode"), vpn.MODES["tun"]))
         W.set_checked(self.ru_direct, s.get("vpn", "ru_direct"))
-        W.set_checked(self.lan_access, s.get("vpn", "lan_access"))
+        W.set_checked(self.killswitch, s.get("vpn", "killswitch"))
         self.port.setText(str(s.get("vpn", "proxy_port")))
         self._exclude_load()
         self.render()
@@ -303,10 +303,9 @@ class VpnPage(Page):
         self.app.core.settings.set("vpn", "ru_direct", on)
         self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
-    def _lan_changed(self, on: bool) -> None:
-        self.app.core.settings.set("vpn", "lan_access", on)
-        vs = self.app.vpn_state
-        if vs.kind == "awg" and not (vs.singbox and vs.singbox.running):
+    def _killswitch_changed(self, on: bool) -> None:
+        self.app.core.settings.set("vpn", "killswitch", on)
+        if self.app.vpn_state.mode == "tun" or self.app.vpn_state.reconnecting:
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
     def _port_changed(self) -> None:

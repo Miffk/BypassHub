@@ -239,7 +239,7 @@ class HomePage(GradientPage):
 
     def apply_vpn(self, busy_text: str) -> None:
         """Перезапустить VPN с новыми настройками, если он включён."""
-        if not self._vpn_state.running or self.vpn_card.busy:
+        if not self._vpn_state.active or self.vpn_card.busy:
             return
         self.vpn_card.set_busy(True, busy_text)
         self.app.run_task(self.app.core.vpn_apply, lambda r, e: self._vpn_done(e), "VPN")
@@ -262,7 +262,7 @@ class HomePage(GradientPage):
 
     def toggle_vpn_from_tray(self) -> None:
         if not self.vpn_card.busy:
-            self.toggle_vpn(not self._vpn_state.running)
+            self.toggle_vpn(not self._vpn_state.active)
 
     def _vpn_done(self, error) -> None:
         self.vpn_card.set_busy(False)
@@ -311,6 +311,8 @@ class HomePage(GradientPage):
             details = f"{proto} · {how}"
             if vs.singbox and vs.singbox.running and core.settings.get("vpn", "ru_direct"):
                 details += " · российское — напрямую"
+            if vs.killswitch:
+                details += " · kill switch"
             if vs.kind == "vless" and vs.current:
                 name = self._server_name(vs.current)
                 ms = self.vpn_pings.get(vs.current)
@@ -321,6 +323,13 @@ class HomePage(GradientPage):
                 title = name
             self.vpn_card.set_state(True, f"● Подключён: {title}", W.GREEN, details,
                                     tile_details=f"{title}\n{details}", tile_status="● Подключён")
+        elif vs.reconnecting:
+            details = ("VPN неожиданно отключился, BypassHub подключает его снова. "
+                       + ("Пока он не подключится, интернет мимо VPN закрыт (kill switch)." if vs.killswitch else
+                          "Пока он не подключится, программы ходят в интернет напрямую."))
+            self.vpn_card.set_state(True, "⟳ Переподключение…", W.YELLOW, details,
+                                    tile_details="Переподключение…" + ("\nkill switch" if vs.killswitch else ""),
+                                    tile_status="⟳ Переподключение")
         elif auto:
             details = "" if core.singbox.is_installed() else "При первом включении скачается движок VPN с GitHub."
             self.vpn_card.set_state(False, "○ Выключен", W.GRAY, details,
@@ -345,7 +354,7 @@ class HomePage(GradientPage):
         vp = self.app.pages.get("vpn")
         if vp:
             vp[1].render()
-        if self._vpn_state.running and not self.vpn_card.busy:
+        if self._vpn_state.active and not self.vpn_card.busy:
             self.vpn_card.set_busy(True, "Переключение…")
             self.app.run_task(core.vpn_switch, lambda r, e: self._vpn_done(e), "VPN")
 

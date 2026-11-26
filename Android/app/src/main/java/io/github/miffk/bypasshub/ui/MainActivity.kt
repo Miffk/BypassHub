@@ -958,9 +958,13 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- настройки
     private fun buildSettings(col: LinearLayout) {
         val a = Ui.card(this)
-        a.addView(Ui.text(this, "Постоянная VPN", 17f, Ui.TEXT, true))
-        a.addView(Ui.text(this, "Чтобы VPN включался сам после перезагрузки, в настройках Android выберите " +
-            "BypassHub и включите «Постоянная VPN».", 13f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(10)))
+        a.addView(Ui.text(this, "Постоянная VPN и kill switch", 17f, Ui.TEXT, true))
+        a.addView(Ui.text(this, "В настройках Android выберите BypassHub (⚙ рядом с названием):\n" +
+            "• «Постоянная VPN» — VPN включается сам после перезагрузки и переподключается после сбоя;\n" +
+            "• «Блокировать подключения без VPN» — kill switch: если VPN отключится, приложения не выйдут " +
+            "в интернет напрямую. Работает вместе с «Постоянной VPN». Когда вы сами выключаете VPN в BypassHub, " +
+            "интернета не будет, пока не включите его снова или не снимете эту галочку.",
+            13f, Ui.MUTED), Ui.lp(top = dp(4), bottom = dp(10)))
         a.addView(Ui.button(this, "Открыть настройки VPN", primary = false) {
             try {
                 startActivity(Intent(Settings.ACTION_VPN_SETTINGS))

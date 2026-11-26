@@ -34,7 +34,8 @@ DEFAULTS: Dict[str, Any] = {
         "enabled": False,
         "mode": "tun",             # tun — весь трафик; proxy — системный прокси (только для VLESS)
         "ru_direct": True,         # российские сайты — напрямую (только для VLESS)
-        "lan_access": True,        # AmneziaWG: не блокировать локальную сеть
+        "killswitch": False,       # без VPN — без интернета (режим «Весь трафик», пока открыт BypassHub)
+        "lan_access": True,        # устарело (до 1.11.0): выключено — kill switch клиента AmneziaWG
         "proxy_port": 2080,
         "profiles": [],            # [{"id", "kind": "vless"|"awg", "name", "data", "sub"}]
         "active": "",              # id выбранного сервера
@@ -84,6 +85,13 @@ def _merge(defaults: dict, data: dict) -> dict:
     return out
 
 
+def _migrate(raw: dict, data: dict) -> None:
+    vpn = raw.get("vpn") if isinstance(raw.get("vpn"), dict) else {}
+    # до 1.11.0 kill switch был только у AmneziaWG: «доступ к локальной сети» выключен
+    if "killswitch" not in vpn and vpn.get("lan_access") is False:
+        data["vpn"]["killswitch"] = True
+
+
 class Settings:
     def __init__(self, path: Path):
         self.path = path
@@ -99,6 +107,7 @@ class Settings:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     self.data = _merge(DEFAULTS, raw)
+                    _migrate(raw, self.data)
             except Exception as exc:
                 log.warning("Не удалось прочитать %s: %r — используются значения по умолчанию",
                             self.path, exc)
