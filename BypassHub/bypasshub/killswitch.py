@@ -16,7 +16,7 @@ import ipaddress
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import winutil
 from .log import log
@@ -241,6 +241,7 @@ class _WfpSession:
         self._fw = _api()
         self._keep: List[Any] = []   # всё, на что ссылаются структуры, — живёт, пока идёт добавление
         self._app_ids: List[Any] = []
+        self.filters: Dict[int, str] = {}  # id фильтра → что он делает (для разбора журнала WFP)
         self.handle = c_void_p()
         session = FWPM_SESSION0()
         session.displayData.name = "BypassHub kill switch"
@@ -286,6 +287,16 @@ class _WfpSession:
         self._app_ids.append(blob)
         return self._cond(COND_APP_ID, FWP_MATCH_EQUAL, FWP_BYTE_BLOB_TYPE, byteBlob=blob)
 
+    def _system(self) -> "FWPM_FILTER_CONDITION0":
+        """Программа «System» — ядро Windows. От его имени уходят пакеты, которые драйвер WinDivert
+        (zapret) перехватил и отправил заново: исходное соединение kill switch уже пропустил
+        (его открыла разрешённая программа), а повторно отправленные пакеты Windows проверяет
+        как новые — от «System». Без этого правила при включённом zapret не работает ничего."""
+        data = (c_ubyte * 14)(*"System\0".encode("utf-16-le"))
+        blob = FWP_BYTE_BLOB(len(data), ctypes.cast(data, POINTER(c_ubyte)))
+        self._keep += [data, blob]
+        return self._cond(COND_APP_ID, FWP_MATCH_EQUAL, FWP_BYTE_BLOB_TYPE, byteBlob=ctypes.pointer(blob))
+
     def _free_app_ids(self) -> None:
         for blob in self._app_ids:
             p = ctypes.cast(blob, c_void_p)
@@ -310,6 +321,7 @@ class _WfpSession:
         f.action.type = FWP_ACTION_PERMIT if permit else FWP_ACTION_BLOCK
         fid = c_uint64()
         _check(self._fw.FwpmFilterAdd0(self.handle, byref(f), None, byref(fid)), f"фильтр «{name}»")
+        self.filters[fid.value] = f"{name} ({'v6' if layer == LAYER_CONNECT_V6 else 'v4'})"
 
     def _install(self, plan: Plan) -> None:
         fw, h = self._fw, self.handle
@@ -323,6 +335,7 @@ class _WfpSession:
             _check(fw.FwpmSubLayerAdd0(h, byref(sl), None), "подуровень WFP")
 
             apps = [c for c in (self._app(p) for p in plan.apps if Path(p).exists()) if c is not None]
+            apps.append(self._system())
             tun4, tun6 = _split_ips(host_addr(a) for a in plan.tunnel_addrs)
             ep4, ep6 = _split_ips(plan.endpoints)
             lan4, lan6 = _split_ips(LAN_V4 + LAN_V6)
@@ -331,8 +344,7 @@ class _WfpSession:
                                           (LAYER_CONNECT_V6, tun6, ep6, lan6, self._v6)):
                 # чем больше вес, тем раньше проверяется; первое совпадение решает
                 self._filter(sublayer, layer, "localhost", 15, True, [loop])
-                if apps:
-                    self._filter(sublayer, layer, "программы VPN", 14, True, apps)
+                self._filter(sublayer, layer, "программы VPN", 14, True, apps)
                 if tun:
                     self._filter(sublayer, layer, "через туннель", 13, True, [v(COND_LOCAL_ADDR, n) for n in tun])
                 if ep:

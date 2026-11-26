@@ -139,6 +139,7 @@ def test_awg_split_plan_allows_server(core, monkeypatch):
     core.vpn_enable()   # раздельное туннелирование: туннель + sing-box
     plan = core.killswitch._backend.plans[-1]
     assert plan.endpoints == ["203.0.113.7"] and plan.apps == [core.singbox.exe, core.awg.exe]
+    assert plan.tunnel_addrs == [vpn.TUN_ADDRESS, "10.8.1.2/32"]   # и через адаптер AmneziaWG
     assert core._vpn_parts == ("awg", "singbox")
     # имя сервера больше не узнать (DNS закрыт, пока VPN переподключается) — адрес с прошлого раза
     monkeypatch.setattr(awg, "endpoint_ips", lambda conf: (_ for _ in ()).throw(RuntimeError("нет DNS")))

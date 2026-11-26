@@ -102,7 +102,9 @@ build.bat
 - `bypasshub/killswitch.py` — kill switch (настройка `vpn.killswitch`, только режим TUN). Пропускается: localhost,
   программы VPN, трафик через адрес туннеля, IP сервера AmneziaWG, локальная сеть; остальное исходящее закрыто.
   Windows — фильтры WFP (уровни `ALE_AUTH_CONNECT_V4/V6`) в **динамическом** сеансе: Windows убирает их сама, когда
-  процесс BypassHub завершается, даже аварийно, и после перезагрузки. Linux — таблица `inet bypasshub_killswitch`
+  процесс BypassHub завершается, даже аварийно, и после перезагрузки. Программа «System» тоже пропускается: пакеты,
+  которые WinDivert (zapret) отправляет заново, Windows проверяет как новые соединения ядра — без этого при
+  включённом zapret не работало ничего (1.11.0). Исходное соединение к этому моменту уже прошло проверку. Linux — таблица `inet bypasshub_killswitch`
   в nftables (ставит помощник `nft -f -`; помощник убирает её, когда окно закрывается); sing-box помечает свои
   пакеты `route.default_mark` = `killswitch.LINUX_MARK`. Настоящие фильтры WFP проверяет
   `test_wfp_blocks_and_releases` в сборке на Windows.
