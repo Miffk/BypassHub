@@ -24,7 +24,7 @@ class TgPage(Page):
         super().__init__(app)
         from .home import ServiceCard
         home = app.pages["home"][1]
-        self.header = ServiceCard("TG WS Proxy", "Локальный MTProto-прокси, ускоряющий Telegram Desktop",
+        self.header = ServiceCard("TG WS Proxy", "Ускоряет Telegram Desktop: локальный MTProto-прокси",
                                   home.toggle_tg)
         self.header.add_buttons(W.button("Открыть в Telegram", home.open_in_telegram, primary=True),
                                 W.button("Скопировать ссылку", home.copy_link),
@@ -32,58 +32,63 @@ class TgPage(Page):
         self.lay.addWidget(self.header)
         home.tg_card.add_header(self.header)
 
-        body = W.section(self.lay, "Подключение MTProto",
-                         "Адрес, на котором прокси принимает подключения Telegram Desktop. "
-                         "Для доступа из локальной сети укажите 0.0.0.0.")
-        self.host = W.row(body, "IP-адрес", W.entry())
-        self.port = W.row(body, "Порт", W.entry())
+        body = W.section(self.lay, "Подключение",
+                         help="Адрес, на котором прокси принимает подключения Telegram Desktop. Для доступа из "
+                              "локальной сети укажите 0.0.0.0 (или нажмите «Подключить телефон»).")
+        self.host = W.entry()
+        self.port = W.entry()
+        self.port.setFixedWidth(90)
+        lbl = W.label("Адрес и порт")
+        lbl.setFixedWidth(200)
+        body.addLayout(W.hbox(lbl, self.host, W.label(":"), self.port, stretch_last=False))
         self.secret = W.entry(mono=True)
-        new = W.button("Новый", lambda: self.secret.setText(tgproxy.new_secret()), primary=True)
+        new = W.button("Новый", lambda: self.secret.setText(tgproxy.new_secret()))
         lbl = W.label("Secret")
-        lbl.setFixedWidth(230)
+        lbl.setFixedWidth(200)
         body.addLayout(W.hbox(lbl, self.secret, new, stretch_last=False))
+        body.addLayout(W.button_bar(W.button("Сохранить", self.save, primary=True),
+                                    W.button("Отменить изменения", self.reload),
+                                    W.button("Перезапустить", self.restart),
+                                    W.button("Лог", self.open_log)))
 
-        body = W.section(self.lay, "Датацентры Telegram (DC → IP)",
-                         "По одному правилу на строку, формат: номер:IP. Если не грузятся фото/видео — "
-                         "оставьте только 4:149.154.167.220 или очистите поле.")
-        self.dc_ip = W.textbox(90)
+        W.subtitle(self.lay, "Дополнительно")
+
+        body = W.section(self.lay, "Датацентры (DC → IP)", collapsible=True, key="tg.dc",
+                         help="По одному правилу на строку, формат: номер:IP. Если не грузятся фото и видео — "
+                              "оставьте только 4:149.154.167.220 или очистите поле.")
+        self.dc_ip = W.textbox(70)
+        self.dc_ip.setMaximumHeight(110)
         body.addWidget(self.dc_ip)
 
-        body = W.section(self.lay, "Cloudflare Proxy",
-                         "Запасной путь через Cloudflare, если прямое WebSocket-подключение недоступно.")
-        self.cfproxy = W.Toggle("Включить CF-прокси")
+        body = W.section(self.lay, "Cloudflare", collapsible=True, key="tg.cf",
+                         help="Запасной путь через Cloudflare, если прямое WebSocket-подключение недоступно. "
+                              "Свой домен — docs/RU/CfProxy.md, Worker (бесплатный аналог своего домена) — "
+                              "docs/RU/CfWorker.md в репозитории tg-ws-proxy.")
+        self.cf_card = body.card
+        self.cfproxy = W.Toggle("CF-прокси")
         self.h2 = W.Toggle("Мультиплексирование медиа (HTTP/2)")
+        body.addWidget(self.cfproxy)
+        body.addWidget(self.h2)
         self.user_domain_enabled = W.Toggle("Свой домен")
-        for t in (self.cfproxy, self.h2, self.user_domain_enabled):
-            body.addWidget(t)
-        self.user_domain = W.row(body, "Домены (через запятую)", W.entry(),
-                                 hint="Инструкция по настройке домена: docs/RU/CfProxy.md в репозитории tg-ws-proxy")
-
-        body = W.section(self.lay, "Cloudflare Worker", "Бесплатный аналог своего CF-домена (docs/RU/CfWorker.md).")
-        self.worker_enabled = W.Toggle("Использовать Cloudflare Worker")
+        body.addWidget(self.user_domain_enabled)
+        self.user_domain = W.row(body, "Домены", W.entry("через запятую"))
+        self.worker_enabled = W.Toggle("Cloudflare Worker")
         body.addWidget(self.worker_enabled)
-        self.worker_domain = W.row(body, "Worker-домены (через запятую)", W.entry())
+        self.worker_domain = W.row(body, "Worker-домены", W.entry("через запятую"))
 
-        body = W.section(self.lay, "Логи и производительность")
-        self.verbose = W.Toggle("Подробное логирование (verbose)")
-        self.no_secure = W.Toggle("Выключить TLS для CF-прокси и CF-worker")
-        self.force_test_dc = W.Toggle("Тестовые датацентры Telegram (только для разработчиков)")
+        body = W.section(self.lay, "Тонкие настройки", collapsible=True, key="tg.advanced")
+        self.verbose = W.Toggle("Подробный лог (verbose)")
+        self.no_secure = W.Toggle("Без TLS для CF-прокси и CF-worker")
+        self.force_test_dc = W.Toggle("Тестовые датацентры (для разработчиков)")
         for t in (self.verbose, self.no_secure, self.force_test_dc):
             body.addWidget(t)
-        self.buf_kb = W.row(body, "Буфер, КБ (по умолчанию 256)", W.entry())
-        self.pool_size = W.row(body, "Пул WebSocket-сессий (по умолчанию 4)", W.entry())
-        self.log_max_mb = W.row(body, "Макс. размер лога, МБ (по умолчанию 5)", W.entry())
-
-        body = W.section(self.lay, "Интерфейс tg-ws-proxy",
-                         "Оформление собственных окон прокси (их почти не видно — всё управление здесь).")
-        self.appearance = W.row(body, "Тема", W.Segmented(APPEARANCE.values()))
-        self.language = W.row(body, "Язык", W.Segmented(LANGUAGES.values()))
-
-        self.lay.addLayout(W.button_bar(W.button("Сохранить", self.save, primary=True),
-                                        W.button("Отменить изменения", self.reload),
-                                        W.button("По умолчанию", self.reset_defaults)))
-        self.lay.addLayout(W.button_bar(W.button("Лог прокси", self.open_log),
-                                        W.button("Перезапустить", self.restart)))
+        self.buf_kb = W.row(body, "Буфер, КБ", W.entry("256"))
+        self.pool_size = W.row(body, "Пул WebSocket-сессий", W.entry("4"))
+        self.log_max_mb = W.row(body, "Размер лога, МБ", W.entry("5"))
+        self.appearance = W.row(body, "Тема окон прокси", W.Segmented(APPEARANCE.values()))
+        self.language = W.row(body, "Язык окон прокси", W.Segmented(LANGUAGES.values()))
+        body.addLayout(W.button_bar(W.button("Сохранить", self.save, primary=True),
+                                    W.button("По умолчанию", self.reset_defaults)))
         self.finish()
         self.reload()
 
@@ -97,6 +102,7 @@ class TgPage(Page):
         self.secret.setText(_s(cfg.get("secret")))
         self.dc_ip.setPlainText("\n".join(cfg.get("dc_ip") or []))
         W.set_checked(self.cfproxy, cfg.get("cfproxy", True))
+        self.cf_card.set_note("включён" if cfg.get("cfproxy", True) else "выключен")
         W.set_checked(self.h2, cfg.get("h2", True))
         W.set_checked(self.user_domain_enabled, cfg.get("cfproxy_user_domain_enabled", False))
         self.user_domain.setText(", ".join(tgproxy.coerce_domain_list(cfg.get("cfproxy_user_domain"))))

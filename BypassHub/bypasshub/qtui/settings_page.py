@@ -26,12 +26,12 @@ class SettingsPage(Page):
     def __init__(self, app: "App"):
         super().__init__(app)
         s = app.core.settings
-        W.page_title(self.lay, "Настройки", "Оформление, запуск и поведение программы")
+        W.page_title(self.lay, "Настройки")
 
         # ------------------------------------------------------------ оформление
         body = W.section(self.lay, "Оформление",
-                         "Выберите тему и цвета — в них окрасится всё окно. Если выбрать несколько цветов, "
-                         "фон станет плавным градиентом.")
+                         help="Выберите тему и цвета — в них окрасится всё окно. Если выбрать несколько цветов, "
+                              "фон станет плавным градиентом.")
         self.mode = W.row(body, "Тема", W.Segmented(MODES.values(), self._mode_changed))
         body.addWidget(W.label("Готовые наборы"))
         self.presets = QHBoxLayout()
@@ -42,7 +42,7 @@ class SettingsPage(Page):
         self.mythemes = QGridLayout()
         self.mythemes.setHorizontalSpacing(10)
         body.addLayout(self.mythemes)
-        body.addWidget(W.label("Свои цвета (до трёх — градиент)"))
+        body.addWidget(W.label("Свои цвета (до трёх)"))
         self.custom = QHBoxLayout()
         self.custom.setSpacing(8)
         body.addLayout(self.custom)
@@ -64,20 +64,19 @@ class SettingsPage(Page):
         W.set_checked(self.butterflies, self._appearance.get("butterflies", True))
         body.addWidget(self.butterflies)
 
-        # ------------------------------------------------------------ запуск
-        body = W.section(self.lay, "Запуск")
-        self.autostart = W.Toggle("Запускать BypassHub при включении компьютера", self._autostart_changed)
-        body.addWidget(self.autostart)
-        if winutil.IS_LINUX:
-            body.addWidget(W.label("Ярлык в ~/.config/autostart. Если при запуске нужно включить то, что требует прав "
+        # ------------------------------------------------------------ запуск и окно
+        body = W.section(self.lay, "Запуск и окно")
+        self.autostart = W.Toggle("Запускать при включении компьютера", self._autostart_changed)
+        body.addLayout(W.with_help(self.autostart,
+                                   "Ярлык в ~/.config/autostart. Если при запуске нужно включить то, что требует прав "
                                    "администратора (zapret в режиме «Программа», VPN «Весь трафик»), система один раз "
-                                   "спросит пароль. Режим zapret «Служба systemd» работает без пароля.",
-                                   "small", wrap=True))
-        else:
-            body.addWidget(W.label("Через Планировщик заданий Windows — с правами администратора и без запроса UAC.",
-                                   "small"))
+                                   "спросит пароль. Режим zapret «Служба systemd» работает без пароля."
+                                   if winutil.IS_LINUX else
+                                   "Через Планировщик заданий Windows — с правами администратора и без запроса UAC."))
         self._switch(body, "Запускать свёрнутым в трей", "start_minimized")
-        self._switch(body, "При запуске включать то, что было включено (zapret, прокси)", "restore_state")
+        self._switch(body, "Включать то, что было включено (zapret, прокси)", "restore_state")
+        self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
+        self._switch(body, "При выходе выключать zapret (режим «Программа») и прокси", "stop_on_exit")
 
         # ------------------------------------------------------------ горячие клавиши
         self.hk_buttons: Dict[str, QPushButton] = {}
@@ -94,10 +93,10 @@ class SettingsPage(Page):
         """В Linux (особенно в Wayland) программа не может сама перехватывать сочетания клавиш —
         их назначают в системе на команду BypassHub --action …, которую выполнит запущенная копия."""
         from .. import linux
-        body = W.section(self.lay, "Горячие клавиши",
-                         "В Linux сочетания клавиш назначаются в системе. KDE Plasma: Параметры системы → "
-                         "Клавиатура → Комбинации клавиш → «Добавить» → «Команда или сценарий». GNOME: "
-                         "Настройки → Клавиатура → Комбинации клавиш → «Свои комбинации». Укажите команду:")
+        body = W.section(self.lay, "Горячие клавиши", "Назначаются в системе на эти команды:",
+                         help="KDE Plasma: Параметры системы → Клавиатура → Комбинации клавиш → «Добавить» → "
+                              "«Команда или сценарий». GNOME: Настройки → Клавиатура → Комбинации клавиш → «Свои "
+                              "комбинации».", collapsible=True, key="settings.hotkeys")
         base = linux.shell_join(linux.self_command())
         for action, text in hotkeys.ACTIONS.items():
             body.addWidget(W.label(text))
@@ -105,10 +104,11 @@ class SettingsPage(Page):
         self.hk_info = W.label("", "small", wrap=True)
 
     def _windows_hotkeys(self, s) -> None:
-        body = W.section(self.lay, "Горячие клавиши",
-                         "Работают в любой программе, даже когда BypassHub свёрнут в трей. Нажмите на "
-                         "сочетание, чтобы изменить его, затем нажмите новые клавиши (Esc — отмена). "
-                         "Нужен хотя бы один из модификаторов Ctrl или Alt.")
+        body = W.section(self.lay, "Горячие клавиши", collapsible=True, key="settings.hotkeys",
+                         help="Работают в любой программе, даже когда BypassHub свёрнут в трей. Нажмите на "
+                              "сочетание, чтобы изменить его, затем нажмите новые клавиши (Esc — отмена). "
+                              "Нужен хотя бы один из модификаторов Ctrl или Alt.")
+        self.hk_card = body.card
         self.hk_switch = W.Toggle("Включить горячие клавиши", self._hk_toggle)
         W.set_checked(self.hk_switch, s.data["hotkeys"].get("enabled"))
         body.addWidget(self.hk_switch)
@@ -123,23 +123,17 @@ class SettingsPage(Page):
         self._key_filter = _KeyCatcher(self._hk_key)
 
     def _build_rest(self, app: "App") -> None:
-        body = W.section(self.lay, "Окно и выход")
-        self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
-        self._switch(body, "При выходе выключать zapret (режим «Программа») и прокси", "stop_on_exit")
+        body = W.section(self.lay, "Данные и резервная копия", collapsible=True, key="settings.data",
+                         help="Резервная копия — все настройки в одном файле: BypassHub, zapret (Game Filter, IPSet, "
+                              "фейки, списки, исключения) и TG WS Proxy. Удобно для переноса на другой компьютер. "
+                              "В файле есть secret прокси — не публикуйте его.<br><br>Старые версии zapret и "
+                              "tg-ws-proxy удаляются сразу после обновления, временные файлы — при каждом запуске.")
+        body.addWidget(W.label(f"Папка: {app.core.paths.root}", "muted", selectable=True))
+        body.addLayout(W.button_bar(W.button("Открыть папку", lambda: winutil.open_path(app.core.paths.root)),
+                                    W.button("Экспорт настроек", self._export),
+                                    W.button("Импорт", self._import)))
 
-        body = W.section(self.lay, "Данные")
-        body.addWidget(W.label(f"Папка: {app.core.paths.root}", selectable=True))
-        body.addWidget(W.label("Старые версии zapret и tg-ws-proxy удаляются сразу после обновления, "
-                               "временные файлы загрузки — при каждом запуске.", "small", wrap=True))
-        body.addLayout(W.button_bar(W.button("Открыть папку", lambda: winutil.open_path(app.core.paths.root))))
-
-        body = W.section(self.lay, "Резервная копия настроек",
-                         "Все настройки в одном файле: BypassHub, zapret (Game Filter, IPSet, фейки, списки, "
-                         "исключения) и TG WS Proxy. Удобно для переноса на другой компьютер. В файле есть "
-                         "secret прокси — не публикуйте его.")
-        body.addLayout(W.button_bar(W.button("Экспорт", self._export, primary=True), W.button("Импорт", self._import)))
-
-        body = W.section(self.lay, "О программе")
+        body = W.section(self.lay, "О программе", collapsible=True, key="settings.about")
         body.addWidget(W.label(f"{APP_NAME} {__version__} — zapret-discord-youtube, tg-ws-proxy и свой VPN "
                                "(VLESS, AmneziaWG) в одном окне.", wrap=True))
         body.addWidget(W.label("Сами проекты принадлежат их авторам (Flowseal, bol-van, SagerNet, Amnezia). "
@@ -340,6 +334,8 @@ class SettingsPage(Page):
             else:
                 btn.setText(combo or "не задано")
                 btn.setStyleSheet("" if combo and enabled else f"color: {S.P.muted};")
+        if getattr(self, "hk_card", None) is not None:
+            self.hk_card.set_note(("включены" if enabled else "выключены") + (" · есть конфликты" if failed else ""))
         if failed:
             self.hk_info.setText("Заняты другой программой: " + ", ".join(failed) + ". Выберите другие сочетания.")
             W.set_label_color(self.hk_info, S.red())

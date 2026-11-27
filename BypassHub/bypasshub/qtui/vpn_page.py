@@ -39,25 +39,14 @@ class VpnPage(Page):
         s = app.core.settings
         from .home import ServiceCard
         home = app.pages["home"][1]
-        self.header = ServiceCard("VPN", "Свой сервер: ключ VLESS или ключ AmneziaVPN (AmneziaWG)", home.toggle_vpn)
+        self.header = ServiceCard("VPN", "Свой сервер: VLESS, Hysteria2 или AmneziaWG", home.toggle_vpn)
         self.header.add_buttons()
         self.lay.addWidget(self.header)
         home.vpn_card.add_header(self.header)
 
-        body = W.section(self.lay, "Добавить сервер",
-                         "Вставьте ключ vless://… или hysteria2://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), "
-                         "конфиг AmneziaWG (.conf) или ссылку на подписку https://… от вашего VPN-сервиса. "
-                         "Можно несколько ключей сразу — по одному на строку.")
-        self.input = W.textbox(74)
-        body.addWidget(self.input)
-        self.add_btn = W.button("Добавить", self.add_from_box, primary=True, width=120)
-        body.addLayout(W.button_bar(self.add_btn, W.button("Вставить из буфера", self.add_from_clipboard),
-                                    W.button("Из файлов .conf…", self.add_from_file)))
-        body.addWidget(W.label("Ключ — это пароль от вашего сервера: не публикуйте его и не отправляйте посторонним.",
-                               "small", wrap=True))
-
-        body = W.section(self.lay, "Серверы", "Нажмите на сервер, чтобы выбрать его. Если VPN включён, он "
-                                              "переключится сразу. «Авто» сам выбирает самый быстрый сервер VLESS или Hysteria2.")
+        body = W.section(self.lay, "Серверы",
+                         help="Нажмите на сервер, чтобы выбрать его. Если VPN включён, он переключится сразу. "
+                              "«Авто» сам выбирает самый быстрый сервер VLESS или Hysteria2.")
         from .server_list import ServerPicker
         self.picker = ServerPicker(app, compact=False, on_rename=self.rename, on_remove=self.remove)
         body.addWidget(self.picker)
@@ -65,68 +54,67 @@ class VpnPage(Page):
         self.subs_box = QVBoxLayout()
         self.subs_box.setSpacing(2)
         body.addLayout(self.subs_box)
-        self.ping_btn = W.button("Проверить пинг", lambda: home.ping_servers(), width=170)
-        self.subs_btn = W.button("⟳ Обновить подписки", self.refresh_subs, width=190)
+        self.ping_btn = W.button("Проверить пинг", lambda: home.ping_servers())
+        self.subs_btn = W.button("⟳ Обновить подписки", self.refresh_subs)
         body.addLayout(W.button_bar(self.ping_btn, self.subs_btn))
 
-        body = W.section(self.lay, "Режим",
-                         "«Весь трафик» — через VPN идут все программы, включая игры и Discord (виртуальный "
-                         "сетевой адаптер). «Системный прокси» — только браузеры и программы, которые "
-                         + ("учитывают системные настройки прокси (KDE Plasma, GNOME); остальные работают как "
-                            "обычно. Для режима «Весь трафик» система спросит пароль администратора."
-                            if winutil.IS_LINUX else
-                            "учитывают настройки прокси Windows; остальные работают как обычно."))
-        self.mode = W.row(body, "Что пускать через VPN", W.Segmented(vpn.MODES.values(), self._mode_changed))
-        self.ru_direct = W.Toggle("Раздельное туннелирование: российское — напрямую", self._ru_changed)
-        body.addWidget(self.ru_direct)
-        body.addWidget(W.label("Через VPN идёт всё зарубежное. Напрямую, с домашнего IP, — сайты .ru, .рф, .su со всеми "
-                               "поддоменами, российские IP-адреса и российские сервисы на «нерусских» доменах (VK, "
-                               "Яндекс, банки и др.) по базам roscomvpn. YouTube, Telegram, GitHub и Google Play всегда "
-                               "идут через VPN. Российский трафик не попадает на сервер вовсе.", "small", wrap=True))
+        body = W.section(self.lay, "Добавить сервер",
+                         help="Ключ vless://… или hysteria2://…, ключ AmneziaVPN vpn://… (AmneziaVPN → «Поделиться»), "
+                              "конфиг AmneziaWG (.conf) или ссылка на подписку https://… от VPN-сервиса. Можно "
+                              "несколько ключей сразу — по одному на строку.<br><br>Ключ — это пароль от вашего "
+                              "сервера: не публикуйте его и не отправляйте посторонним.")
+        self.input = W.textbox(46)
+        self.input.setMaximumHeight(64)
+        self.input.setPlaceholderText("vless://…  hysteria2://…  vpn://…  или ссылка на подписку https://…")
+        body.addWidget(self.input)
+        self.add_btn = W.button("Добавить", self.add_from_box, primary=True, width=110)
+        body.addLayout(W.button_bar(self.add_btn, W.button("Вставить из буфера", self.add_from_clipboard),
+                                    W.button("Файлы .conf…", self.add_from_file)))
+
+        body = W.section(self.lay, "Режим")
+        self.mode = W.row(body, "Что пускать через VPN", W.Segmented(vpn.MODES.values(), self._mode_changed),
+                          help="«Весь трафик» — через VPN идут все программы, включая игры и Discord (виртуальный "
+                               "сетевой адаптер). «Системный прокси» — только браузеры и программы, которые "
+                               + ("учитывают системные настройки прокси (KDE Plasma, GNOME). Для «Весь трафик» "
+                                  "система спросит пароль администратора." if winutil.IS_LINUX else
+                                  "учитывают настройки прокси Windows."))
+        self.port_row = QWidget()
         self.port = W.entry()
         self.port.setFixedWidth(100)
-        port_label = W.label("Порт системного прокси")
-        port_label.setFixedWidth(230)
-        body.addLayout(W.hbox(port_label, self.port, W.button("Применить", self._port_changed, primary=True)))
+        port_label = W.label("Порт прокси")
+        port_label.setFixedWidth(200)
+        self.port_row.setLayout(W.hbox(port_label, self.port, W.button("Применить", self._port_changed)))
+        body.addWidget(self.port_row)
+        self.ru_direct = W.Toggle("Российское — напрямую", self._ru_changed)
+        body.addLayout(W.with_help(self.ru_direct,
+                                   "Раздельное туннелирование. Через VPN идёт всё зарубежное. Напрямую, с домашнего "
+                                   "IP, — сайты .ru, .рф, .su со всеми поддоменами, российские IP-адреса и российские "
+                                   "сервисы на «нерусских» доменах (VK, Яндекс, банки и др.) по базам roscomvpn. "
+                                   "YouTube, Telegram, GitHub и Google Play всегда идут через VPN. Российский трафик "
+                                   "не попадает на сервер вовсе."))
+        self.killswitch = W.Toggle("Kill switch: без VPN — без интернета", self._killswitch_changed)
+        body.addLayout(W.with_help(self.killswitch, KILLSWITCH_INTRO + "<br><br>" + KILLSWITCH_DETAILS))
 
-        body = W.section(self.lay, "Программы мимо VPN",
-                         "Отмеченные программы ходят в интернет напрямую, даже когда VPN включён, — например, "
-                         "игры, в которых через VPN растёт пинг. Работает в режиме «Весь трафик»: в режиме "
-                         "«Системный прокси» игры и так идут мимо VPN.")
+        body = W.section(self.lay, "Программы мимо VPN", collapsible=True, key="vpn.exclude",
+                         help="Отмеченные программы ходят в интернет напрямую, даже когда VPN включён, — например, "
+                              "игры, в которых через VPN растёт пинг. Работает в режиме «Весь трафик».<br><br>"
+                              "Впишите имя файла программы (можно несколько через запятую) или нажмите «Выбрать…» "
+                              "и укажите файл игры в папке, куда она установлена. Снимите галочку, чтобы программа "
+                              "снова шла через VPN, или нажмите ✕, чтобы убрать её из списка.")
+        self.exclude_card = body.card
         self.exclude_grid = W.grid(2)
         self.exclude_checks = {}
         body.addLayout(self.exclude_grid)
         self.exclude_entry = W.entry("game, other" if winutil.IS_LINUX else "game.exe, other.exe")
         self.exclude_entry.returnPressed.connect(self._exclude_add)
-        ex_label = W.label("Добавить программу")
-        ex_label.setFixedWidth(170)
-        body.addLayout(W.hbox(ex_label, self.exclude_entry, W.button("Выбрать…", self._exclude_pick),
+        body.addLayout(W.hbox(self.exclude_entry, W.button("Выбрать…", self._exclude_pick),
                               W.button("Добавить", self._exclude_add, primary=True), stretch_last=False))
-        body.addWidget(W.label("Впишите имя файла программы (можно несколько через запятую) или нажмите «Выбрать…» "
-                               "и укажите файл игры в папке, куда она установлена. Программа появится в списке "
-                               "выше с галочкой; снимите галочку, чтобы она снова шла через VPN, или нажмите ✕, "
-                               "чтобы убрать её из списка." if winutil.IS_LINUX else
-                               "Впишите имя .exe (можно несколько через запятую) или нажмите «Выбрать…» и укажите "
-                               ".exe игры в папке, куда она установлена. Программа появится в списке выше с "
-                               "галочкой; снимите галочку, чтобы она снова шла через VPN, или нажмите ✕, чтобы "
-                               "убрать её из списка.", "small", wrap=True))
 
-        body = W.section(self.lay, "Kill switch", KILLSWITCH_INTRO)
-        self.killswitch = W.Toggle("Kill switch: без VPN — без интернета", self._killswitch_changed)
-        body.addWidget(self.killswitch)
-        body.addWidget(W.label(KILLSWITCH_DETAILS, "small", wrap=True))
-
-        W.section(self.lay, "AmneziaWG",
-                  "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
-                  "одновременно мешают друг другу. Раздельное туннелирование и режим «Системный прокси» "
-                  + ("для AmneziaWG работают через sing-box. В Linux AmneziaWG встроен в BypassHub и "
-                     "работает без модуля ядра — ставить ничего не нужно."
-                     if winutil.IS_LINUX else
-                     "для AmneziaWG работают через sing-box — он скачается вместе с клиентом AmneziaWG."))
-
-        body = W.section(self.lay, "Движки VPN", "Скачиваются с GitHub при первом включении и обновляются "
-                                                 "вместе с остальными компонентами.")
-        self.engines = W.label("", wrap=True)
+        body = W.section(self.lay, "Движки и журнал", collapsible=True, key="vpn.engines",
+                         help="Движки скачиваются с GitHub при первом включении и обновляются вместе с остальными "
+                              "компонентами.<br><br>Если открыт AmneziaVPN, отключитесь в нём перед включением — два "
+                              "VPN одновременно мешают друг другу.")
+        self.engines = W.label("", "muted", wrap=True)
         body.addWidget(self.engines)
         body.addLayout(W.button_bar(W.button("Лог VPN", self.open_log),
                                     W.button("Перезапустить VPN", self.restart)))
@@ -136,6 +124,7 @@ class VpnPage(Page):
         W.set_checked(self.ru_direct, s.get("vpn", "ru_direct"))
         W.set_checked(self.killswitch, s.get("vpn", "killswitch"))
         self.port.setText(str(s.get("vpn", "proxy_port")))
+        self.port_row.setVisible(s.get("vpn", "mode") == "proxy")
         self._exclude_load()
         self.render()
 
@@ -155,9 +144,9 @@ class VpnPage(Page):
         self.picker.render()
         subs = core.settings.get("vpn", "subscriptions") or []
         if subs:
-            self.subs_box.addLayout(W.hbox(W.label("Подписки", "h2"),
-                                           W.label("обновляются сами при запуске и каждые несколько часов", "small"),
-                                           margins=(0, 10, 0, 2)))
+            head = W.label("Подписки", "muted")
+            head.setToolTip("Обновляются сами при запуске и каждые несколько часов")
+            self.subs_box.addLayout(W.hbox(head, margins=(0, 8, 0, 0)))
         for url in subs:
             shown = url if len(url) <= 60 else url[:57] + "…"
             checked = core.vpn_sub_checked(url)
@@ -170,10 +159,9 @@ class VpnPage(Page):
             self.ping_btn.setEnabled(bool(core.vpn_vless()))
         sb, aw = core.singbox, core.awg
         self.engines.setText("\n".join([
-            "VLESS — sing-box " + (sb.local_version() if sb.is_installed() else "(скачается с GitHub при первом включении)"),
-            "AmneziaWG — официальный клиент AmneziaWG " + (aw.local_version() if aw.is_installed() else
-                                                         "(скачается с GitHub при первом включении)"),
-            "Раздельное туннелирование — базы roscomvpn " + (_rules_age(sb) or "(скачаются при включении)"),
+            "sing-box (VLESS, Hysteria2): " + (sb.local_version() if sb.is_installed() else "скачается при включении"),
+            "AmneziaWG: " + (aw.local_version() if aw.is_installed() else "скачается при включении"),
+            "Базы roscomvpn: " + (_rules_age(sb) or "скачаются при включении"),
         ]))
 
     def rename(self, p: Profile) -> None:
@@ -297,6 +285,7 @@ class VpnPage(Page):
     def _mode_changed(self, text: str) -> None:
         mode = next((k for k, v in vpn.MODES.items() if v == text), "tun")
         self.app.core.settings.set("vpn", "mode", mode)
+        self.port_row.setVisible(mode == "proxy")
         self.app.pages["home"][1].apply_vpn("Смена режима…")
 
     def _ru_changed(self, on: bool) -> None:
@@ -349,6 +338,8 @@ class VpnPage(Page):
                 cell.setLayout(W.hbox(cb, remove, spacing=2))
             self.exclude_grid.addWidget(cell, i // 2, i % 2)
             self.exclude_checks[title] = (cb, exes)
+        n = sum(1 for cb, _ in self.exclude_checks.values() if cb.isChecked())
+        self.exclude_card.set_note(f"отмечено: {n}" if n else "")
 
     def _exclude_save(self, names: List[str], custom: List[str]) -> None:
         s = self.app.core.settings
@@ -367,6 +358,8 @@ class VpnPage(Page):
         for cb, exes in self.exclude_checks.values():
             if cb.isChecked():
                 names += exes
+        n = sum(1 for cb, _ in self.exclude_checks.values() if cb.isChecked())
+        self.exclude_card.set_note(f"отмечено: {n}" if n else "")
         self._exclude_save(names, self._exclude_state()[1])
 
     def _exclude_add(self) -> None:

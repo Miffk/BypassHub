@@ -44,63 +44,26 @@ class ZapretPage(Page):
                                 W.button("Проверить доступность", lambda: home.check_services()))
         self.lay.addWidget(self.header)
         home.zapret_card.add_header(self.header)
-        self.not_installed = W.label("zapret ещё не загружен. Он скачается автоматически, или нажмите «Проверить "
-                                     "сейчас» во вкладке «Обновления».", wrap=True)
+        self.not_installed = W.label("zapret ещё не загружен — скачается сам или по кнопке во вкладке «Обновления».",
+                                     wrap=True)
         W.set_label_color(self.not_installed, S.yellow())
         self.lay.addWidget(self.not_installed)
 
         # --- стратегия и режим
-        body = W.section(self.lay, "Стратегия и режим запуска", MODE_HINT)
+        body = W.section(self.lay, "Стратегия", help=MODE_HINT)
         self.strategy_box = W.row(body, "Стратегия", W.combo(on_change=self._strategy_changed))
         self.mode_btn = W.row(body, "Режим", W.Segmented(MODE_LABELS.values(), self._mode_changed))
         self.service_label = W.label("", "muted")
+        self.service_label.hide()
         body.addWidget(self.service_label)
 
-        # --- версия
-        body = W.section(self.lay, "Версия zapret",
-                         "Если на новой версии обход стал работать хуже, поставьте одну из прошлых. Выбранная "
-                         "версия не обновляется автоматически; чтобы снова получать обновления, установите "
-                         "последнюю.")
-        self.version_label = W.label("", "muted")
-        body.addWidget(self.version_label)
-        self.version_box = W.row(body, "Версия", W.combo())
-        self.version_btn = W.button("Установить", self._install_version, primary=True)
-        body.addLayout(W.button_bar(self.version_btn, W.button("Обновить список", self._load_versions)))
-        self._releases: list = []
-        self._versions_requested = False
-
-        # --- Game Filter
-        body = W.section(self.lay, "Game Filter",
-                         "Обход для игр и других сервисов, использующих TCP/UDP на портах выше 1023. "
-                         "По умолчанию выключен — включайте, только если не работает игра.")
-        self.game_mode = W.row(body, "Режим", W.Segmented(GAME_LABELS.values()))
-        self.game_tcp = W.row(body, "Порты TCP", W.entry("1024-65535"))
-        self.game_udp = W.row(body, "Порты UDP", W.entry("1024-65535"),
-                              hint="Формат: 1024-65535 или несколько через запятую: 1024-1934,1936-65535")
-        body.addLayout(W.button_bar(W.button("Сохранить", self._save_game_filter, primary=True)))
-
-        # --- IPSet
-        body = W.section(self.lay, "IPSet Filter",
-                         "none — IP-адреса не проверяются; loaded — обход для IP из списка ipset-all.txt; "
-                         "any — обход для любых IP. Если перестало работать то, что работает без zapret, "
-                         "поставьте none.")
-        self.ipset_btn = W.row(body, "Режим", W.Segmented(IPSET_LABELS.values(), self._ipset_changed))
-        body.addLayout(W.button_bar(W.button("Обновить IPSet-список", self._update_ipset, primary=True)))
-
-        # --- фейки
-        body = W.section(self.lay, "Активные фейки",
-                         "Какой файл из папки bin подставляется в стратегии как ACTIVE_*.bin "
-                         "(аналог «Replace active fakes»).")
-        self.fake_boxes = {}
-        for kind, (_, text) in FAKE_TARGETS.items():
-            self.fake_boxes[kind] = W.row(body, text, W.combo(on_change=lambda v, k=kind: self._fake_changed(k, v)))
-
         # --- исключения программ
-        body = W.section(self.lay, "Не применять обход к программам",
-                         "Отметьте программы, которые должны работать без zapret (например, если Steam с "
-                         f"включённым обходом грузит медленнее). {ENGINE} работает на уровне сетевых пакетов и не "
-                         "видит, какой программе они принадлежат, поэтому исключаются домены этих программ. "
-                         "Если включён Game Filter, трафик игр по IP всё равно может попадать под обход.")
+        body = W.section(self.lay, "Без обхода", "Программы и домены, которым zapret не нужен.",
+                         help=f"Например, если Steam с включённым обходом грузит медленнее. {ENGINE} работает на "
+                              "уровне сетевых пакетов и не видит, какой программе они принадлежат, поэтому "
+                              "исключаются домены этих программ. Если включён Game Filter, трафик игр по IP всё "
+                              "равно может попадать под обход.", collapsible=True, key="zapret.apps")
+        self.apps_card = body.card
         grid = W.grid(3)
         self.app_checks = {}
         for i, name in enumerate(APP_EXCLUSIONS):
@@ -108,19 +71,43 @@ class ZapretPage(Page):
             grid.addWidget(cb, i // 3, i % 3)
             self.app_checks[name] = cb
         body.addLayout(grid)
-        self.app_custom = W.row(body, "Свои домены (через запятую)", W.entry("example.com, game.net"))
-        body.addLayout(W.button_bar(W.button("Применить", self._apps_changed, primary=True)))
-        self.learn_sw = W.Toggle("Экспериментально: также исключать IP-адреса, к которым подключаются отмеченные "
-                                 "программы", self._learn_changed)
-        body.addSpacing(6)
-        body.addWidget(self.learn_sw)
+        self.app_custom = W.row(body, "Свои домены", W.entry("example.com, game.net"))
+        self.learn_sw = W.Toggle("Также исключать IP-адреса этих программ (эксперимент)", self._learn_changed)
+        body.addLayout(W.with_help(self.learn_sw,
+                                   "Раз в 8 секунд BypassHub смотрит, к каким адресам подключены отмеченные "
+                                   "программы (только локальная таблица соединений — сеть не нагружается), и "
+                                   "добавляет их в ipset-exclude-user.txt. Первое подключение к новому адресу ещё "
+                                   "идёт через обход. Адреса Discord и YouTube не исключаются."))
         self.learn_info = W.label("", "small", wrap=True)
         body.addWidget(self.learn_info)
-        body.addLayout(W.button_bar(W.button("Очистить выученные адреса", self._learn_clear)))
+        body.addLayout(W.button_bar(W.button("Применить", self._apps_changed, primary=True),
+                                    W.button("Забыть выученные адреса", self._learn_clear)))
+
+        W.subtitle(self.lay, "Дополнительно")
+
+        # --- Game Filter
+        body = W.section(self.lay, "Game Filter", collapsible=True, key="zapret.game",
+                         help="Обход для игр и других сервисов на портах TCP/UDP выше 1023. Включайте, только если "
+                              "не работает игра.")
+        self.game_card = body.card
+        self.game_mode = W.row(body, "Режим", W.Segmented(GAME_LABELS.values()))
+        self.game_tcp = W.row(body, "Порты TCP", W.entry("1024-65535"))
+        self.game_udp = W.row(body, "Порты UDP", W.entry("1024-65535"),
+                              help="Диапазон или несколько через запятую: 1024-1934,1936-65535")
+        body.addLayout(W.button_bar(W.button("Сохранить", self._save_game_filter, primary=True)))
+
+        # --- IPSet
+        body = W.section(self.lay, "IPSet Filter", collapsible=True, key="zapret.ipset",
+                         help="none — IP-адреса не проверяются; loaded — обход для IP из списка ipset-all.txt; "
+                              "any — для любых IP. Если перестало работать то, что работает без zapret, "
+                              "поставьте none.")
+        self.ipset_card = body.card
+        self.ipset_btn = W.row(body, "Режим", W.Segmented(IPSET_LABELS.values(), self._ipset_changed))
+        body.addLayout(W.button_bar(W.button("Обновить IPSet-список", self._update_ipset)))
 
         # --- пользовательские списки
-        body = W.section(self.lay, "Пользовательские списки",
-                         "Свои домены и исключения. Файлы сохраняются при обновлении zapret.")
+        body = W.section(self.lay, "Свои списки", collapsible=True, key="zapret.lists",
+                         help="Свои домены и исключения. Файлы сохраняются при обновлении zapret.")
         self.tabs = QTabWidget()
         self.list_boxes = {}
         for name, (desc, _) in USER_LISTS.items():
@@ -136,27 +123,47 @@ class ZapretPage(Page):
         body.addWidget(self.tabs)
 
         # --- hosts
-        body = W.section(self.lay, "Файл hosts",
-                         "Нужен для веб-версии Telegram и голосовых каналов Discord (аналог «Update Hosts File»). "
-                         "Записи добавляются отдельным блоком, перед изменением создаётся копия "
-                         + ("/etc/bypasshub/hosts.bak." if winutil.IS_LINUX else "hosts.bypasshub.bak."))
+        body = W.section(self.lay, "Файл hosts", collapsible=True, key="zapret.hosts",
+                         help="Нужен для веб-версии Telegram и голосовых каналов Discord (аналог «Update Hosts "
+                              "File»). Записи добавляются отдельным блоком, перед изменением создаётся копия "
+                              + ("/etc/bypasshub/hosts.bak." if winutil.IS_LINUX else "hosts.bypasshub.bak."))
+        self.hosts_card = body.card
         self.hosts_label = W.label("Статус не проверялся")
         body.addWidget(self.hosts_label)
-        body.addLayout(W.button_bar(W.button("Проверить", self._hosts_check, primary=True),
-                                    W.button("Обновить автоматически", self._hosts_apply, primary=True),
+        body.addLayout(W.button_bar(W.button("Проверить", self._hosts_check),
+                                    W.button("Обновить", self._hosts_apply, primary=True),
                                     W.button("Вручную" if winutil.IS_LINUX else "Вручную (блокнот)",
                                              self._hosts_manual),
                                     W.button("Удалить записи", self._hosts_remove)))
 
+        # --- версия
+        body = W.section(self.lay, "Версия zapret", collapsible=True, key="zapret.version",
+                         help="Если на новой версии обход стал работать хуже, поставьте одну из прошлых. Выбранная "
+                              "версия не обновляется сама; чтобы снова получать обновления, установите последнюю.")
+        self.version_card = body.card
+        self.version_label = W.label("", "muted")
+        body.addWidget(self.version_label)
+        self.version_box = W.row(body, "Версия", W.combo())
+        self.version_btn = W.button("Установить", self._install_version, primary=True)
+        body.addLayout(W.button_bar(self.version_btn, W.button("Обновить список", self._load_versions)))
+        self._releases: list = []
+        self._versions_requested = False
+
+        # --- фейки
+        body = W.section(self.lay, "Активные фейки", collapsible=True, key="zapret.fakes",
+                         help="Какой файл из папки bin подставляется в стратегии как ACTIVE_*.bin "
+                              "(аналог «Replace active fakes»).")
+        self.fake_boxes = {}
+        for kind, (_, text) in FAKE_TARGETS.items():
+            self.fake_boxes[kind] = W.row(body, text, W.combo(on_change=lambda v, k=kind: self._fake_changed(k, v)))
+
         # --- инструменты
-        body = W.section(self.lay, "Инструменты")
-        body.addLayout(W.button_bar(W.button("Автоподбор стратегии", self._auto_pick, primary=True),
-                                    W.button("Диагностика", self._diagnostics, primary=True),
-                                    W.button("Удалить службу" if winutil.IS_LINUX else "Удалить службы",
-                                             self._remove_services)))
-        tools = [W.button("Открыть папку zapret", lambda: winutil.open_path(app.core.zapret.root)),
-                 W.button(f"Лог {ENGINE}", self._open_winws_log),
-                 W.button("Показать команду", self._show_command)]
+        body = W.section(self.lay, "Инструменты", collapsible=True, key="zapret.tools")
+        tools = [W.button("Диагностика", self._diagnostics),
+                 W.button("Удалить службу" if winutil.IS_LINUX else "Удалить службы", self._remove_services),
+                 W.button("Папка zapret", lambda: winutil.open_path(app.core.zapret.root))]
+        body.addLayout(W.button_bar(*tools))
+        tools = [W.button(f"Лог {ENGINE}", self._open_winws_log), W.button("Показать команду", self._show_command)]
         if winutil.IS_WINDOWS:
             tools.append(W.button("Тест в PowerShell", self._run_tests))
         body.addLayout(W.button_bar(*tools))
@@ -239,6 +246,9 @@ class ZapretPage(Page):
         self.game_tcp.setText(gf.tcp)
         self.game_udp.setText(gf.udp)
         self.ipset_btn.set(zm.ipset_status() if installed else "")
+        self.game_card.set_note(GAME_LABELS.get(gf.mode, "").lower() if gf.mode != "disabled" else "выключен")
+        self.ipset_card.set_note(zm.ipset_status() if installed else "")
+        self.version_card.set_note(zm.local_version() if installed else "")
 
         fakes = zm.fake_files()
         active = zm.active_fakes() if installed else {}
@@ -254,6 +264,8 @@ class ZapretPage(Page):
         for name, cb in self.app_checks.items():
             W.set_checked(cb, name in names)
         self.app_custom.setText(", ".join(custom))
+        n = len(names) + len(custom)
+        self.apps_card.set_note(f"исключено: {n}" if n else "")
         W.set_checked(self.learn_sw, self.app.core.settings.get("zapret", "learn_apps"))
         self._update_learn_info()
         for name, box in self.list_boxes.items():
@@ -269,6 +281,7 @@ class ZapretPage(Page):
         else:
             text = "Служба zapret не установлена"
         W.set_text(self.service_label, text + f" · {ENGINE} " + ("запущен" if zs.running else "не запущен"))
+        self.service_label.setVisible(zs.service_installed)  # без службы всё видно в шапке
 
     # ------------------------------------------------------------------ helpers
     def _after_change(self, what: str) -> None:
@@ -365,10 +378,8 @@ class ZapretPage(Page):
 
     def _update_learn_info(self) -> None:
         count = len(self.app.core.learner.learned())
-        W.set_text(self.learn_info, "Раз в 8 секунд программа смотрит, к каким адресам подключены отмеченные программы "
-                                    "(только локальная таблица соединений — сеть не нагружается), и добавляет их в "
-                                    "ipset-exclude-user.txt. Первое подключение к новому адресу ещё идёт через обход. "
-                                    f"Адреса Discord и YouTube не исключаются. Выучено адресов: {count}.")
+        W.set_text(self.learn_info, f"Выучено адресов: {count}" if count else "")
+        self.learn_info.setVisible(bool(count))
 
     def _auto_pick(self) -> None:
         if not self.app.core.zapret.is_installed():
@@ -387,6 +398,7 @@ class ZapretPage(Page):
     def _hosts_status(self, text: str, color: str) -> None:
         self.hosts_label.setText(text)
         W.set_label_color(self.hosts_label, color)
+        self.hosts_card.set_note(text if len(text) <= 40 else "")
 
     def _hosts_check(self) -> None:
         def done(res, err):

@@ -82,6 +82,10 @@ build.bat
   `style.py` (таблица стилей из палитры темы), `widgets.py` (карточки, переключатели, плитки),
   страницы `home.py`, `zapret_page.py`, `tg_page.py`, `vpn_page.py`, `updates_page.py`, `settings_page.py`,
   `log_page.py` и окна `dialogs.py`. Цвета тем — `bypasshub/palette.py` (общие для обоих интерфейсов).
+- Страницы собираются из `W.section(...)`: `hint` — одна короткая строка под заголовком, `help` — подробности
+  в кружке «?» (всплывающая подсказка), `collapsible=True, key=...` — сворачиваемый раздел для редких настроек
+  (раскрытые запоминаются в `settings.ui.expanded`, сводка рядом с заголовком — `card.set_note`). Пояснения
+  длиннее строки пишем в `help`, а не абзацем на странице.
 - Прежнее окно на customtkinter (`bypasshub/gui/`) осталось запасным: оно открывается, если Qt не смог
   загрузиться, или при запуске с ключом `--classic-ui`.
 - Проверка плавности на настоящей Windows — workflow `ui-check.yml` (`tools/ui_check.py`): время переключения

@@ -30,15 +30,15 @@ class UpdatesPage(Page):
         self.busy = False
         self.infos: Dict[str, UpdateInfo] = {}
         s = app.core.settings
-        W.page_title(self.lay, "Обновления", "Автоматическая загрузка новых версий с GitHub")
+        W.page_title(self.lay, "Обновления")
 
         body = W.section(self.lay, "Компоненты",
-                         "Программа сама проверяет GitHub-репозитории проектов и скачивает новые релизы. "
-                         "При обновлении zapret сохраняются ваши списки, Game Filter, IPSet, фейки и свои "
-                         "стратегии; работающий обход перезапускается автоматически.")
+                         help="BypassHub сам проверяет GitHub-репозитории проектов и скачивает новые релизы. "
+                              "При обновлении zapret сохраняются ваши списки, Game Filter, IPSet, фейки и свои "
+                              "стратегии; работающий обход перезапускается сам.")
         self.rows: Dict[str, dict] = {}
         for key, title in TITLES.items():
-            fr = W.Card(name="row", margins=(14, 10, 12, 10))
+            fr = W.Card(name="row", margins=(14, 8, 10, 8))
             line = QHBoxLayout()
             left = QVBoxLayout()
             left.setSpacing(2)
@@ -49,7 +49,9 @@ class UpdatesPage(Page):
             line.addLayout(left, 1)
             btn = W.button("Переустановить", lambda k=key: self.install_one(k), primary=True, width=140)
             line.addWidget(btn)
-            line.addWidget(W.button("GitHub", lambda r=REPOS[key]: winutil.open_url(f"https://github.com/{r}/releases")))
+            gh = W.button("↗", lambda r=REPOS[key]: winutil.open_url(f"https://github.com/{r}/releases"), flat=True)
+            gh.setToolTip("Релизы на GitHub")
+            line.addWidget(gh)
             fr.body.addLayout(line)
             body.addWidget(fr)
             self.rows[key] = {"ver": ver, "state": state, "btn": btn}
@@ -60,15 +62,15 @@ class UpdatesPage(Page):
         body.addWidget(self.progress)
         self.status = W.label("", "muted", wrap=True)
         body.addWidget(self.status)
-        self.check_btn = W.button("Проверить сейчас", lambda: self.app.run_updates(), primary=True, width=160)
+        self.check_btn = W.button("Проверить сейчас", lambda: self.app.run_updates(), width=160)
         self.install_btn = W.button("Установить все обновления", lambda: self.app.run_updates(force_install=True),
                                     primary=True, width=220)
         body.addLayout(W.button_bar(self.check_btn, self.install_btn))
 
         body = W.section(self.lay, "Параметры")
-        self.check_on_start = W.Toggle("Проверять обновления при запуске",
+        self.check_on_start = W.Toggle("Проверять при запуске",
                                        lambda on: s.set("updates", "check_on_start", on))
-        self.auto_install = W.Toggle("Устанавливать обновления автоматически",
+        self.auto_install = W.Toggle("Устанавливать автоматически",
                                      lambda on: s.set("updates", "auto_install", on))
         self.self_update = W.Toggle("Обновлять сам BypassHub", lambda on: s.set("updates", "self_update", on))
         for t in (self.check_on_start, self.auto_install, self.self_update):
@@ -78,7 +80,7 @@ class UpdatesPage(Page):
         assets.update(tgproxy.ASSETS)
         self._assets = assets
         self.asset = W.row(body, "Сборка TG WS Proxy", W.combo(assets.values(), self._asset_changed),
-                           hint="" if winutil.IS_LINUX else
+                           help=None if winutil.IS_LINUX else
                            "Если антивирус блокирует основную сборку, попробуйте версию для Windows 7 — "
                            "по возможностям она не отличается.")
         self.finish()
