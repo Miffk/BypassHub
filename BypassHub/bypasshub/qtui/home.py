@@ -23,23 +23,28 @@ class ServiceCard(W.Card):
     """Шапка страницы сервиса: название, переключатель и подробный статус; кнопки — в self.extra."""
 
     def __init__(self, title: str, subtitle: str, on_toggle: Callable[[bool], None]):
-        super().__init__(margins=(22, 20, 22, 18), spacing=4)
+        super().__init__(margins=(20, 16, 20, 16), spacing=2)
         self.on_toggle = on_toggle
         self.busy = False
         top = QHBoxLayout()
         left = QVBoxLayout()
         left.setSpacing(0)
-        left.addWidget(W.label(title, "title"))
-        left.addWidget(W.label(subtitle, "muted"))
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        head.addWidget(W.label(title, "h1"))
+        self.status = W.label("…", "status")
+        head.addWidget(self.status, 0, Qt.AlignmentFlag.AlignBaseline)
+        head.addStretch(1)
+        left.addLayout(head)
+        if subtitle:
+            left.addWidget(W.label(subtitle, "muted", wrap=True))
         top.addLayout(left, 1)
         self.switch = W.Toggle(big=True)
         self.switch.clicked.connect(self._clicked)
         top.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignTop)
         self.body.addLayout(top)
-        self.status = W.label("…", "status")
-        self.body.addSpacing(6)
-        self.body.addWidget(self.status)
         self.details = W.label("", "muted", wrap=True)
+        self.details.hide()
         self.body.addWidget(self.details)
         self.extra = QHBoxLayout()
         self.extra.setSpacing(8)
@@ -70,6 +75,7 @@ class ServiceCard(W.Card):
             W.set_text(self.status, status)
             W.set_label_color(self.status, color)
         W.set_text(self.details, details)
+        self.details.setVisible(bool(details))
 
 
 class ServiceControl:
@@ -137,11 +143,11 @@ class HomePage(Page):
         left = QVBoxLayout()
         left.setSpacing(0)
         left.addWidget(W.label("BypassHub", "title"))
-        left.addWidget(W.label("Нажмите на сервис, чтобы включить или выключить его. Настройки — в меню слева.",
-                               "muted"))
+        left.addWidget(W.label("Нажмите на плитку, чтобы включить или выключить сервис", "muted"))
         head.addLayout(left, 1)
         # заново проверить доступность Discord / YouTube / Telegram
-        self.refresh_btn = W.button("⟳  Обновить", self.check_services, width=130)
+        self.refresh_btn = W.button("⟳  Проверить", self.check_services, width=130)
+        self.refresh_btn.setToolTip("Проверить, открываются ли Discord, YouTube и Telegram")
         head.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.lay.addLayout(head)
 

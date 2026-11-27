@@ -60,6 +60,9 @@ DEFAULTS: Dict[str, Any] = {
         "stop_on_exit": True,      # выключать zapret (режим process) и прокси при выходе
         "last_boot": 0,            # время включения ПК при прошлом запуске (VPN после перезагрузки выключается)
     },
+    "ui": {
+        "expanded": [],            # раскрытые сворачиваемые разделы окна
+    },
     "hotkeys": {
         "enabled": True,
         "bindings": dict(DEFAULT_BINDINGS),  # действие → "Ctrl+Alt+Z"; пустая строка — без сочетания

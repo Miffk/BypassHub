@@ -135,8 +135,8 @@ def button_bar(*buttons) -> QHBoxLayout:
 class Card(QFrame):
     """Полупрозрачная карточка со скруглёнными углами; содержимое — в self.body."""
 
-    def __init__(self, parent: Optional[QWidget] = None, name: str = "card", margins=(20, 16, 20, 18),
-                 spacing: int = 8):
+    def __init__(self, parent: Optional[QWidget] = None, name: str = "card", margins=(18, 14, 18, 14),
+                 spacing: int = 6):
         super().__init__(parent)
         self.setObjectName(name)
         self.body = QVBoxLayout(self)
@@ -144,25 +144,126 @@ class Card(QFrame):
         self.body.setSpacing(spacing)
 
 
-def section(layout: QVBoxLayout, title: str, hint: Optional[str] = None) -> QVBoxLayout:
-    """Карточка с заголовком и пояснением; возвращает раскладку для содержимого."""
-    card = Card()
-    card.body.addWidget(label(title, "h2"))
-    if hint:
-        card.body.addWidget(label(hint, "muted", wrap=True))
-    inner = QVBoxLayout()
-    inner.setSpacing(8)
-    inner.setContentsMargins(0, 6, 0, 0)
-    card.body.addLayout(inner)
+# Какие сворачиваемые разделы раскрыты: окно подставляет сюда чтение и запись настроек
+expanded_get: Callable[[str], bool] = lambda key: False
+expanded_set: Callable[[str, bool], None] = lambda key, on: None
+
+
+def help_badge(text: str) -> QLabel:
+    """Кружок «?»: подробности — во всплывающей подсказке, а не абзацем на странице."""
+    b = QLabel("?")
+    b.setProperty("role", "help")
+    b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    b.setFixedSize(18, 18)
+    b.setToolTip(f"<div style='max-width: 380px'>{text}</div>")
+    b.setCursor(Qt.CursorShape.WhatsThisCursor)
+    return b
+
+
+def with_help(widget: QWidget, text: Optional[str]) -> QHBoxLayout:
+    """Элемент и рядом «?» с подсказкой."""
+    return hbox(widget, help_badge(text)) if text else hbox(widget)
+
+
+class _SectionHeader(QAbstractButton):
+    """Заголовок сворачиваемого раздела: стрелка и название, нажатие — свернуть или раскрыть."""
+
+    def __init__(self, title: str):
+        super().__init__()
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.arrow = label("›", "h2")
+        self.arrow.setFixedWidth(12)
+        self.title = label(title, "h2")
+        self.note = label("", "small")
+        for w in (self.arrow, self.title, self.note):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            lay.addWidget(w)
+        lay.addStretch(1)
+        self.toggled.connect(lambda on: self.arrow.setText("⌄" if on else "›"))
+
+    def sizeHint(self) -> QSize:
+        return self.layout().sizeHint()
+
+    def paintEvent(self, _e) -> None:
+        pass
+
+
+class Section(Card):
+    """Карточка раздела. hint — одна короткая строка под заголовком, help — подробности в «?»,
+    collapsible — раздел сворачивается (для редких настроек); раскрытые запоминаются по key."""
+
+    def __init__(self, title: str, hint: Optional[str] = None, help: Optional[str] = None,
+                 collapsible: bool = False, key: str = ""):
+        super().__init__()
+        self.key = key or title
+        self.header: Optional[_SectionHeader] = None
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        if collapsible:
+            self.header = _SectionHeader(title)
+            top.addWidget(self.header)
+        else:
+            top.addWidget(label(title, "h2"))
+        if help:
+            top.addWidget(help_badge(help))
+        top.addStretch(1)
+        self.body.addLayout(top)
+        self.content = QWidget()
+        self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        box = QVBoxLayout(self.content)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        if hint:
+            box.addWidget(label(hint, "muted", wrap=True))
+        self.inner = QVBoxLayout()
+        self.inner.setSpacing(8)
+        self.inner.setContentsMargins(0, 4, 0, 0)
+        box.addLayout(self.inner)
+        self.body.addWidget(self.content)
+        if self.header is not None:
+            on = expanded_get(self.key)
+            self.header.setChecked(on)
+            self.content.setVisible(on)
+            self.header.clicked.connect(self._toggle)
+
+    def _toggle(self, on: bool) -> None:
+        self.content.setVisible(on)
+        expanded_set(self.key, on)
+
+    def set_note(self, text: str) -> None:
+        """Короткая сводка рядом с заголовком свёрнутого раздела («выключен», «2 программы»)."""
+        if self.header is not None:
+            set_text(self.header.note, text)
+
+
+def section(layout: QVBoxLayout, title: str, hint: Optional[str] = None, help: Optional[str] = None,
+            collapsible: bool = False, key: str = "") -> QVBoxLayout:
+    """Карточка с заголовком; возвращает раскладку для содержимого (сама карточка — .card)."""
+    card = Section(title, hint, help, collapsible, key)
     layout.addWidget(card)
-    return inner
+    card.inner.card = card  # type: ignore[attr-defined]
+    return card.inner
+
+
+def subtitle(layout: QVBoxLayout, text: str) -> None:
+    """Подзаголовок группы карточек на странице («Дополнительно»)."""
+    lbl = label(text, "group")
+    lbl.setContentsMargins(4, 6, 0, 0)
+    layout.addWidget(lbl)
 
 
 def row(layout: QVBoxLayout, text: str, widget: QWidget, hint: Optional[str] = None,
-        label_width: int = 230) -> QWidget:
+        label_width: int = 200, help: Optional[str] = None) -> QWidget:
     lbl = label(text)
-    lbl.setFixedWidth(label_width)
-    lay = hbox(lbl, widget, stretch_last=False)
+    head = QWidget()
+    head.setFixedWidth(label_width)
+    hl = hbox(lbl, help_badge(help), spacing=6) if help else hbox(lbl)
+    head.setLayout(hl)
+    lay = hbox(head, widget, stretch_last=False)
     widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
     layout.addLayout(lay)
     if hint:
@@ -174,7 +275,7 @@ def page_title(layout: QVBoxLayout, text: str, subtitle: str = "") -> None:
     layout.addWidget(label(text, "title"))
     if subtitle:
         layout.addWidget(label(subtitle, "muted"))
-    layout.addSpacing(6)
+    layout.addSpacing(2)
 
 
 # ====================================================================== выбор из нескольких

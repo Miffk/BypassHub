@@ -152,6 +152,10 @@ QLabel[role="muted"] {{ color: {muted}; }}
 QLabel[role="small"] {{ color: {muted}; font-size: 8.5pt; }}
 QLabel[role="status"] {{ font-size: 11pt; font-weight: 600; }}
 QLabel[role="mono"] {{ font-family: Consolas, monospace; }}
+QLabel[role="help"] {{ color: {muted}; border: 1px solid {border}; border-radius: 9px; font-size: 8pt;
+    font-weight: 600; }}
+QLabel[role="help"]:hover {{ color: {text}; border-color: {p.accent}; }}
+QLabel[role="group"] {{ color: {muted}; font-size: 9pt; font-weight: 600; }}
 QFrame#card {{ background: {rgba(card_c, card_a)}; border-radius: 16px; }}
 QFrame#row {{ background: {surf2}; border-radius: 12px; }}
 QFrame#row[active="true"] {{ border: 2px solid {p.accent}; }}

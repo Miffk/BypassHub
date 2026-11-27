@@ -55,7 +55,7 @@ class Page(QScrollArea):
         self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.lay = QVBoxLayout(self.content)
         self.lay.setContentsMargins(4, 8, W.PAGE_MARGIN, 18)
-        self.lay.setSpacing(12)
+        self.lay.setSpacing(10)
         self.setWidget(self.content)
         self.viewport().setAutoFillBackground(False)
         self.content.setAutoFillBackground(False)
@@ -102,6 +102,8 @@ class App(QMainWindow):
         self.resize(1080, 740)
         self.setMinimumSize(920, 600)
         self.apply_appearance(initial=True)
+        W.expanded_get = self._expanded_get
+        W.expanded_set = self._expanded_set
         self._build()
 
         self._show_timer = QTimer(self)
@@ -121,6 +123,13 @@ class App(QMainWindow):
             self.show()
 
     # ------------------------------------------------------------------ раскладка
+    def _expanded_get(self, key: str) -> bool:
+        return key in (self.core.settings.get("ui", "expanded") or [])
+
+    def _expanded_set(self, key: str, on: bool) -> None:
+        keys = [k for k in (self.core.settings.get("ui", "expanded") or []) if k != key]
+        self.core.settings.set("ui", "expanded", keys + [key] if on else keys)
+
     def _build(self) -> None:
         from .home import HomePage
         from .log_page import LogPage
