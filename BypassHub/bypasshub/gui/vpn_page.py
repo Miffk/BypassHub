@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 
 from .. import vpn, winutil
-from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO
+from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO, STRICT_DETAILS, STRICT_INTRO
 from ..vpn import Profile
 from . import widgets as W
 from .surface import GradientPage
@@ -112,6 +112,11 @@ class VpnPage(GradientPage):
         self.killswitch.pack(anchor="w", pady=3)
         ctk.CTkLabel(body, text=KILLSWITCH_DETAILS, text_color=W.GRAY, anchor="w",
                      justify="left", wraplength=640, font=ctk.CTkFont(size=11)).pack(fill="x")
+        self.ks_strict = ctk.CTkSwitch(body, text="Строгий режим: без интернета, даже когда VPN выключен",
+                                       command=self._strict_changed)
+        self.ks_strict.pack(anchor="w", pady=(8, 3))
+        ctk.CTkLabel(body, text=STRICT_INTRO + " " + STRICT_DETAILS, text_color=W.GRAY, anchor="w",
+                     justify="left", wraplength=640, font=ctk.CTkFont(size=11)).pack(fill="x")
 
         W.section(self, "AmneziaWG",
                   "Перед включением отключитесь в приложении AmneziaVPN, если оно открыто, — два VPN "
@@ -130,6 +135,7 @@ class VpnPage(GradientPage):
         self.mode.set(vpn.MODES.get(s.get("vpn", "mode"), vpn.MODES["tun"]))
         W.set_switch(self.ru_direct, s.get("vpn", "ru_direct"))
         W.set_switch(self.killswitch, s.get("vpn", "killswitch"))
+        W.set_switch(self.ks_strict, s.get("vpn", "killswitch_strict"))
         W.set_entry(self.port, s.get("vpn", "proxy_port"))
         self._exclude_load()
         self.render()
@@ -330,6 +336,14 @@ class VpnPage(GradientPage):
     def _killswitch_changed(self) -> None:
         self.app.core.settings.set("vpn", "killswitch", bool(self.killswitch.get()))
         if self.app.vpn_state.mode == "tun" or self.app.vpn_state.reconnecting:
+            self.app.pages["home"][1].apply_vpn("Применение настроек…")
+
+    def _strict_changed(self) -> None:
+        on = bool(self.ks_strict.get())
+        core = self.app.core
+        vs = self.app.vpn_state
+        self.app.run_task(lambda: core.set_killswitch_strict(on))
+        if vs.running and vs.mode == "tun" and not core.settings.get("vpn", "killswitch"):
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
 
     def _port_changed(self) -> None:

@@ -24,6 +24,7 @@ RED = {"dark": "#ff6b6b", "light": "#dc2626"}
 ICONS = {
     "home": "", "shield": "", "send": "", "sync": "",
     "settings": "", "list": "", "power": "", "vpn": "", "heart": "",
+    "news": "",
 }
 
 P: Palette = PL.make_palette({"mode": "dark"})

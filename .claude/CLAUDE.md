@@ -7,7 +7,7 @@
 Владелец разрешил доводить работу до релиза самому (разрешения — в `.claude/settings.json`).
 Когда работа закончена:
 1. Прогони тесты затронутых частей (ядро: `cd Android/core && go test -tags with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0 -ldflags=-checklinkname=0 ./bhcore/`; Windows: `cd BypassHub && python -m pytest -q`).
-2. Посмотри последний релиз в Releases и подними `__version__` в `BypassHub/bypasshub/__init__.py` выше него — один номер дважды не выпускать.
+2. Посмотри последний релиз в Releases и подними `__version__` в `BypassHub/bypasshub/__init__.py` выше него — один номер дважды не выпускать. Добавь в начало `BypassHub/bypasshub/changelog.py` запись для этой версии: что нового, простыми словами для пользователя (её показывает вкладка «Что нового»; без записи тест не пройдёт).
 3. Закоммить, запушь, открой pull request в основную ветку (`claude/focused-archimedes-3ibw3w`).
 4. Дождись зелёной сборки BypassHub build. Красная — чини, не сливай.
 5. Слей pull request и запусти релиз: workflow `bypasshub.yml`, ветка — основная, release = номер версии.
