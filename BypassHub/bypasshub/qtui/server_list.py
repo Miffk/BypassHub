@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
+from .. import palette as PL
 from .. import vpn
 from ..vpn import Profile
 from . import style as S
@@ -78,10 +79,12 @@ class ServerPicker(QWidget):
         W.clear_layout(self.lay)
         self._rows = {}
         if not profiles:
-            self.lay.addWidget(W.label("Серверов пока нет — добавьте ключ во вкладке VPN.", "muted"))
+            self.lay.addWidget(W.label("Серверов пока нет — добавьте ключ во вкладке VPN.", "muted", wrap=True))
+            self.lay.addStretch(1)
             return
         if auto_ok:
-            self._row(vpn.AUTO_TAG, "⚡ Авто — лучший сервер",
+            self._row(vpn.AUTO_TAG, "Авто — лучший сервер",
+                      "Выбирает самый быстрый сам" if self.compact else
                       "Сам выбирает самый быстрый сервер (VLESS или Hysteria2) и переключается, если он перестал отвечать",
                       selected == vpn.AUTO_TAG, None)
         for p in profiles:
@@ -95,15 +98,23 @@ class ServerPicker(QWidget):
         home = self.app.pages["home"][1] if "home" in self.app.pages else None
         fr = _Row(lambda r=rid: (home or self.app.pages["home"][1]).select_server(r))
         fr.setProperty("active", "true" if active else "false")
+        if self.compact:
+            fr.setFixedHeight(52)
         lay = QHBoxLayout(fr)
-        lay.setContentsMargins(14, 8, 10, 8)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(12)
+        # значок в кружке: молния — «авто», глобус — сервер; у выбранного — цвета темы
+        icon = W.icon_label("bolt" if rid == vpn.AUTO_TAG else "vpn", 16)
+        icon.setFixedSize(32, 32)
+        fill_c, fill_a = S.surface2_alpha()
+        icon.setStyleSheet(f"background: {S.P.accent if active else S.rgba(fill_c, fill_a * 1.5)}; border-radius: 16px;")
+        W.set_icon_color(icon, PL.readable_on([S.P.accent]) if active else S.P.text)
+        lay.addWidget(icon)
         left = QVBoxLayout()
         left.setSpacing(1)
         head = QHBoxLayout()
         head.setSpacing(10)
-        name = W.label(("● " if active else "") + title, "h2")
-        if active:
-            W.set_label_color(name, S.P.accent)
+        name = W.label(title, "h2")
         head.addWidget(name)
         if badge:
             head.addWidget(W.label(badge, "small"))
@@ -112,7 +123,7 @@ class ServerPicker(QWidget):
         head.addWidget(now)
         head.addStretch(1)
         left.addLayout(head)
-        sub = W.label(subtitle, "small", wrap=True)
+        sub = W.label(subtitle, "small", wrap=not self.compact)
         left.addWidget(sub)
         lay.addLayout(left, 1)
         ping = W.label("")
@@ -127,7 +138,7 @@ class ServerPicker(QWidget):
                 lay.addWidget(W.button("✎", lambda p=profile: self.on_rename(p), flat=True))
             if self.on_remove:
                 lay.addWidget(W.button("✕", lambda p=profile: self.on_remove(p), flat=True))
-        for w in (name, now, sub, ping):
+        for w in (icon, name, now, sub, ping):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.lay.addWidget(fr)
         self._rows[rid] = {"ping": ping, "now": now, "profile": profile}

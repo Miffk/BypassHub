@@ -5,7 +5,7 @@ from bypasshub.gui.surface import build_mapping, gradient_column
 def test_palette_tint_colors_background():
     neutral = T.make_palette({"mode": "dark", "colors": ["#ff0000"], "tint": 0})
     tinted = T.make_palette({"mode": "dark", "colors": ["#ff0000"], "tint": 100})
-    assert neutral.bg == "#0f1115"
+    assert neutral.bg == "#0d0e11"   # нейтральная база в духе Apple
     r, g, b = T.hex_to_rgb(tinted.bg)
     assert r > g and r > b  # фон окрасился в красный
 

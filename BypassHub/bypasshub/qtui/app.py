@@ -152,11 +152,9 @@ class App(QMainWindow):
         nav_lay = QVBoxLayout(self.nav)
         nav_lay.setContentsMargins(16, 22, 16, 14)
         nav_lay.setSpacing(3)
-        self.logo = W.GradientText(APP_NAME, 17)
+        self.logo = W.Brand(APP_NAME)
         nav_lay.addWidget(self.logo)
-        sub = W.label("Zapret · TG WS Proxy · VPN", "small")
-        nav_lay.addWidget(sub)
-        nav_lay.addSpacing(16)
+        nav_lay.addSpacing(18)
         lay.addWidget(self.nav)
 
         self.stack = QStackedWidget()
@@ -183,7 +181,7 @@ class App(QMainWindow):
         self._butterfly_timer.timeout.connect(self.play_butterflies)
         self._butterfly_timer.start(self.BUTTERFLY_PERIOD_MS)
         QTimer.singleShot(1200, self.play_butterflies)
-        support = W.NavButton("Поддержать проект", "heart")
+        support = self.support_btn = W.NavButton("Поддержать проект", "heart")
         support.setCheckable(False)
         support.clicked.connect(lambda: winutil.open_url(SUPPORT_URL))
         nav_lay.addWidget(support)
@@ -219,8 +217,9 @@ class App(QMainWindow):
         self.nav_items["changelog"].text_label.setText("Что нового")
 
     def _restyle_nav(self) -> None:
-        for item in getattr(self, "nav_items", {}).values():
-            item.restyle()
+        for item in list(getattr(self, "nav_items", {}).values()) + [getattr(self, "support_btn", None)]:
+            if item is not None:
+                item.restyle()
 
     def show_page(self, key: str) -> None:
         self.current_page = key

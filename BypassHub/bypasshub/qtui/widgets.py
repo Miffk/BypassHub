@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Iterable, List, Optional
 
 from PySide6.QtCore import (Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt, Signal)
-from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QCheckBox, QComboBox, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -324,17 +324,17 @@ class Segmented(QFrame):
 # ====================================================================== переключатель
 
 class Toggle(QAbstractButton):
-    """Переключатель с плавным ходом ползунка; дорожка включённого — градиент темы."""
+    """Переключатель как в iOS: дорожка цвета темы, белый ползунок с мягкой тенью, плавный ход."""
 
     def __init__(self, text: str = "", on_toggle: Optional[Callable[[bool], None]] = None, big: bool = False):
         super().__init__()
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setText(text)
-        self._w, self._h = (56, 30) if big else (40, 22)
+        self._w, self._h = (52, 31) if big else (42, 25)
         self._pos = 0.0
         self._anim = QPropertyAnimation(self, b"knob", self)
-        self._anim.setDuration(140)
+        self._anim.setDuration(180)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.toggled.connect(self._animate)
         if on_toggle is not None:
@@ -373,28 +373,7 @@ class Toggle(QAbstractButton):
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        h = self._h
-        y = (self.height() - h) / 2
-        track = QRectF(1, y, self._w - 2, h)
-        path = QPainterPath()
-        path.addRoundedRect(track, h / 2, h / 2)
-        off = S.qcolor(S.P.text, 0.22)
-        if self._pos > 0:
-            g = QLinearGradient(track.topLeft(), track.topRight())
-            acc = S.P.accents if len(S.P.accents) > 1 else S.P.accents * 2
-            for i, c in enumerate(acc):
-                col = QColor(c)
-                col.setAlphaF(self._pos if self.isEnabled() else self._pos * 0.5)
-                g.setColorAt(i / (len(acc) - 1), col)
-            p.fillPath(path, off)
-            p.fillPath(path, QBrush(g))
-        else:
-            p.fillPath(path, off)
-        d = h - 6
-        x = track.left() + 3 + (track.width() - 6 - d) * self._pos
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#ffffff" if S.P.mode == "dark" or self._pos > 0.5 else "#fbfbfd"))
-        p.drawEllipse(QRectF(x, y + 3, d, d))
+        paint_switch(p, QRectF(1, (self.height() - self._h) / 2, self._w - 2, self._h), self._pos, self.isEnabled())
         if self.text():
             p.setPen(S.qcolor(S.P.text if self.isEnabled() else S.P.muted))
             r = self.rect().adjusted(self._w + 10, 0, 0, 0)
@@ -402,20 +381,48 @@ class Toggle(QAbstractButton):
         p.end()
 
 
+def paint_switch(p: QPainter, track: QRectF, pos: float, enabled: bool = True,
+                 on_color: Optional[QColor] = None) -> None:
+    """Переключатель iOS в прямоугольнике track; pos — 0 (выкл) … 1 (вкл)."""
+    h = track.height()
+    path = QPainterPath()
+    path.addRoundedRect(track, h / 2, h / 2)
+    fill_c, fill_a = S.surface2_alpha()
+    p.fillPath(path, S.qcolor(fill_c, min(1.0, fill_a * 1.6)))
+    if pos > 0:
+        on = QColor(on_color) if on_color is not None else QColor(S.P.accent)
+        on.setAlphaF(pos * (1.0 if enabled else 0.45))
+        p.fillPath(path, on)
+    d = h - 4
+    x = track.left() + 2 + (track.width() - 4 - d) * pos
+    knob = QRectF(x, track.top() + 2, d, d)
+    p.setPen(Qt.PenStyle.NoPen)
+    for i, a in enumerate((0.10, 0.06, 0.03)):  # мягкая тень под ползунком
+        p.setBrush(QColor(0, 0, 0, int(255 * a)))
+        p.drawEllipse(knob.adjusted(-i * 0.6, 0.8 + i * 0.6, i * 0.6, 1.2 + i * 0.6))
+    p.setBrush(QColor("#ffffff"))
+    p.drawEllipse(knob)
+
+
 # ====================================================================== плитка сервиса
 
-class PowerTile(QAbstractButton):
-    """Большая плитка вкл/выкл на главной: включённая залита градиентом темы."""
+TILE_ICONS = {"Zapret": "shield", "TG WS Proxy": "send", "VPN": "vpn"}
 
-    def __init__(self, title: str):
+
+class PowerTile(QAbstractButton):
+    """Большая плитка вкл/выкл на главной — как модуль Пункта управления Apple: значок в кружке,
+    переключатель, название и состояние. Включённая подсвечена цветом темы."""
+
+    def __init__(self, title: str, icon: str = ""):
         super().__init__()
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.title = title
+        self.icon = icon or TILE_ICONS.get(title, "power")
         self.on = False
         self.busy = False
         self.status = ""
         self.details = ""
-        self.setMinimumHeight(190)
+        self.setMinimumHeight(196)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._hover = False
 
@@ -438,77 +445,353 @@ class PowerTile(QAbstractButton):
         super().leaveEvent(e)
 
     def sizeHint(self) -> QSize:
-        return QSize(220, 190)
+        return QSize(220, 196)
+
+    def _status_parts(self) -> tuple:
+        """«● Работает» → (цвет точки, «Работает»)."""
+        text = self.status or ""
+        dot = None
+        if text[:1] in ("●", "○", "⟳"):
+            mark, text = text[0], text[1:].strip()
+            dot = S.yellow() if (self.busy or mark == "⟳") else (S.green() if mark == "●" else S.P.muted)
+        elif self.busy:
+            dot = S.yellow()
+        return dot, text
 
     def paintEvent(self, _e) -> None:
+        from . import icons
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        dark = S.P.mode == "dark"
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
-        path.addRoundedRect(r, 20, 20)
+        path.addRoundedRect(r, 22, 22)
+        c, a = S.card_alpha()
+        p.fillPath(path, S.qcolor(c, a * (1.25 if self._hover else 1.0)))
+        accent = QColor(S.P.accent)
         if self.on:
-            g = QLinearGradient(r.topLeft(), r.bottomRight())
-            acc = S.P.accents if len(S.P.accents) > 1 else S.P.accents * 2
-            for i, c in enumerate(acc):
-                g.setColorAt(i / (len(acc) - 1), QColor(c))
+            # мягкое свечение цвета темы из левого верхнего угла
+            g = QRadialGradient(r.left() + 40, r.top() + 40, r.width() * 0.95)
+            g.setColorAt(0, S.qcolor(S.P.accent, 0.34 if dark else 0.20))
+            g.setColorAt(1, S.qcolor(S.P.accent, 0.0))
             p.fillPath(path, QBrush(g))
-            fg = QColor(PL.readable_on(S.P.accents))
-            sub = QColor(fg)
-            sub.setAlphaF(0.85)
-        else:
-            c, a = S.card_alpha()
-            p.fillPath(path, S.qcolor(c, a))
-            fg, sub = QColor(S.P.text), QColor(S.P.muted)
-        if self._hover and not self.busy:
-            p.fillPath(path, QColor(255, 255, 255, 26 if self.on else 12))
-        pad = 22
-        # переключатель в правом верхнем углу
-        tw, th = 50, 28
-        tx, ty = r.right() - pad - tw, r.top() + pad
-        track = QPainterPath()
-        track.addRoundedRect(QRectF(tx, ty, tw, th), th / 2, th / 2)
-        p.fillPath(track, QColor(255, 255, 255, 80) if self.on else S.qcolor(S.P.text, 0.22))
-        knob = th - 8
-        kx = tx + (tw - 4 - knob if self.on else 4)
+        p.setPen(QPen(S.qcolor(S.P.accent, 0.55) if self.on else
+                      (S.qcolor("#ffffff", 0.09) if dark else S.qcolor("#000000", 0.07)), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        pad = 20
+        # значок в кружке
+        d = 46
+        circle = QRectF(r.left() + pad, r.top() + pad, d, d)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#ffffff"))
-        p.drawEllipse(QRectF(kx, ty + 4, knob, knob))
-        # тексты
-        f = QFont(self.font())
-        f.setPointSizeF(16)
-        f.setBold(True)
-        while f.pointSizeF() > 11 and p.fontMetrics().horizontalAdvance(self.title) > 0 and \
-                self._text_width(f, self.title) > tx - r.left() - pad - 10:
-            f.setPointSizeF(f.pointSizeF() - 0.5)
-        p.setFont(f)
-        p.setPen(fg)
-        p.drawText(QRectF(r.left() + pad, ty, tx - r.left() - pad, th),
+        fill_c, fill_a = S.surface2_alpha()
+        p.setBrush(accent if self.on else S.qcolor(fill_c, fill_a * 1.4))
+        p.drawEllipse(circle)
+        ic = PL.readable_on([S.P.accent]) if self.on else S.P.text
+        icons.paint(p, self.icon, circle.adjusted(12, 12, -12, -12), ic, 1.9)
+        # переключатель справа вверху
+        tw, th = 48, 29
+        paint_switch(p, QRectF(r.right() - pad - tw, r.top() + pad + (d - th) / 2, tw, th),
+                     1.0 if self.on else 0.0, not self.busy)
+        # название
+        title_font = QFont(S.display_font_family())
+        title_font.setPointSizeF(15)
+        title_font.setWeight(QFont.Weight.Bold)
+        p.setFont(title_font)
+        p.setPen(S.qcolor(S.P.text))
+        top = circle.bottom() + 14
+        p.drawText(QRectF(r.left() + pad, top, r.width() - 2 * pad, 26),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.title)
-        f2 = QFont(self.font())
-        f2.setPointSizeF(11)
-        f2.setBold(True)
-        p.setFont(f2)
-        p.setPen(fg if (self.on or self.busy) else sub)
-        p.drawText(QRectF(r.left() + pad, r.top() + 82, r.width() - 2 * pad, 24),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.status)
-        f3 = QFont(self.font())
-        f3.setPointSizeF(9)
-        p.setFont(f3)
-        p.setPen(sub)
-        p.drawText(QRectF(r.left() + pad, r.top() + 110, r.width() - 2 * pad, r.height() - 120),
+        # состояние с цветной точкой
+        dot, text = self._status_parts()
+        sf = QFont(self.font())
+        sf.setPointSizeF(10)
+        sf.setWeight(QFont.Weight.DemiBold)
+        p.setFont(sf)
+        x = r.left() + pad
+        y = top + 28
+        if dot:
+            p.setBrush(QColor(dot))
+            p.drawEllipse(QRectF(x, y + 7, 8, 8))
+            x += 15
+        p.setPen(S.qcolor(S.P.text if (self.on or self.busy) else S.P.muted))
+        p.drawText(QRectF(x, y, r.right() - pad - x, 22), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   text)
+        # подробности
+        df = QFont(self.font())
+        df.setPointSizeF(8.75)
+        p.setFont(df)
+        p.setPen(S.qcolor(S.P.muted))
+        p.drawText(QRectF(r.left() + pad, y + 24, r.width() - 2 * pad, r.bottom() - y - 30),
                    Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, self.details)
         p.end()
 
-    @staticmethod
-    def _text_width(font: QFont, text: str) -> float:
-        from PySide6.QtGui import QFontMetricsF
-        return QFontMetricsF(font).horizontalAdvance(text)
+
+def _ping_color(text: str) -> Optional[str]:
+    """«48 мс» → цвет как у пинга серверов."""
+    try:
+        ms = float(text.split()[0])
+    except (ValueError, IndexError):
+        return None
+    return S.green() if ms < 150 else (S.yellow() if ms < 350 else S.red())
+
+
+def _font(size: float, weight=QFont.Weight.Normal, display: bool = False) -> QFont:
+    f = QFont(S.display_font_family() if display else S.ui_font_family())
+    f.setPointSizeF(size)
+    f.setWeight(weight)
+    return f
+
+
+def _card_path(p: QPainter, r: QRectF, radius: float, lit: bool, glow_at=None, glow: float = 0.34) -> QPainterPath:
+    """Подложка карточки-«стекла»; lit — включённая: свечение цвета темы и кайма."""
+    dark = S.P.mode == "dark"
+    path = QPainterPath()
+    path.addRoundedRect(r, radius, radius)
+    c, a = S.card_alpha()
+    p.fillPath(path, S.qcolor(c, a))
+    if lit:
+        x, y = glow_at or (r.left() + 40, r.top() + 40)
+        g = QRadialGradient(x, y, r.width() * 0.8)
+        g.setColorAt(0, S.qcolor(S.P.accent, glow if dark else glow * 0.6))
+        g.setColorAt(1, S.qcolor(S.P.accent, 0.0))
+        p.fillPath(path, QBrush(g))
+    p.setPen(QPen(S.qcolor(S.P.accent, 0.5) if lit else S.hairline_qcolor(), 1))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPath(path)
+    return path
+
+
+class HeroTile(PowerTile):
+    """Главная карточка VPN: большая круглая кнопка включения, состояние, сервер с пингом,
+    «чипы» режима и время подключения."""
+
+    def __init__(self, title: str = "VPN"):
+        super().__init__(title, "vpn")
+        self.setMinimumHeight(196)
+        self._since: Optional[float] = None
+        from PySide6.QtCore import QTimer
+        self._clock = QTimer(self)
+        self._clock.timeout.connect(self.update)
+        self._clock.start(1000)
+
+    def sizeHint(self) -> QSize:
+        return QSize(600, 196)
+
+    def set(self, on=None, status=None, details=None, busy=None) -> None:
+        import time
+        was = self.on
+        super().set(on, status, details, busy)
+        if self.on and not was:
+            self._since = time.monotonic()
+        elif not self.on:
+            self._since = None
+
+    def _elapsed(self) -> str:
+        import time
+        if self._since is None or self.busy:
+            return ""
+        sec = int(time.monotonic() - self._since)
+        return f"{sec // 3600:02d}:{sec % 3600 // 60:02d}:{sec % 60:02d}"
+
+    def paintEvent(self, _e) -> None:
+        from . import icons
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        pad = 28
+        rad = 62
+        cx, cy = r.left() + pad + rad, r.center().y()
+        _card_path(p, r, 24, self.on, (cx, cy), 0.42)
+        # большая кнопка
+        p.setPen(Qt.PenStyle.NoPen)
+        if self.on and not self.busy:
+            for k, a in ((22, 0.10), (12, 0.18)):
+                p.setBrush(S.qcolor(S.P.accent, a))
+                p.drawEllipse(QRectF(cx - rad - k, cy - rad - k, 2 * (rad + k), 2 * (rad + k)))
+        fill_c, fill_a = S.surface2_alpha()
+        circle = QRectF(cx - rad, cy - rad, 2 * rad, 2 * rad)
+        if self.on:
+            g = QLinearGradient(circle.topLeft(), circle.bottomRight())
+            acc = S.P.accents if len(S.P.accents) > 1 else [S.P.accent, PL.mix(S.P.accent, "#000000", 0.25)]
+            for i, c in enumerate(acc):
+                g.setColorAt(i / (len(acc) - 1), QColor(c))
+            p.setBrush(QBrush(g))
+        else:
+            p.setBrush(S.qcolor(fill_c, fill_a * (2.0 if self._hover else 1.5)))
+        p.drawEllipse(circle)
+        if self.busy:
+            p.setPen(QPen(QColor(S.yellow()), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawArc(circle.adjusted(-7, -7, 7, 7), 90 * 16, -270 * 16)
+        ic = PL.readable_on(S.P.accents) if self.on else S.P.text
+        icons.paint(p, "power", circle.adjusted(rad * 0.58, rad * 0.58, -rad * 0.58, -rad * 0.58), ic, 2.0)
+        # тексты
+        x = circle.right() + 34
+        width = r.right() - pad - x
+        dot, text = self._status_parts()
+        p.setFont(_font(9, QFont.Weight.DemiBold))
+        p.setPen(S.qcolor(S.P.muted))
+        p.drawText(QRectF(x, r.top() + 30, width, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   "VPN")
+        elapsed = self._elapsed()
+        if elapsed:
+            p.drawText(QRectF(x, r.top() + 30, width, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       "подключено " + elapsed)
+        p.setFont(_font(22, QFont.Weight.Bold, display=True))
+        p.setPen(QColor(dot) if (dot and self.on and not self.busy) else S.qcolor(S.P.text))
+        p.drawText(QRectF(x, r.top() + 50, width, 40), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   text or "—")
+        lines = [ln for ln in (self.details or "").split("\n") if ln.strip()]
+        y = r.top() + 98
+        if lines:
+            parts = [x_.strip() for x_ in lines[0].split(" · ")]
+            ping = parts[-1] if len(parts) > 1 and parts[-1].endswith("мс") else ""
+            name = " · ".join(parts[:-1] if ping else parts)
+            icons.paint(p, "vpn", QRectF(x, y + 3, 18, 18), S.P.accent, 1.8)
+            p.setFont(_font(12, QFont.Weight.DemiBold))
+            p.setPen(S.qcolor(S.P.text))
+            fm = p.fontMetrics()
+            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, int(width - 110))
+            p.drawText(QRectF(x + 26, y, width - 26, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       name)
+            if ping:
+                px = x + 26 + fm.horizontalAdvance(name) + 12
+                p.setFont(_font(10.5, QFont.Weight.Bold))
+                p.setPen(QColor(_ping_color(ping) or S.P.muted))
+                p.drawText(QRectF(px, y, 100, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, ping)
+        # чипы режима
+        chips = [c.strip() for ln in lines[1:] for c in ln.split(" · ") if c.strip()]
+        cx_ = x
+        y = r.top() + 138
+        p.setFont(_font(8.75, QFont.Weight.Medium))
+        fm = p.fontMetrics()
+        for chip in chips:
+            w = fm.horizontalAdvance(chip) + 22
+            if cx_ + w > r.right() - pad:
+                break
+            pill = QPainterPath()
+            pill.addRoundedRect(QRectF(cx_, y, w, 26), 13, 13)
+            p.fillPath(pill, S.qcolor(S.P.accent, 0.18) if self.on else S.qcolor(fill_c, fill_a * 1.3))
+            p.setPen(S.qcolor(S.P.text))
+            p.drawText(QRectF(cx_, y, w, 26), Qt.AlignmentFlag.AlignCenter, chip)
+            cx_ += w + 8
+        if not chips and not self.on and not self.busy:
+            p.setFont(_font(9))
+            p.setPen(S.qcolor(S.P.muted))
+            p.drawText(QRectF(x, y, width, 26), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       "Нажмите на кнопку, чтобы подключиться")
+        p.end()
+
+
+class ServiceTile(PowerTile):
+    """Компактная плитка сервиса: значок, название, состояние, переключатель — в одну строку."""
+
+    def __init__(self, title: str, icon: str = ""):
+        super().__init__(title, icon)
+        self.setMinimumHeight(96)
+
+    def sizeHint(self) -> QSize:
+        return QSize(360, 96)
+
+    def paintEvent(self, _e) -> None:
+        from . import icons
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        pad = 18
+        d = 46
+        circle = QRectF(r.left() + pad, r.center().y() - d / 2, d, d)
+        _card_path(p, r, 20, self.on, (circle.center().x(), circle.center().y()), 0.30)
+        if self._hover and not self.busy:
+            hp = QPainterPath()
+            hp.addRoundedRect(r, 20, 20)
+            p.fillPath(hp, S.qcolor(S.P.text, 0.03))
+        fill_c, fill_a = S.surface2_alpha()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(S.P.accent) if self.on else S.qcolor(fill_c, fill_a * 1.4))
+        p.drawEllipse(circle)
+        icons.paint(p, self.icon, circle.adjusted(12, 12, -12, -12),
+                    PL.readable_on([S.P.accent]) if self.on else S.P.text, 1.9)
+        tw, th = 46, 28
+        paint_switch(p, QRectF(r.right() - pad - tw, r.center().y() - th / 2, tw, th), 1.0 if self.on else 0.0,
+                     not self.busy)
+        x = circle.right() + 14
+        width = r.right() - pad - tw - 12 - x
+        p.setFont(_font(12.5, QFont.Weight.Bold, display=True))
+        p.setPen(S.qcolor(S.P.text))
+        top = r.center().y() - 31
+        p.drawText(QRectF(x, top, width, 22), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   self.title)
+        dot, text = self._status_parts()
+        p.setFont(_font(9.25, QFont.Weight.DemiBold))
+        tx = x
+        if dot:
+            p.setBrush(QColor(dot))
+            p.drawEllipse(QRectF(tx, top + 30, 7, 7))
+            tx += 13
+        p.setPen(S.qcolor(S.P.text if (self.on or self.busy) else S.P.muted))
+        p.drawText(QRectF(tx, top + 24, width, 19), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   text)
+        first = (self.details or "").split("\n")[0]
+        p.setFont(_font(8.5))
+        p.setPen(S.qcolor(S.P.muted))
+        first = p.fontMetrics().elidedText(first, Qt.TextElideMode.ElideRight, int(width))
+        p.drawText(QRectF(x, top + 44, width, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   first)
+        p.end()
+
+
+class StatusItem(QWidget):
+    """Сервис в «Доступности»: значок в кружке, название, состояние цветом и задержка."""
+
+    def __init__(self, name: str, icon: str):
+        super().__init__()
+        self.name, self.icon = name, icon
+        self.state, self.color, self.extra = "—", None, ""
+        self.setMinimumHeight(58)
+
+    def set(self, state: str, color: Optional[str], extra: str = "") -> None:
+        if (state, color, extra) != (self.state, self.color, self.extra):
+            self.state, self.color, self.extra = state, color, extra
+            self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(160, 58)
+
+    def paintEvent(self, _e) -> None:
+        from . import icons
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        h = self.height()
+        d = 38
+        circle = QRectF(0, (h - d) / 2, d, d)
+        fill_c, fill_a = S.surface2_alpha()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(S.qcolor(self.color, 0.18) if self.color else S.qcolor(fill_c, fill_a * 1.4))
+        p.drawEllipse(circle)
+        icons.paint(p, self.icon, circle.adjusted(10, 10, -10, -10), self.color or S.P.text, 1.8)
+        x = d + 12
+        p.setFont(_font(10.5, QFont.Weight.DemiBold))
+        p.setPen(S.qcolor(S.P.text))
+        p.drawText(QRectF(x, h / 2 - 19, self.width() - x, 19), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                   self.name)
+        p.setFont(_font(8.75, QFont.Weight.Medium))
+        p.setPen(QColor(self.color) if self.color else S.qcolor(S.P.muted))
+        line = self.state + (f" · {self.extra}" if self.extra else "")
+        p.drawText(QRectF(x, h / 2 + 1, self.width() - x, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                   line)
+        p.end()
 
 
 # ====================================================================== градиентный фон
 
 class GradientBackground(QWidget):
-    """Фон окна — вертикальный градиент по цветам темы (страница или боковое меню)."""
+    """Фон окна. Страница — нейтральная база с мягким свечением цветов темы (как обои macOS),
+    боковое меню — ровный цвет и тонкая граница справа."""
 
     def __init__(self, side: bool = False, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -517,15 +800,63 @@ class GradientBackground(QWidget):
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
-        stops = S.P.side_stops if self.side else S.P.page_stops
-        g = QLinearGradient(0, 0, 0, self.height())
-        if len(stops) == 1:
-            stops = stops * 2
-        # «туда и обратно», как в прежнем окне: край — первый цвет, середина — последний
-        seq = list(stops) + list(reversed(stops))[1:]
-        for i, c in enumerate(seq):
-            g.setColorAt(i / (len(seq) - 1), QColor(c))
-        p.fillRect(self.rect(), QBrush(g))
+        w, h = self.width(), self.height()
+        if self.side:
+            p.fillRect(self.rect(), QColor(PL.gradient_at(S.P.side_stops, 0.5)))
+            p.fillRect(QRectF(w - 1, 0, 1, h), QColor(S.hairline_qcolor()))
+            p.end()
+            return
+        p.fillRect(self.rect(), QColor(S.P.bg))
+        dark = S.P.mode == "dark"
+        strength = (0.30 if dark else 0.20) * max(0.15, S.P.tint)
+        acc = S.P.accents
+        # свечение: первый цвет — справа сверху, последний — слева снизу, средний — по центру
+        spots = [(acc[0], 0.92, -0.10, 0.85)]
+        if len(acc) > 1:
+            spots.append((acc[-1], 0.05, 1.08, 0.80))
+        if len(acc) > 2:
+            spots.append((acc[1], 0.55, 0.55, 0.55))
+        for color, fx, fy, radius in spots:
+            g = QRadialGradient(w * fx, h * fy, max(w, h) * radius)
+            g.setColorAt(0, S.qcolor(color, strength))
+            g.setColorAt(0.55, S.qcolor(color, strength * 0.35))
+            g.setColorAt(1, S.qcolor(color, 0))
+            p.fillRect(self.rect(), QBrush(g))
+        p.end()
+
+
+class Brand(QWidget):
+    """Логотип в меню: значок-«скруглённый квадрат» с градиентом темы и название."""
+
+    def __init__(self, name: str):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 0, 0, 0)
+        lay.setSpacing(10)
+        self.badge = _BrandBadge()
+        lay.addWidget(self.badge)
+        lay.addWidget(label(name, "brand"))
+        lay.addStretch(1)
+
+
+class _BrandBadge(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(30, 30)
+
+    def paintEvent(self, _e) -> None:
+        from . import icons
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(r, 8.5, 8.5)
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        acc = S.P.accents if len(S.P.accents) > 1 else [S.P.accent, PL.mix(S.P.accent, "#ffffff", 0.35)]
+        for i, c in enumerate(acc):
+            g.setColorAt(i / (len(acc) - 1), QColor(c))
+        p.fillPath(path, QBrush(g))
+        icons.paint(p, "bolt", r.adjusted(7, 7, -7, -7), PL.readable_on(S.P.accents), 2.0)
         p.end()
 
 
@@ -556,17 +887,23 @@ class GradientText(QLabel):
 
 # ====================================================================== значки
 
-def icon_label(name: str, size: int = 12) -> QLabel:
-    glyph = S.ICONS.get(name, "")
-    lbl = QLabel(glyph if S.icon_font_family() else "")
-    f = QFont(S.icon_font_family() or S.ui_font_family())
-    f.setPointSizeF(size)
-    lbl.setFont(f)
+def icon_label(name: str, size: int = 16) -> QLabel:
+    lbl = QLabel()
+    lbl.setFixedSize(size + 2, size + 2)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setProperty("icon_name", name)
+    lbl.setProperty("icon_size", size)
     return lbl
 
 
+def set_icon_color(lbl: QLabel, color: str) -> None:
+    from . import icons
+    lbl.setPixmap(icons.pixmap(lbl.property("icon_name"), color, int(lbl.property("icon_size")),
+                               max(2.0, lbl.devicePixelRatioF())))
+
+
 class NavButton(QPushButton):
-    """Пункт бокового меню: значок и название."""
+    """Пункт бокового меню, как в macOS: значок цвета темы и название; выбранный — залит цветом темы."""
 
     def __init__(self, text: str, icon: str):
         super().__init__()
@@ -574,22 +911,23 @@ class NavButton(QPushButton):
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 12, 0)
-        lay.setSpacing(12)
-        self.icon = icon_label(icon, 11)
+        lay.setContentsMargins(10, 0, 10, 0)
+        lay.setSpacing(10)
+        self.icon = icon_label(icon, 17)
         self.text_label = QLabel(text)
         for w in (self.icon, self.text_label):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lay.addWidget(self.icon)
         lay.addWidget(self.text_label, 1)
-        self.setMinimumHeight(42)
+        self.setMinimumHeight(36)
         self.toggled.connect(self._restyle)
 
     def _restyle(self, on: bool) -> None:
-        color = PL.readable_on(S.P.accents) if on else S.P.muted
-        css = f"color: {color};" + (" font-weight: 600;" if on else "")
+        on_accent = PL.readable_on([S.P.accent])
+        color = on_accent if on else S.P.text
+        css = f"color: {color}; font-weight: {600 if on else 500};"
         self.text_label.setStyleSheet(css)
-        self.icon.setStyleSheet(f"color: {color};")
+        set_icon_color(self.icon, on_accent if on else S.P.accent)
 
     def restyle(self) -> None:
         self._restyle(self.isChecked())

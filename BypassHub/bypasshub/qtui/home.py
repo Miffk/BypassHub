@@ -5,7 +5,7 @@ import time
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QScrollArea, QSizePolicy, QVBoxLayout
 
 from .. import netcheck, tgproxy, winutil
 from ..core import UpdateInfo, VpnState
@@ -142,8 +142,9 @@ class HomePage(Page):
         head = QHBoxLayout()
         left = QVBoxLayout()
         left.setSpacing(0)
-        left.addWidget(W.label("BypassHub", "title"))
-        left.addWidget(W.label("Нажмите на плитку, чтобы включить или выключить сервис", "muted"))
+        left.addWidget(W.label("Главная", "title"))
+        self.summary = W.label("", "muted")
+        left.addWidget(self.summary)
         head.addLayout(left, 1)
         # заново проверить доступность Discord / YouTube / Telegram
         self.refresh_btn = W.button("⟳  Проверить", self.check_services, width=130)
@@ -151,46 +152,88 @@ class HomePage(Page):
         head.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.lay.addLayout(head)
 
-        self.banner = W.Card(name="banner", margins=(14, 10, 10, 10))
-        banner_row = QHBoxLayout()
-        self.banner_label = W.label("", wrap=True)
-        banner_row.addWidget(self.banner_label, 1)
-        banner_row.addWidget(W.button("Обновить", lambda: app.run_updates(force_install=True), primary=True))
-        self.banner.body.addLayout(banner_row)
-        self.banner.hide()
-        self.lay.addWidget(self.banner)
+        # VPN — большая карточка с кнопкой включения
+        self.vpn_card = self._service(W.HeroTile("VPN"), self.toggle_vpn)
+        self.lay.addWidget(self.vpn_card.tile)
 
-        tiles = QGridLayout()
-        tiles.setHorizontalSpacing(12)
-        self.zapret_card = self._tile(tiles, 0, "Zapret", self.toggle_zapret)
-        self.tg_card = self._tile(tiles, 1, "TG WS Proxy", self.toggle_tg)
-        self.vpn_card = self._tile(tiles, 2, "VPN", self.toggle_vpn)
-        self.lay.addLayout(tiles)
+        # Zapret и TG WS Proxy — компактные плитки слева, серверы VPN — справа
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        col = QVBoxLayout()
+        col.setSpacing(12)
+        self.zapret_card = self._service(W.ServiceTile("Zapret", "shield"), self.toggle_zapret)
+        self.tg_card = self._service(W.ServiceTile("TG WS Proxy", "send"), self.toggle_tg)
+        col.addWidget(self.zapret_card.tile)
+        col.addWidget(self.tg_card.tile)
+        # быстрые настройки VPN — те же, что во вкладке VPN
+        quick = W.Card(margins=(18, 12, 18, 14), spacing=8)
+        quick.body.addWidget(W.label("Быстрые настройки VPN", "h2"))
+        self.quick_ru = W.Toggle("Российское — напрямую", lambda on: self._quick("ru_direct", on))
+        self.quick_ks = W.Toggle("Kill switch: без VPN — без интернета", lambda on: self._quick("killswitch", on))
+        quick.body.addWidget(self.quick_ru)
+        quick.body.addWidget(self.quick_ks)
+        col.addWidget(quick)
+        col.addStretch(1)
+        row.addLayout(col, 1)
 
-        # серверы VPN: выбор, пинг, «авто» (показывается, когда серверов больше одного)
         from .server_list import ServerPicker
         self.vpn_pings: Dict[str, Optional[float]] = {}
         self.vpn_pings_real = False
         self._ping_at = 0.0
         self._pinging = False
-        self.servers_card = W.Card(margins=(18, 14, 18, 14))
+        self.servers_card = W.Card(margins=(16, 14, 12, 12))
         shead = QHBoxLayout()
-        shead.addWidget(W.label("Серверы VPN", "h2"))
+        shead.addWidget(W.label("Серверы", "h2"))
         self.ping_note = W.label("", "small")
         shead.addWidget(self.ping_note)
         shead.addStretch(1)
         # подписки обновляются и сами, но новые серверы бывают нужны сразу
-        self.subs_btn = W.button("⟳ Обновить серверы", lambda: self.app.pages["vpn"][1].refresh_subs())
-        self.ping_btn = W.button("Проверить пинг", self.ping_servers, width=150)
+        self.subs_btn = W.button("⟳", lambda: self.app.pages["vpn"][1].refresh_subs())
+        self.subs_btn.setToolTip("Обновить серверы из подписок")
+        self.ping_btn = W.button("Проверить пинг", self.ping_servers)
         shead.addWidget(self.subs_btn)
         shead.addWidget(self.ping_btn)
         self.servers_card.body.addLayout(shead)
         self.servers = ServerPicker(app, compact=True)
-        self.servers_card.body.addWidget(self.servers)
-        self.servers_card.hide()
-        self.lay.addWidget(self.servers_card)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self.servers)
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        scroll.setMinimumHeight(150)
+        self.servers_card.body.addWidget(scroll, 1)
+        self.add_server_btn = W.button("Добавить сервер", lambda: self.app.show_page("vpn"), primary=True)
+        self.servers_card.body.addWidget(self.add_server_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        row.addWidget(self.servers_card, 1)
+        self.lay.addLayout(row, 1)
+
+        # доступность сервисов и обновления
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        avail = W.Card(margins=(18, 14, 18, 14))
+        avail.body.addWidget(W.label("Доступность", "h2"))
+        items = QHBoxLayout()
+        items.setSpacing(12)
+        self.avail_items = {name: W.StatusItem(name, icon) for name, icon in
+                            (("Discord", "chat"), ("YouTube", "play"), ("Telegram", "send"))}
+        for item in self.avail_items.values():
+            items.addWidget(item, 1)
+        avail.body.addLayout(items)
+        row.addWidget(avail, 2)
+        self.banner = W.Card(margins=(18, 14, 18, 14))
+        self.banner.body.addWidget(W.label("Обновления", "h2"))
+        self.banner_label = W.label("", "muted", wrap=True)
+        self.banner.body.addWidget(self.banner_label)
+        self.update_btn = W.button("Обновить", lambda: app.run_updates(force_install=True), primary=True)
+        self.updates_btn = W.button("Открыть", lambda: app.show_page("updates"))
+        self.banner.body.addLayout(W.hbox(self.update_btn, self.updates_btn))
+        row.addWidget(self.banner, 1)
+        self.lay.addLayout(row)
+        self.on_infos([])
         self.pickers = [self.servers]
-        self.finish()
+        self._sync_quick()
 
         self._avail: Dict[str, netcheck.ServiceState] = {}
         self._vpn_state = VpnState()
@@ -204,10 +247,7 @@ class HomePage(Page):
         QTimer.singleShot(1500, self._periodic_check)
         self._periodic.start(self.CHECK_PERIOD_MS)
 
-    def _tile(self, grid: QGridLayout, column: int, title: str, on_toggle: Callable[[bool], None]) -> ServiceControl:
-        tile = W.PowerTile(title)
-        grid.addWidget(tile, 0, column)
-        grid.setColumnStretch(column, 1)
+    def _service(self, tile: W.PowerTile, on_toggle: Callable[[bool], None]) -> ServiceControl:
         control = ServiceControl(tile, on_toggle)
         tile.clicked.connect(lambda: control.toggle())
         control.set_state(False, "…", None, "")
@@ -311,6 +351,7 @@ class HomePage(Page):
             self.vpn_pings.update({k: float(v) for k, v in vs.delays.items()})
             self.vpn_pings_real = True
         self._render_vpn()
+        self._update_summary()
 
     def _server_name(self, pid: str) -> str:
         return next((p.name for p in self.app.core.vpn_profiles() if p.id == pid), pid)
@@ -321,7 +362,8 @@ class HomePage(Page):
         active = core.vpn_active()
         auto = core.vpn_is_auto()
         profiles = core.vpn_profiles()
-        self.servers_card.setVisible(len(profiles) >= 2)
+        self.add_server_btn.setVisible(not profiles)
+        self._sync_quick()
         for picker in self.pickers:
             picker.render()
         self.subs_btn.setVisible(bool(core.settings.get("vpn", "subscriptions")))
@@ -452,6 +494,7 @@ class HomePage(Page):
     # ------------------------------------------------------------------ статус
     def on_status(self, zs: ZapretStatus, ts: TgStatus) -> None:
         self._zs, self._ts = zs, ts
+        self._render_avail()
         core = self.app.core
         avail_z = self.availability(("Discord", "YouTube"))
         avail_t = self.availability(("Telegram",))
@@ -470,7 +513,7 @@ class HomePage(Page):
                 details += (f"\nВнимание: запущен {core.zapret.engine_name} из другой папки: "
                             + ", ".join(zs.foreign_processes))
             self.zapret_card.set_state(True, "● Работает", S.green(), with_avail(details, avail_z),
-                                       tile_details=with_avail(strategy.removesuffix(".bat"), avail_z))
+                                       tile_details=f"Стратегия {strategy.removesuffix('.bat')}")
         elif zs.service_installed:
             self.zapret_card.set_state(True, "⚠ Служба не работает", S.yellow(),
                                        f"Служба установлена, но не работает ({zs.service_state}). "
@@ -478,7 +521,7 @@ class HomePage(Page):
                                        tile_details="Выберите другую стратегию во вкладке Zapret")
         else:
             self.zapret_card.set_state(False, "○ Выключен", None, with_avail(f"Версия {zs.version}", avail_z),
-                                       tile_details=avail_z)
+                                       tile_details="Обход блокировок Discord и YouTube")
 
         if not ts.installed:
             self.tg_card.set_state(False, "Не установлен", None, "Загрузка начнётся автоматически.",
@@ -489,7 +532,7 @@ class HomePage(Page):
             if ts.listening:
                 self.tg_card.set_state(True, f"● Работает на {addr}", S.green(),
                                        with_avail(f"Версия {ts.version}", avail_t),
-                                       tile_details=with_avail(addr, avail_t), tile_status="● Работает")
+                                       tile_details=f"Прокси {addr}", tile_status="● Работает")
             else:
                 self.tg_card.set_state(True, "⚠ Порт не отвечает", S.yellow(),
                                        "Процесс запущен, но порт не отвечает. Проверьте лог прокси ниже.",
@@ -499,11 +542,49 @@ class HomePage(Page):
             if ts.foreign:
                 details += "\nЗапущена другая копия TgWsProxy — закройте её перед включением: " + \
                            ", ".join(ts.foreign)
-            self.tg_card.set_state(False, "○ Выключен", None, with_avail(details, avail_t), tile_details=avail_t)
+            self.tg_card.set_state(False, "○ Выключен", None, with_avail(details, avail_t),
+                                   tile_details="Telegram без VPN")
+        self._update_summary()
 
     def on_infos(self, infos: List[UpdateInfo]) -> None:
+        from .. import __version__
         pending = [i for i in infos if i.available and i.installed]
         if pending:
-            self.banner_label.setText("Доступны обновления: " +
-                                      ", ".join(f"{i.title} {i.installed} → {i.latest}" for i in pending))
-        self.banner.setVisible(bool(pending))
+            self.banner_label.setText("Доступно: " + ", ".join(f"{i.title} {i.latest}" for i in pending))
+        else:
+            self.banner_label.setText(f"BypassHub {__version__} · всё актуально" if infos else
+                                      f"BypassHub {__version__}")
+        self.update_btn.setVisible(bool(pending))
+        self.updates_btn.setVisible(not pending)
+
+    def _quick(self, key: str, on: bool) -> None:
+        """Переключатель с главной — как такой же во вкладке VPN (там же и применяется)."""
+        vp = self.app.pages["vpn"][1]
+        W.set_checked(vp.ru_direct if key == "ru_direct" else vp.killswitch, on)
+        (vp._ru_changed if key == "ru_direct" else vp._killswitch_changed)(on)
+
+    def _sync_quick(self) -> None:
+        s = self.app.core.settings
+        W.set_checked(self.quick_ru, s.get("vpn", "ru_direct"))
+        W.set_checked(self.quick_ks, s.get("vpn", "killswitch"))
+
+    def _update_summary(self) -> None:
+        """Строка под заголовком: что сейчас работает."""
+        names = [n for n, c in (("VPN", self.vpn_card), ("Zapret", self.zapret_card), ("TG WS Proxy", self.tg_card))
+                 if c.on]
+        text = ("Работает: " + ", ".join(names)) if names else "Всё выключено — нажмите на сервис, чтобы включить"
+        W.set_text(self.summary, text)
+
+    def _render_avail(self) -> None:
+        for name, item in self.avail_items.items():
+            st = self._avail.get(name)
+            if self._checking:
+                item.set("Проверка…", None)
+            elif st is None:
+                item.set("Не проверено", None)
+            elif st.ok:
+                item.set("Доступен", S.green(), f"{st.ms:.0f} мс" if st.ms else "")
+            elif st.partial:
+                item.set("Частично", S.yellow())
+            else:
+                item.set("Недоступен", S.red())
