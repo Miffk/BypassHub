@@ -312,3 +312,12 @@ h2 { font: 600 14px "Inter", sans-serif; letter-spacing: -0.1px; }
 .rate.up .ic { color: var(--accent-3); transform: rotate(180deg); }
 .speed-chart { width: 100%; height: 52px; margin: 6px 0 4px; overflow: visible; flex: none; }
 .speed-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--faint); font-weight: 600; }
+
+/* ряды главной: карточки в ряду одной высоты, отступы везде одинаковые (12 px) */
+.grid.rows { grid-template-rows: auto auto; align-items: stretch; }
+.grid.rows > .col > .tile { flex: 1; }
+.grid.rows > .servers { min-height: 0; }
+.grid.rows > .servers .server-list { flex: 1 1 auto; height: 0; min-height: 0; max-height: none; }
+.grid.rows > .quick, .grid.rows > .speed { display: flex; flex-direction: column; }
+.grid.rows > .quick { justify-content: space-between; }
+.grid.rows > .speed .speed-chart { flex: 1 1 auto; min-height: 40px; height: 0; }

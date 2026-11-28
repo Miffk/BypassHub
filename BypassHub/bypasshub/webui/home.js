@@ -22,29 +22,27 @@ window.Home = (() => {
       </div>
       <div class="spark" id="spark"></div>
     </section>
-    <div class="grid">
+    <div class="grid rows">
       <div class="col">
         <section class="card tile" id="tile-zapret" data-act="zapret"></section>
         <section class="card tile" id="tile-tg" data-act="tg"></section>
-        <section class="card quick">
+      </div>
+      <section class="card servers">
+        <div class="card-head"><h2>Серверы</h2>
+          <button class="btn small" data-act="ping" id="ping">Проверить пинг</button></div>
+        <div class="server-list" id="servers"></div>
+      </section>
+      <section class="card quick">
           <h2>Быстрые настройки VPN</h2>
           <label class="switch-row"><span>Российское — напрямую</span>
             <input type="checkbox" class="switch" data-toggle="ru_direct" id="q-ru"></label>
           <label class="switch-row"><span>Kill switch: без VPN — без интернета</span>
             <input type="checkbox" class="switch" data-toggle="killswitch" id="q-ks"></label>
-          <label class="switch-row"><span>Строгий режим: без интернета и при выключенном VPN</span>
+          <label class="switch-row"><span>Строгий режим: и при выключенном VPN</span>
             <input type="checkbox" class="switch" data-toggle="strict" id="q-strict"
               data-confirm-on="Строгий режим: пока VPN выключен, интернет будет закрыт для всех программ, кроме BypassHub и локальной сети. Он откроется, когда вы включите VPN или закроете BypassHub.&#10;&#10;Включить?"></label>
         </section>
-      </div>
-      <div class="col">
-        <section class="card servers">
-          <div class="card-head"><h2>Серверы</h2>
-            <button class="btn small" data-act="ping" id="ping">Проверить пинг</button></div>
-          <div class="server-list" id="servers"></div>
-        </section>
-        <section class="card speed" id="speed"></section>
-      </div>
+      <section class="card speed" id="speed"></section>
     </div>
     <div class="grid bottom">
       <section class="card avail"><h2>Доступность</h2><div class="avail-row" id="avail"></div></section>
