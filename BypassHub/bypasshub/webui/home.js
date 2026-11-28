@@ -32,6 +32,9 @@ window.Home = (() => {
             <input type="checkbox" class="switch" data-toggle="ru_direct" id="q-ru"></label>
           <label class="switch-row"><span>Kill switch: без VPN — без интернета</span>
             <input type="checkbox" class="switch" data-toggle="killswitch" id="q-ks"></label>
+          <label class="switch-row"><span>Строгий режим: без интернета и при выключенном VPN</span>
+            <input type="checkbox" class="switch" data-toggle="strict" id="q-strict"
+              data-confirm-on="Строгий режим: пока VPN выключен, интернет будет закрыт для всех программ, кроме BypassHub и локальной сети. Он откроется, когда вы включите VPN или закроете BypassHub.&#10;&#10;Включить?"></label>
         </section>
       </div>
       <div class="col">
@@ -184,6 +187,7 @@ window.Home = (() => {
     tile("tile-tg", "TG WS Proxy", "send", s.tg);
     document.getElementById("q-ru").checked = !!s.quick.ru;
     document.getElementById("q-ks").checked = !!s.quick.ks;
+    document.getElementById("q-strict").checked = !!s.quick.strict;
     servers(s.servers || []);
     speed(s.speed);
     avail(s.avail || []);

@@ -150,7 +150,8 @@ def updates_state(app) -> Dict[str, Any]:
 def state(app) -> Dict[str, Any]:
     s = app.core.settings
     return {"vpn": vpn_state(app), "zapret": zapret_state(app), "tg": tg_state(app),
-            "quick": {"ru": bool(s.get("vpn", "ru_direct")), "ks": bool(s.get("vpn", "killswitch"))},
+            "quick": {"ru": bool(s.get("vpn", "ru_direct")), "ks": bool(s.get("vpn", "killswitch")),
+                      "strict": bool(s.get("vpn", "killswitch_strict"))},
             "servers": servers(app), "ip": ip_state(app), "speed": speed_state(app), "avail": avail(app), "updates": updates_state(app),
             "checking": "check" in app.busy, "pinging": "ping" in app.busy}
 
@@ -187,6 +188,7 @@ ACTIONS = {
     "server": lambda app, v: app.select_server(str(v)),
     "ru_direct": _quick("ru_direct"),
     "killswitch": _quick("killswitch"),
+    "strict": lambda app, v: __import__("bypasshub.webapp.pages.vpn", fromlist=["_strict"])._strict(app, v),
     "update_all": lambda app, v: app.run_updates(force_install=True),
     "tg.open": _tg_open,
 }

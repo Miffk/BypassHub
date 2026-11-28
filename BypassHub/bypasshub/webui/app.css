@@ -208,8 +208,8 @@ h2 { font: 600 14px "Inter", sans-serif; letter-spacing: -0.1px; }
 .spark .lbl b { color: var(--text); font-weight: 700; }
 
 /* ---------------------------------------------------------------- сетка */
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.grid.bottom { grid-template-columns: 2fr 1fr; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.grid.bottom { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .col { display: flex; flex-direction: column; gap: 12px; }
 
 .tile { display: flex; align-items: center; gap: 14px; padding: 14px 16px; cursor: pointer; }
@@ -237,7 +237,8 @@ h2 { font: 600 14px "Inter", sans-serif; letter-spacing: -0.1px; }
   box-shadow: 0 2px 6px rgba(0,0,0,.25), 0 0 1px rgba(0,0,0,.2); transition: transform .3s var(--ease); }
 .switch:checked { background: var(--accent); }
 .switch:checked::after { transform: translateX(18px); }
-.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; cursor: pointer; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; cursor: pointer; }
+.quick .switch-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .switch-row + .switch-row { border-top: 1px solid var(--glass-edge); }
 .quick h2 { margin-bottom: 4px; }
 
