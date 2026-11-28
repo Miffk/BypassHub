@@ -16,9 +16,10 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
 from .. import palette as PL
 from ..palette import Palette
 
-GREEN = {"dark": "#3ddc84", "light": "#16a34a"}
-YELLOW = {"dark": "#f6c343", "light": "#c27c0e"}
-RED = {"dark": "#ff6b6b", "light": "#dc2626"}
+# системные цвета Apple (тёмная / светлая тема)
+GREEN = {"dark": "#30d158", "light": "#248a3d"}
+YELLOW = {"dark": "#ffd60a", "light": "#b25000"}
+RED = {"dark": "#ff453a", "light": "#d70015"}
 
 # глифы Segoe Fluent Icons / Segoe MDL2 Assets (есть в Windows 10/11)
 ICONS = {
@@ -59,17 +60,56 @@ def qcolor(color: str, alpha: float = 1.0) -> QColor:
 
 
 def card_alpha() -> Tuple[str, float]:
-    """Подложка карточки поверх градиента: (цвет, непрозрачность) — как Palette.card_on."""
-    return ("#ffffff", 0.055) if P.mode == "dark" else ("#ffffff", 0.72)
+    """Подложка карточки поверх фона: (цвет, непрозрачность) — «стекло» в духе Apple."""
+    return ("#ffffff", 0.05) if P.mode == "dark" else ("#ffffff", 0.82)
 
 
 def surface2_alpha() -> Tuple[str, float]:
-    """Подложка строк и полей внутри карточек."""
-    return ("#ffffff", 0.07) if P.mode == "dark" else ("#1b2440", 0.05)
+    """Заливка кнопок, полей и строк внутри карточек — системная «fill» Apple."""
+    return ("#76768a", 0.22) if P.mode == "dark" else ("#76768a", 0.11)
+
+
+def hairline() -> str:
+    """Тонкая граница карточек и разделители."""
+    return rgba("#ffffff", 0.08) if P.mode == "dark" else rgba("#000000", 0.07)
+
+
+def hairline_qcolor() -> QColor:
+    return qcolor("#ffffff", 0.07) if P.mode == "dark" else qcolor("#000000", 0.08)
+
+
+_fonts_loaded = False
+UI_FONT = "Inter"
+DISPLAY_FONT = "Inter Display"
+
+
+def load_fonts() -> None:
+    """Шрифт Inter (близок к San Francisco) — из assets/fonts; одинаковый в Windows и Linux."""
+    global _fonts_loaded
+    if _fonts_loaded:
+        return
+    _fonts_loaded = True
+    from PySide6.QtGui import QFontDatabase
+    from ..paths import resource_path
+    folder = resource_path("assets/fonts")
+    for f in sorted(folder.glob("*.ttf")) if folder.is_dir() else []:
+        QFontDatabase.addApplicationFont(str(f))
+
+
+def _has_family(name: str) -> bool:
+    from PySide6.QtGui import QFontDatabase
+    return name in QFontDatabase.families()
 
 
 def ui_font_family() -> str:
+    if _has_family(UI_FONT):
+        return UI_FONT
     return "Segoe UI Variable Text" if sys.platform == "win32" else "Noto Sans"
+
+
+def display_font_family() -> str:
+    """Для крупных заголовков: Inter Display (плотнее, как SF Pro Display)."""
+    return DISPLAY_FONT if _has_family(DISPLAY_FONT) else ui_font_family()
 
 
 def icon_font_family() -> str:
@@ -77,9 +117,11 @@ def icon_font_family() -> str:
 
 
 def base_font() -> QFont:
+    load_fonts()
     f = QFont(ui_font_family())
-    f.setPointSizeF(10)
+    f.setPointSizeF(9.75)
     f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     return f
 
 
@@ -131,92 +173,103 @@ def stylesheet(p: Palette) -> str:
     dark = p.mode == "dark"
     text, muted = p.text, p.muted
     card_c, card_a = card_alpha()
-    s2_c, s2_a = surface2_alpha()
-    surf2 = rgba(s2_c, s2_a)
-    surf2_hover = rgba(s2_c, s2_a * 1.8)
-    border = rgba(text, 0.16 if dark else 0.14)
-    menu_bg = PL.mix(p.bg, "#ffffff", 0.07) if dark else PL.mix(p.bg, "#ffffff", 0.85)
-    accent_grad = gradient(p.accents)
-    accent_grad_hover = gradient([PL.mix(c, "#ffffff", 0.12) for c in p.accents])
-    on_accent = PL.readable_on(p.accents)
+    fill_c, fill_a = surface2_alpha()
+    fill = rgba(fill_c, fill_a)
+    fill_hover = rgba(fill_c, fill_a * 1.55)
+    fill_press = rgba(fill_c, fill_a * 2.1)
+    line = hairline()
+    accent = p.accent
+    accent_hover = PL.mix(accent, "#ffffff", 0.12)
+    accent_press = PL.mix(accent, "#000000", 0.12)
+    on_accent = PL.readable_on([accent])
+    menu_bg = "#232327" if dark else "#fdfdfe"
+    seg_on = "#5b5b63" if dark else "#ffffff"
     check = _check_image(on_accent)
     chevron = _chevron_image(muted)
+    disp = display_font_family()
     return f"""
 * {{ color: {text}; }}
 QMainWindow, QDialog {{ background: {p.bg}; }}
-QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {border}; padding: 4px 6px; }}
+QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {line}; border-radius: 8px; padding: 6px 8px; }}
 QLabel {{ background: transparent; }}
-QLabel[role="title"] {{ font-size: 20pt; font-weight: 700; }}
-QLabel[role="h1"] {{ font-size: 16pt; font-weight: 700; }}
-QLabel[role="h2"] {{ font-size: 11.5pt; font-weight: 600; }}
+QLabel[role="title"] {{ font-family: "{disp}"; font-size: 23pt; font-weight: 700; }}
+QLabel[role="h1"] {{ font-family: "{disp}"; font-size: 16pt; font-weight: 700; }}
+QLabel[role="h2"] {{ font-size: 11pt; font-weight: 600; }}
 QLabel[role="muted"] {{ color: {muted}; }}
 QLabel[role="small"] {{ color: {muted}; font-size: 8.5pt; }}
-QLabel[role="status"] {{ font-size: 11pt; font-weight: 600; }}
-QLabel[role="mono"] {{ font-family: Consolas, monospace; }}
-QLabel[role="help"] {{ color: {muted}; border: 1px solid {border}; border-radius: 9px; font-size: 8pt;
-    font-weight: 600; }}
-QLabel[role="help"]:hover {{ color: {text}; border-color: {p.accent}; }}
-QLabel[role="group"] {{ color: {muted}; font-size: 9pt; font-weight: 600; }}
-QFrame#card {{ background: {rgba(card_c, card_a)}; border-radius: 16px; }}
-QFrame#row {{ background: {surf2}; border-radius: 12px; }}
-QFrame#row[active="true"] {{ border: 2px solid {p.accent}; }}
-QFrame#banner {{ background: {rgba(card_c, card_a)}; border: 1px solid {p.accent}; border-radius: 14px; }}
-QFrame#warn {{ background: {rgba("#f6c343", 0.14)}; border: 1px solid {rgba("#f6c343", 0.5)}; border-radius: 10px; }}
-QFrame#segbar {{ background: {surf2}; border-radius: 10px; }}
+QLabel[role="status"] {{ font-size: 10.5pt; font-weight: 600; }}
+QLabel[role="mono"] {{ font-family: "JetBrains Mono", Consolas, monospace; }}
+QLabel[role="help"] {{ color: {muted}; background: {fill}; border-radius: 9px; font-size: 8pt; font-weight: 700; }}
+QLabel[role="help"]:hover {{ color: {on_accent}; background: {accent}; }}
+QLabel[role="group"] {{ color: {muted}; font-size: 8.5pt; font-weight: 600; letter-spacing: 0.4px; }}
+QLabel[role="brand"] {{ font-family: "{disp}"; font-size: 13.5pt; font-weight: 700; }}
+QFrame#card {{ background: {rgba(card_c, card_a)}; border: 1px solid {line}; border-radius: 18px; }}
+QFrame#row {{ background: {fill}; border: 1px solid transparent; border-radius: 12px; }}
+QFrame#row:hover {{ background: {fill_hover}; }}
+QFrame#row[active="true"] {{ background: {rgba(accent, 0.16 if dark else 0.10)}; border: 1px solid {rgba(accent, 0.75)}; }}
+QFrame#banner {{ background: {rgba(accent, 0.12)}; border: 1px solid {rgba(accent, 0.45)}; border-radius: 16px; }}
+QFrame#warn {{ background: {rgba("#ffd60a", 0.12)}; border: 1px solid {rgba("#ffd60a", 0.45)}; border-radius: 12px; }}
+QFrame#segbar {{ background: {fill}; border-radius: 10px; }}
+QFrame#separator {{ background: {line}; max-height: 1px; min-height: 1px; border: none; }}
 
-QPushButton {{ background: transparent; border: 1px solid {border}; border-radius: 10px; padding: 7px 16px;
-              min-height: 20px; }}
-QPushButton:hover {{ background: {surf2_hover}; }}
-QPushButton:pressed {{ background: {surf2}; }}
-QPushButton:disabled {{ color: {muted}; border-color: {rgba(text, 0.08)}; }}
-QPushButton#primary {{ border: none; color: {on_accent}; background: {accent_grad}; font-weight: 600; }}
-QPushButton#primary:hover {{ background: {accent_grad_hover}; }}
-QPushButton#primary:disabled {{ background: {surf2}; color: {muted}; }}
-QPushButton#flat {{ border: none; padding: 4px 8px; color: {muted}; }}
-QPushButton#flat:hover {{ background: {surf2_hover}; color: {text}; }}
-QPushButton#nav {{ border: none; text-align: left; padding: 9px 12px; border-radius: 12px; color: {muted};
-                  font-size: 10pt; }}
-QPushButton#nav:hover {{ background: {surf2_hover}; color: {text}; }}
-QPushButton#nav:checked {{ background: {accent_grad}; color: {on_accent}; font-weight: 600; }}
-QPushButton#seg {{ border: none; border-radius: 8px; padding: 6px 10px; color: {text}; }}
-QPushButton#seg:hover {{ background: {surf2_hover}; }}
-QPushButton#seg:checked {{ background: {p.accent}; color: {PL.readable_on([p.accent])}; font-weight: 600; }}
+QPushButton {{ background: {fill}; border: none; border-radius: 16px; padding: 7px 16px; min-height: 18px;
+              font-weight: 500; }}
+QPushButton:hover {{ background: {fill_hover}; }}
+QPushButton:pressed {{ background: {fill_press}; }}
+QPushButton:disabled {{ color: {rgba(text, 0.3)}; background: {rgba(fill_c, fill_a * 0.6)}; }}
+QPushButton#primary {{ color: {on_accent}; background: {accent}; font-weight: 600; }}
+QPushButton#primary:hover {{ background: {accent_hover}; }}
+QPushButton#primary:pressed {{ background: {accent_press}; }}
+QPushButton#primary:disabled {{ background: {fill}; color: {rgba(text, 0.3)}; }}
+QPushButton#flat {{ background: transparent; padding: 4px 8px; color: {muted}; border-radius: 8px; }}
+QPushButton#flat:hover {{ background: {fill}; color: {text}; }}
+QPushButton#nav {{ background: transparent; text-align: left; padding: 0; border-radius: 9px; min-height: 36px; }}
+QPushButton#nav:hover {{ background: {rgba(text, 0.06)}; }}
+QPushButton#nav:checked {{ background: {accent}; }}
+QPushButton#seg {{ background: transparent; border-radius: 8px; padding: 6px 10px; color: {text}; font-weight: 500; }}
+QPushButton#seg:hover {{ background: {rgba(text, 0.05)}; }}
+QPushButton#seg:checked {{ background: {seg_on}; color: {text}; font-weight: 600; }}
 
-QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{ background: {surf2}; border: 1px solid {border}; border-radius: 8px;
-    padding: 6px 8px; selection-background-color: {p.accent}; selection-color: {on_accent}; }}
-QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 1px solid {p.accent}; }}
-QPlainTextEdit[role="mono"], QLineEdit[role="mono"] {{ font-family: Consolas, monospace; font-size: 9.5pt; }}
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{ background: {fill}; border: 1px solid transparent; border-radius: 10px;
+    padding: 7px 10px; selection-background-color: {accent}; selection-color: {on_accent}; }}
+QLineEdit:hover, QPlainTextEdit:hover, QComboBox:hover {{ background: {fill_hover}; }}
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 1px solid {accent}; background: {fill}; }}
+QPlainTextEdit[role="mono"], QLineEdit[role="mono"] {{ font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 9.5pt; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; margin-right: 10px; }}
-QComboBox QAbstractItemView {{ background: {menu_bg}; border: 1px solid {border}; padding: 4px; outline: none;
-    selection-background-color: {p.accent}; selection-color: {on_accent}; }}
+QComboBox QAbstractItemView {{ background: {menu_bg}; border: 1px solid {line}; border-radius: 10px; padding: 4px;
+    outline: none; selection-background-color: {accent}; selection-color: {on_accent}; }}
 
-QCheckBox {{ spacing: 8px; background: transparent; }}
-QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 2px solid {muted}; background: transparent; }}
-QCheckBox::indicator:hover {{ border-color: {p.accent}; }}
-QCheckBox::indicator:checked {{ background: {p.accent}; border-color: {p.accent}; image: url({check}); }}
+QCheckBox {{ spacing: 9px; background: transparent; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid {rgba(text, 0.35)};
+    background: {rgba(fill_c, fill_a * 0.5)}; }}
+QCheckBox::indicator:hover {{ border-color: {accent}; }}
+QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; image: url({check}); }}
 
 QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
-QScrollBar:vertical {{ background: transparent; width: 12px; margin: 6px 3px 6px 3px; }}
-QScrollBar::handle:vertical {{ background: {rgba(text, 0.22)}; border-radius: 3px; min-height: 40px; }}
-QScrollBar::handle:vertical:hover {{ background: {rgba(text, 0.38)}; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 8px 2px 8px 2px; }}
+QScrollBar::handle:vertical {{ background: {rgba(text, 0.18)}; border-radius: 3px; min-height: 40px; }}
+QScrollBar::handle:vertical:hover {{ background: {rgba(text, 0.34)}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 QScrollBar:horizontal {{ height: 0; }}
 
-QProgressBar {{ background: {surf2}; border: none; border-radius: 4px; max-height: 8px; text-align: center; color: transparent; }}
-QProgressBar::chunk {{ background: {accent_grad}; border-radius: 4px; }}
-QSlider::groove:horizontal {{ height: 6px; background: {surf2}; border-radius: 3px; }}
-QSlider::sub-page:horizontal {{ background: {p.accent}; border-radius: 3px; }}
-QSlider::handle:horizontal {{ background: {p.knob}; width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; }}
+QProgressBar {{ background: {fill}; border: none; border-radius: 3px; max-height: 6px; text-align: center;
+    color: transparent; }}
+QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}
+QSlider::groove:horizontal {{ height: 4px; background: {fill}; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: #ffffff; width: 20px; height: 20px; margin: -8px 0; border-radius: 10px;
+    border: 1px solid {rgba("#000000", 0.12)}; }}
 
 QTabWidget::pane {{ border: none; }}
 QTabBar::tab {{ background: transparent; padding: 6px 12px; margin-right: 4px; border-radius: 8px; color: {muted}; }}
-QTabBar::tab:selected {{ background: {surf2}; color: {text}; }}
+QTabBar::tab:selected {{ background: {fill}; color: {text}; }}
 QTabBar::tab:hover {{ color: {text}; }}
-QMenu {{ background: {menu_bg}; border: 1px solid {border}; padding: 4px; }}
+QMenu {{ background: {menu_bg}; border: 1px solid {line}; border-radius: 10px; padding: 5px; }}
 QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
-QMenu::item:selected {{ background: {p.accent}; color: {PL.readable_on([p.accent])}; }}
+QMenu::item:selected {{ background: {accent}; color: {on_accent}; }}
 QMessageBox QLabel {{ font-size: 10pt; }}
 """

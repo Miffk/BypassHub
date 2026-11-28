@@ -48,7 +48,7 @@ class Palette:
 
     def card_on(self, bg: str) -> str:
         """Цвет карточки поверх фона bg."""
-        return mix(bg, "#ffffff", 0.055) if self.mode == "dark" else mix(bg, "#ffffff", 0.72)
+        return mix(bg, "#ffffff", 0.05) if self.mode == "dark" else mix(bg, "#ffffff", 0.85)
 
     def roles(self) -> dict:
         """Именованные цвета — по ним интерфейс перекрашивается на лету."""
@@ -57,8 +57,9 @@ class Palette:
             "knob", "knob_hover")} | {"accent": self.accent}
 
 
-DARK = dict(bg="#0f1115", text="#e9ebf1")
-LIGHT = dict(bg="#f2f4f8", text="#151821")
+# нейтральная база в духе Apple: почти чёрная / светло-серая, цвета темы — только акценты и мягкое свечение
+DARK = dict(bg="#0d0e11", text="#f5f5f7", muted="#98989f")
+LIGHT = dict(bg="#f2f2f6", text="#1d1d1f", muted="#6e6e73")
 
 
 def gradient_at(stops: Sequence[str], t: float) -> str:
@@ -150,10 +151,10 @@ def make_palette(appearance: dict) -> Palette:
     accents = normalize_colors(appearance.get("colors"))
     tint = max(0, min(100, int(appearance.get("tint", 70)))) / 100
     text = base["text"]
-    # фон страниц: база, окрашенная в каждый из акцентных цветов
-    page = [mix(base["bg"], c, (0.30 if dark else 0.40) * tint) for c in accents]
-    # боковая панель — того же цвета, но глубже (тёмная тема) или светлее (светлая)
-    side = [mix(c, "#000000", 0.30) if dark else mix(c, "#ffffff", 0.35) for c in page]
+    # фон страниц: нейтральная база, чуть окрашенная в цвета темы (основное свечение рисует окно)
+    page = [mix(base["bg"], c, (0.10 if dark else 0.07) * tint) for c in accents]
+    # боковая панель — как в macOS: чуть светлее фона (тёмная тема) или чуть темнее (светлая)
+    side = [mix(c, "#ffffff", 0.035) if dark else mix(c, "#000000", 0.035) for c in page]
     bg = gradient_at(page, 0.5)
     p = Palette(mode=mode, accents=accents, tint=tint, page_stops=page, side_stops=side, bg=bg,
                 surface="", surface2="", border="", text=text, muted="", accent_hover="", on_accent="",
@@ -161,7 +162,7 @@ def make_palette(appearance: dict) -> Palette:
     p.surface = p.card_on(bg)
     p.surface2 = mix(p.surface, "#ffffff", 0.06) if dark else mix(p.surface, "#1b2440", 0.05)
     p.border = mix(p.surface, text, 0.16 if dark else 0.13)
-    p.muted = mix(text, bg, 0.42)
+    p.muted = base["muted"]
     p.accent_hover = mix(p.accent, "#ffffff" if dark else "#000000", 0.15)
     p.on_accent = readable_on([p.accent])
     # ползунок переключателя: почти белый в тёмной теме (не #ffffff, чтобы не совпасть

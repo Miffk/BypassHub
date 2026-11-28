@@ -169,7 +169,7 @@ class SettingsPage(Page):
         self.mode.set(MODES.get(a.get("mode"), MODES["dark"]))
         state = (a.get("preset"), tuple((t.get("name"), tuple(t.get("colors") or [])) for t in a.get("saved") or []),
                  tuple(a.get("colors") or []))
-        W.set_text(self.tint_label, f"Насыщенность фона: {int(a.get('tint', 70))}%")
+        W.set_text(self.tint_label, f"Свечение фона: {int(a.get('tint', 70))}%")
         if state == self._shown:
             return
         self._shown = state
@@ -264,7 +264,7 @@ class SettingsPage(Page):
 
     def _tint_changed(self, value: int) -> None:
         self._appearance["tint"] = int(value)
-        W.set_text(self.tint_label, f"Насыщенность фона: {int(value)}%")
+        W.set_text(self.tint_label, f"Свечение фона: {int(value)}%")
         self._tint_timer.start(300)
 
     def _render_custom(self) -> None:
