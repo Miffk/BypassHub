@@ -45,14 +45,16 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --onefile --windowed --uac-admin
           --name BypassHub --icon assets/icon.ico
-          --add-data "assets;assets" --collect-data customtkinter --collect-data certifi
+          --add-data "assets;assets" --add-data "bypasshub/webui;bypasshub/webui"
+          --collect-data customtkinter --collect-data certifi
+          --collect-all webview --collect-all clr_loader --hidden-import clr
           --hidden-import pystray._win32
           main.py
 
       - name: Smoke test exe
         shell: pwsh
         run: |
-          # собранный exe запускается и открывает окно Qt (а не запасное старое)
+          # собранный exe запускается и открывает новое окно (HTML), а не запасное
           $data = Join-Path $env:RUNNER_TEMP "bh-data"
           $p = Start-Process dist\BypassHub.exe -ArgumentList "--data-dir", $data, "--minimized" -PassThru
           Start-Sleep -Seconds 25
@@ -61,8 +63,12 @@ jobs:
           Write-Output $log
           taskkill /T /F /PID $p.Id | Out-Null
           $global:LASTEXITCODE = 0
-          if ($log -notmatch "Qt 6\.") {
-            Write-Output "::error::Окно Qt не запустилось в собранном exe"
+          if ($log -notmatch "Интерфейс: HTML") {
+            Write-Output "::error::Новое окно (HTML) не запустилось в собранном exe"
+            exit 1
+          }
+          if ($log -match "Новый интерфейс не запустился") {
+            Write-Output "::error::Новое окно упало при запуске"
             exit 1
           }
 
@@ -110,7 +116,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libtk8.6 nftables
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libtk8.6 nftables \
+            libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libxkbfile1 libxshmfence1 libgbm1
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller pytest
@@ -126,6 +133,10 @@ jobs:
           python -m PyInstaller --noconfirm --onefile --windowed
           --name BypassHub-linux-x86_64
           --add-data "assets:assets" --add-binary "bypasshub-awg:bin"
+          --add-data "bypasshub/webui:bypasshub/webui"
+          --collect-all webview --collect-submodules qtpy
+          --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore
+          --hidden-import PySide6.QtWebChannel --hidden-import PySide6.QtNetwork
           --collect-data customtkinter --collect-data certifi
           --collect-submodules httpx --collect-submodules httpcore --collect-submodules anyio
           --collect-submodules h2
@@ -135,7 +146,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          # собранный файл запускается и открывает окно Qt; помощник для root отвечает
+          # собранный файл запускается и открывает новое окно (QtWebEngine); помощник для root отвечает
           data="$RUNNER_TEMP/bh-data"
           ./dist/BypassHub-linux-x86_64 --data-dir "$data" --minimized &
           pid=$!
@@ -143,8 +154,12 @@ jobs:
           log=$(cat "$data/logs/bypasshub.log" 2>/dev/null || true)
           echo "$log"
           kill $pid 2>/dev/null || true
-          if ! echo "$log" | grep -q "Qt 6\."; then
-            echo "::error::Окно Qt не запустилось в собранной программе"
+          if ! echo "$log" | grep -q "Интерфейс: HTML" || echo "$log" | grep -q "Новый интерфейс не запустился"; then
+            echo "::error::Новое окно (QtWebEngine) не запустилось в собранной программе"
+            exit 1
+          fi
+          if ! echo "$log" | grep -q "Страница окна загрузилась"; then
+            echo "::error::Страница нового окна не загрузилась в собранной программе"
             exit 1
           fi
           reply=$(printf '{"id":1,"cmd":"ping","args":{}}\n' | sudo ./dist/BypassHub-linux-x86_64 --root-helper "$data" | tail -n 1)
