@@ -20,6 +20,9 @@ class Api:
         self._app = app
 
     def boot(self):
+        if not getattr(self._app, "_booted", False):
+            self._app._booted = True
+            log.info("Страница окна загрузилась")
         return self._app.boot()
 
     def poll(self, page):
@@ -261,12 +264,32 @@ def run(core: Core, start_minimized: bool = False) -> int:
     """Окно на HTML. Исключение (нет движка WebView2, не загрузился pywebview) — запуск откатится
     на окно Qt (main.py)."""
     import webview
+    gui = "edgechromium" if winutil.IS_WINDOWS else "qt"
     app = WindowApp(core, start_minimized)
+    if gui == "qt":
+        # QtWebEngine: окно и трей — в одном приложении Qt; закрытое окно прячется в трей, а не завершает программу
+        import os
+        os.environ.setdefault("QT_API", "pyside6")
+        if winutil.is_admin():
+            # движок Chromium не запускается от root со своей песочницей
+            os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+                                                        + " --no-sandbox").strip()
+        from PySide6 import QtWebEngineWidgets  # noqa: F401 — до создания QApplication
+        from PySide6.QtCore import QCoreApplication, Qt
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+        qapp = QApplication.instance() or QApplication([APP_NAME])
+        qapp.setApplicationName(APP_NAME)
+        qapp.setDesktopFileName("bypasshub")
+        qapp.setQuitOnLastWindowClosed(False)
     try:
-        from ..tray import Tray
-        adapter = _TrayAdapter(app)
-        app.tray = Tray(adapter)
-        app.tray.start()
+        if gui == "qt":
+            app.tray = _QtTray(app)
+        else:
+            from ..tray import Tray
+            app.tray = Tray(_TrayAdapter(app))
+            app.tray.start()
     except Exception as exc:
         log.warning("Иконка в трее недоступна: %r", exc)
         app.tray = None
@@ -285,11 +308,11 @@ def run(core: Core, start_minimized: bool = False) -> int:
     app.window = webview.create_window(APP_NAME, url=index.as_uri(), js_api=Api(app), width=1180, height=800,
                                        min_size=(980, 660), hidden=hidden, background_color=bg, text_select=False)
     app.window.events.closing += app._on_closing
-    log.info("Интерфейс: HTML (pywebview %s)", getattr(webview, "__version__", ""))
+    log.info("Интерфейс: HTML (pywebview %s, %s)", _pywebview_version(), gui)
     storage = core.paths.root / "webview"
     try:
-        webview.start(app._started, gui="edgechromium" if winutil.IS_WINDOWS else None, private_mode=False,
-                      storage_path=str(storage), debug=False, icon=str(resource_path("assets/icon.ico")))
+        webview.start(app._started, gui=gui, private_mode=False, storage_path=str(storage), debug=False,
+                      icon=str(resource_path("assets/icon.ico")))
     except Exception:
         # окно не открылось (например, нет движка WebView2) — убираем трей и горячие клавиши,
         # main.py откроет прежнее окно
@@ -301,6 +324,74 @@ def run(core: Core, start_minimized: bool = False) -> int:
         raise
     app.quit()
     return 0
+
+
+class _QtTray:
+    """Трей для Linux (окно на QtWebEngine): QSystemTrayIcon в потоке окна; обновления состояния
+    приходят из других потоков — через сигнал."""
+
+    def __init__(self, app: WindowApp):
+        from PySide6.QtCore import QObject, Signal
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+        from ..qtui.app import tray_icon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            raise RuntimeError("трей недоступен")
+
+        class Bridge(QObject):
+            state = Signal(bool, bool, bool)
+            message = Signal(str)
+        self._tray_icon = tray_icon
+        self.bridge = Bridge()
+        self.icon = QSystemTrayIcon(tray_icon(False, False, False))
+        self.icon.setToolTip(APP_NAME)
+        home = _TrayHome(app)
+        bg = lambda fn: (lambda *_: threading.Thread(target=fn, daemon=True).start())  # noqa: E731
+        menu = QMenu()
+        menu.addAction("Открыть BypassHub", bg(app.show_window))
+        menu.addSeparator()
+        self.actions = {}
+        for key, text, fn in (("zapret", "Zapret", home.toggle_zapret_from_tray),
+                              ("tg", "TG WS Proxy", home.toggle_tg_from_tray),
+                              ("vpn", "VPN", home.toggle_vpn_from_tray)):
+            act = QAction(text, menu)
+            act.setCheckable(True)
+            act.triggered.connect(bg(fn))
+            menu.addAction(act)
+            self.actions[key] = act
+        menu.addAction("Открыть прокси в Telegram", bg(home.open_in_telegram))
+        menu.addSeparator()
+        menu.addAction("Проверить обновления", bg(app.run_updates))
+        menu.addAction("Выход", bg(app.quit))
+        self.menu = menu
+        self.icon.setContextMenu(menu)
+        self.icon.activated.connect(lambda reason: bg(app.show_window)() if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+        self.bridge.state.connect(self._apply)
+        self.bridge.message.connect(lambda text: self.icon.showMessage(APP_NAME, text))
+        self.icon.show()
+
+    def _apply(self, z: bool, t: bool, v: bool) -> None:
+        self.icon.setIcon(self._tray_icon(z, t, v))
+        self.icon.setToolTip(f"{APP_NAME}\nZapret: {'вкл' if z else 'выкл'}\nTG Proxy: {'вкл' if t else 'выкл'}\n"
+                             f"VPN: {'вкл' if v else 'выкл'}")
+        for key, on in zip(("zapret", "tg", "vpn"), (z, t, v)):
+            self.actions[key].setChecked(on)
+
+    def start(self) -> None:
+        pass
+
+    def update(self, z: bool, t: bool, v: bool = False) -> None:
+        self.bridge.state.emit(bool(z), bool(t), bool(v))
+
+    def notify(self, text: str) -> None:
+        self.bridge.message.emit(text)
+
+    def stop(self) -> None:
+        try:
+            self.bridge.state.disconnect()
+        except Exception:
+            pass
 
 
 class _TrayAdapter:
@@ -321,3 +412,11 @@ class _TrayAdapter:
 
     def quit_app(self):
         self._app.quit()
+
+
+def _pywebview_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("pywebview")
+    except Exception:
+        return "?"

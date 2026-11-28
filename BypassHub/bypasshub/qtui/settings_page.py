@@ -77,10 +77,9 @@ class SettingsPage(Page):
         self._switch(body, "Включать то, что было включено (zapret, прокси)", "restore_state")
         self._switch(body, "Кнопка «закрыть» сворачивает в трей", "close_to_tray")
         self._switch(body, "При выходе выключать zapret (режим «Программа») и прокси", "stop_on_exit")
-        if winutil.IS_WINDOWS:
-            ui = W.Toggle("Новый интерфейс (после перезапуска BypassHub)", self._ui_changed)
-            W.set_checked(ui, self.app.core.settings.get("app", "ui") != "qt")
-            body.addWidget(ui)
+        ui = W.Toggle("Новый интерфейс (после перезапуска BypassHub)", self._ui_changed)
+        W.set_checked(ui, self.app.core.settings.get("app", "ui") != "qt")
+        body.addWidget(ui)
 
         # ------------------------------------------------------------ горячие клавиши
         self.hk_buttons: Dict[str, QPushButton] = {}

@@ -100,8 +100,8 @@ def main() -> int:
 
     core = Core(paths)
     minimized = args.minimized or minimized_by_action or bool(core.settings.get("app", "start_minimized"))
-    if not args.classic_ui and not args.qt_ui and core.settings.get("app", "ui") != "qt" and winutil.IS_WINDOWS:
-        # новое окно на HTML (движок Edge WebView2); не запустилось — прежнее окно Qt
+    if not args.classic_ui and not args.qt_ui and core.settings.get("app", "ui") != "qt":
+        # новое окно на HTML (Windows — движок Edge WebView2, Linux — QtWebEngine); не запустилось — прежнее окно Qt
         try:
             from bypasshub.webapp.window import run as run_web
             return run_web(core, start_minimized=minimized)
