@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BypassHub</title>
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="forms.css">
 </head>
 <body>
 <div class="backdrop" aria-hidden="true">
@@ -23,66 +24,16 @@
     <a class="nav-item support" id="support"></a>
     <div class="version" id="version"></div>
   </aside>
-
-  <main class="content" id="content">
-    <header class="page-head">
-      <div>
-        <h1>Главная</h1>
-        <p class="summary" id="summary"></p>
-      </div>
-      <button class="btn" id="check"></button>
-    </header>
-
-    <section class="card hero" id="hero">
-      <button class="power" id="power" aria-label="Включить или выключить VPN">
-        <span class="ring"></span>
-        <span class="core"></span>
-      </button>
-      <div class="hero-body">
-        <div class="hero-top">
-          <span class="eyebrow">VPN</span>
-          <span class="timer" id="timer"></span>
-        </div>
-        <div class="hero-status" id="hero-status"></div>
-        <div class="hero-server" id="hero-server"></div>
-        <div class="chips" id="chips"></div>
-      </div>
-      <div class="spark" id="spark"></div>
-    </section>
-
-    <div class="grid">
-      <div class="col">
-        <section class="card tile" id="tile-zapret"></section>
-        <section class="card tile" id="tile-tg"></section>
-        <section class="card quick">
-          <h2>Быстрые настройки VPN</h2>
-          <label class="switch-row"><span>Российское — напрямую</span><input type="checkbox" class="switch" id="q-ru"></label>
-          <label class="switch-row"><span>Kill switch: без VPN — без интернета</span><input type="checkbox" class="switch" id="q-ks"></label>
-        </section>
-      </div>
-      <div class="col">
-        <section class="card servers">
-          <div class="card-head">
-            <h2>Серверы</h2>
-            <button class="btn small" id="ping"></button>
-          </div>
-          <div class="server-list" id="servers"></div>
-        </section>
-        <section class="card conn" id="conn"></section>
-      </div>
-    </div>
-
-    <div class="grid bottom">
-      <section class="card avail">
-        <h2>Доступность</h2>
-        <div class="avail-row" id="avail"></div>
-      </section>
-      <section class="card updates" id="updates"></section>
-    </div>
-  </main>
+  <main class="content" id="content"></main>
 </div>
 
+<div id="sheet"></div>
+<div class="toasts" id="toasts"></div>
+<div class="modal-wrap" id="modal" hidden></div>
+
 <script src="icons.js"></script>
+<script src="home.js"></script>
+<script src="forms.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
