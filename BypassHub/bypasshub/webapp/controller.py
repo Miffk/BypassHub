@@ -28,6 +28,7 @@ NAV = [
 PING_MAX_AGE = 300       # с: при открытии главной/VPN пинг обновляется, если старше
 CHECK_PERIOD = 180       # с: доступность сервисов проверяется сама, пока окно открыто
 HISTORY = 24             # точек на графике задержки
+SPEED_POINTS = 60        # секунд на графике скорости
 
 
 class WebApp:
@@ -57,6 +58,11 @@ class WebApp:
         self._closing = False
         self._last_check = 0.0
         self.window: Any = None                    # окно (pywebview) — для диалогов выбора файла и показа
+        self.speed_down: Deque[float] = collections.deque([0.0] * SPEED_POINTS, maxlen=SPEED_POINTS)
+        self.speed_up: Deque[float] = collections.deque([0.0] * SPEED_POINTS, maxlen=SPEED_POINTS)
+        self.speed_via = ""                        # «через VPN» или «всё подключение»
+        self.speed_total = [0, 0]                  # скачано и отдано за сеанс (байт)
+        self._speed_prev: Optional[tuple] = None
         from . import pages
         self.pages = pages
 
@@ -105,6 +111,42 @@ class WebApp:
 
     def start(self) -> None:
         threading.Thread(target=self._status_loop, daemon=True, name="web-status").start()
+        threading.Thread(target=self._speed_loop, daemon=True, name="web-speed").start()
+
+    def _speed_loop(self) -> None:
+        while not self._closing:
+            try:
+                self.sample_speed()
+            except Exception as exc:
+                log.debug("speed: %r", exc)
+            time.sleep(1.0)
+
+    def sample_speed(self) -> None:
+        """Скорость за последнюю секунду: через адаптер VPN, если он работает, иначе — всего подключения."""
+        import psutil
+        from .. import awg
+        nics = psutil.net_io_counters(pernic=True)
+        vpn_nics = [n for n in (vpn.INTERFACE_NAME, awg.TUNNEL_NAME) if n in nics]
+        if self.vs.running and vpn_nics:
+            names, via = vpn_nics[:1], "через VPN"
+        else:
+            names = [n for n in nics if n not in vpn_nics and not n.lower().startswith(("lo", "loopback"))]
+            via = "всё подключение"
+        recv = sum(nics[n].bytes_recv for n in names)
+        sent = sum(nics[n].bytes_sent for n in names)
+        now = time.monotonic()
+        prev = self._speed_prev
+        self._speed_prev = (now, recv, sent, via)
+        if prev is None or prev[3] != via:
+            self.speed_via = via
+            return
+        dt = max(0.2, now - prev[0])
+        down, up = max(0, recv - prev[1]) / dt, max(0, sent - prev[2]) / dt
+        self.speed_down.append(down)
+        self.speed_up.append(up)
+        self.speed_total[0] += max(0, recv - prev[1])
+        self.speed_total[1] += max(0, sent - prev[2])
+        self.speed_via = via
 
     def stop(self) -> None:
         self._closing = True

@@ -119,6 +119,13 @@ def ip_state(app) -> Dict[str, Any]:
             "viaVpn": app.vs.running, "checked": app.ip_at}
 
 
+def speed_state(app) -> Dict[str, Any]:
+    ip = app.ip
+    return {"down": list(app.speed_down), "up": list(app.speed_up), "via": app.speed_via,
+            "total": list(app.speed_total),
+            "ip": f"{ip.ip} · {ip.country}" if ip is not None and ip.country else (ip.ip if ip is not None else "")}
+
+
 def avail(app) -> List[Dict[str, Any]]:
     out = []
     for name, icon in AVAIL:
@@ -144,7 +151,7 @@ def state(app) -> Dict[str, Any]:
     s = app.core.settings
     return {"vpn": vpn_state(app), "zapret": zapret_state(app), "tg": tg_state(app),
             "quick": {"ru": bool(s.get("vpn", "ru_direct")), "ks": bool(s.get("vpn", "killswitch"))},
-            "servers": servers(app), "ip": ip_state(app), "avail": avail(app), "updates": updates_state(app),
+            "servers": servers(app), "ip": ip_state(app), "speed": speed_state(app), "avail": avail(app), "updates": updates_state(app),
             "checking": "check" in app.busy, "pinging": "ping" in app.busy}
 
 

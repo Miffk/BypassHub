@@ -298,3 +298,16 @@ h2 { font: 600 14px "Inter", sans-serif; letter-spacing: -0.1px; }
 .content > *:nth-child(4) { animation-delay: .12s; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* скорость */
+.speed { display: flex; flex-direction: column; gap: 2px; }
+.speed .via { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+.rates { display: flex; gap: 22px; margin-top: 4px; }
+.rate { display: flex; align-items: baseline; gap: 5px; }
+.rate b { font: 700 24px "Inter Display", "Inter", sans-serif; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
+.rate small { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.rate .ic { width: 16px; height: 16px; align-self: center; }
+.rate.down .ic { color: var(--accent-2); }
+.rate.up .ic { color: var(--accent-3); transform: rotate(180deg); }
+.speed-chart { width: 100%; height: 52px; margin: 6px 0 4px; overflow: visible; flex: none; }
+.speed-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--faint); font-weight: 600; }

@@ -40,7 +40,7 @@ window.Home = (() => {
             <button class="btn small" data-act="ping" id="ping">Проверить пинг</button></div>
           <div class="server-list" id="servers"></div>
         </section>
-        <section class="card conn" id="conn"></section>
+        <section class="card speed" id="speed"></section>
       </div>
     </div>
     <div class="grid bottom">
@@ -111,13 +111,41 @@ window.Home = (() => {
          <button class="btn small primary" data-page="vpn">Добавить сервер</button></div>`;
   }
 
-  function conn(ip) {
-    document.getElementById("conn").innerHTML = `<div class="card-head" style="margin:0"><h2>Подключение</h2></div>
-      <div class="ip">${esc(ip && ip.ip ? ip.ip : "—")}</div>
-      <div class="country">${icon("pin")}${esc(ip && ip.ip ? ip.country + (ip.code ? " · " + ip.code : "") : (ip && ip.checking ? "Проверка…" : "Адрес пока не проверен"))}</div>
-      ${ip && ip.ip ? (ip.viaVpn ? `<span class="badge safe">${icon("lock")}Сайты видят адрес VPN-сервера</span>`
-                                 : `<span class="badge open">VPN выключен — это ваш адрес</span>`) : ""}
-      <div class="checked">${ip && ip.checked ? "Проверено в " + esc(ip.checked) : ""}</div>`;
+  const fmt = (bps) => {
+    const v = bps * 8;  // скорость — в битах, как у провайдеров
+    if (v >= 1e9) return [(v / 1e9).toFixed(1), "Гбит/с"];
+    if (v >= 1e6) return [(v / 1e6).toFixed(v >= 1e8 ? 0 : 1), "Мбит/с"];
+    if (v >= 1e3) return [(v / 1e3).toFixed(0), "Кбит/с"];
+    return [String(Math.round(v)), "бит/с"];
+  };
+  const size = (b) => (b >= 1e9 ? (b / 1e9).toFixed(2) + " ГБ" : b >= 1e6 ? (b / 1e6).toFixed(1) + " МБ"
+    : (b / 1e3).toFixed(0) + " КБ");
+
+  function chart(down, up) {
+    const w = 300, h = 74, n = down.length;
+    const max = Math.max(1, ...down, ...up) * 1.1;
+    const path = (d) => d.map((v, i) => (i ? "L" : "M") + (i * w / (n - 1)).toFixed(1) + " " + (h - v / max * h).toFixed(1)).join(" ");
+    const pd = path(down), pu = path(up);
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="speed-chart">
+      <defs><linearGradient id="gd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent-2)" stop-opacity=".45"/>
+      <stop offset="1" stop-color="var(--accent-2)" stop-opacity="0"/></linearGradient></defs>
+      <path d="${pd} L${w} ${h} L0 ${h} Z" fill="url(#gd)"/>
+      <path d="${pd}" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linejoin="round"/>
+      <path d="${pu}" fill="none" stroke="var(--accent-3)" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="4 3" opacity=".9"/>
+    </svg>`;
+  }
+
+  function speed(sp) {
+    if (!sp) return;
+    const d = sp.down || [], u = sp.up || [];
+    const [dv, du] = fmt(d[d.length - 1] || 0), [uv, uu] = fmt(u[u.length - 1] || 0);
+    document.getElementById("speed").innerHTML = `<div class="card-head" style="margin:0"><h2>Скорость</h2>
+        <span class="via">${esc(sp.via)}</span></div>
+      <div class="rates"><div class="rate down">${icon("download")}<b>${dv}</b><small>${du}</small></div>
+        <div class="rate up">${icon("download")}<b>${uv}</b><small>${uu}</small></div></div>
+      ${chart(d, u)}
+      <div class="speed-foot"><span>за сеанс: ↓ ${size(sp.total[0])} · ↑ ${size(sp.total[1])}</span>
+        ${sp.ip ? `<span>IP ${esc(sp.ip)}</span>` : ""}</div>`;
   }
 
   function avail(items) {
@@ -157,7 +185,7 @@ window.Home = (() => {
     document.getElementById("q-ru").checked = !!s.quick.ru;
     document.getElementById("q-ks").checked = !!s.quick.ks;
     servers(s.servers || []);
-    conn(s.ip);
+    speed(s.speed);
     avail(s.avail || []);
     updates(s.updates || {});
   }
