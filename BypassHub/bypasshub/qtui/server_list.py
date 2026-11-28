@@ -79,10 +79,12 @@ class ServerPicker(QWidget):
         W.clear_layout(self.lay)
         self._rows = {}
         if not profiles:
-            self.lay.addWidget(W.label("Серверов пока нет — добавьте ключ во вкладке VPN.", "muted"))
+            self.lay.addWidget(W.label("Серверов пока нет — добавьте ключ во вкладке VPN.", "muted", wrap=True))
+            self.lay.addStretch(1)
             return
         if auto_ok:
             self._row(vpn.AUTO_TAG, "Авто — лучший сервер",
+                      "Выбирает самый быстрый сам" if self.compact else
                       "Сам выбирает самый быстрый сервер (VLESS или Hysteria2) и переключается, если он перестал отвечать",
                       selected == vpn.AUTO_TAG, None)
         for p in profiles:
@@ -96,6 +98,8 @@ class ServerPicker(QWidget):
         home = self.app.pages["home"][1] if "home" in self.app.pages else None
         fr = _Row(lambda r=rid: (home or self.app.pages["home"][1]).select_server(r))
         fr.setProperty("active", "true" if active else "false")
+        if self.compact:
+            fr.setFixedHeight(52)
         lay = QHBoxLayout(fr)
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(12)
@@ -119,7 +123,7 @@ class ServerPicker(QWidget):
         head.addWidget(now)
         head.addStretch(1)
         left.addLayout(head)
-        sub = W.label(subtitle, "small", wrap=True)
+        sub = W.label(subtitle, "small", wrap=not self.compact)
         left.addWidget(sub)
         lay.addLayout(left, 1)
         ping = W.label("")

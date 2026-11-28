@@ -30,6 +30,11 @@ _PATHS = {
     "heart": '<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"/>',
     "power": '<path d="M12 3.5v8"/><path d="M6.6 6.8a7.6 7.6 0 1 0 10.8 0"/>',
     "bolt": '<path d="M13 3 5.5 13.2h5.6L10.5 21 18.5 10.6h-5.7z"/>',
+    "play": '<rect x="2.8" y="5.5" width="18.4" height="13" rx="4"/><path d="m10.2 9.4 4.6 2.6-4.6 2.6z" '
+            'fill="currentColor"/>',
+    "chat": '<path d="M4 6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v6.4a2.8 2.8 0 0 1-2.8 2.8H10l-4.3 3.6'
+            'V16A2.8 2.8 0 0 1 4 13.2z"/><circle cx="9" cy="10" r=".9" fill="currentColor"/>'
+            '<circle cx="15" cy="10" r=".9" fill="currentColor"/>',
     "lock": '<rect x="5" y="10.5" width="14" height="10" rx="2.4"/><path d="M8.3 10.5V8a3.7 3.7 0 0 1 7.4 0v2.5"/>',
 }
 
