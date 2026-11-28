@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, List, Tuple
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout, QWidget
 
 from .. import vpn, winutil
-from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO
+from ..killswitch import KILLSWITCH_DETAILS, KILLSWITCH_INTRO, STRICT_DETAILS, STRICT_INTRO
 from ..vpn import Profile
 from . import widgets as W
 from .app import Page
@@ -94,6 +94,8 @@ class VpnPage(Page):
                                    "не попадает на сервер вовсе."))
         self.killswitch = W.Toggle("Kill switch: без VPN — без интернета", self._killswitch_changed)
         body.addLayout(W.with_help(self.killswitch, KILLSWITCH_INTRO + "<br><br>" + KILLSWITCH_DETAILS))
+        self.ks_strict = W.Toggle("Строгий режим: без интернета, даже когда VPN выключен", self._strict_changed)
+        body.addLayout(W.with_help(self.ks_strict, STRICT_INTRO + "<br><br>" + STRICT_DETAILS))
 
         body = W.section(self.lay, "Программы мимо VPN", collapsible=True, key="vpn.exclude",
                          help="Отмеченные программы ходят в интернет напрямую, даже когда VPN включён, — например, "
@@ -123,6 +125,7 @@ class VpnPage(Page):
         self.mode.set(vpn.MODES.get(s.get("vpn", "mode"), vpn.MODES["tun"]))
         W.set_checked(self.ru_direct, s.get("vpn", "ru_direct"))
         W.set_checked(self.killswitch, s.get("vpn", "killswitch"))
+        W.set_checked(self.ks_strict, s.get("vpn", "killswitch_strict"))
         self.port.setText(str(s.get("vpn", "proxy_port")))
         self.port_row.setVisible(s.get("vpn", "mode") == "proxy")
         self._exclude_load()
@@ -296,6 +299,23 @@ class VpnPage(Page):
         self.app.core.settings.set("vpn", "killswitch", on)
         if self.app.vpn_state.mode == "tun" or self.app.vpn_state.reconnecting:
             self.app.pages["home"][1].apply_vpn("Применение настроек…")
+
+    def _strict_changed(self, on: bool) -> None:
+        if on and not self.app.ask("Строгий режим: пока VPN выключен, интернет будет закрыт для всех программ, "
+                                   "кроме BypassHub и локальной сети. Он откроется, когда вы включите VPN или "
+                                   "закроете BypassHub.\n\nВключить?", "Kill switch"):
+            W.set_checked(self.ks_strict, False)
+            return
+        core = self.app.core
+        vs = self.app.vpn_state
+
+        def done(_, err):
+            self.app.refresh_status()
+            if err:
+                self.app.error(str(err), "Kill switch")
+        self.app.run_task(lambda: core.set_killswitch_strict(on), done)
+        if vs.running and vs.mode == "tun" and not core.settings.get("vpn", "killswitch"):
+            self.app.pages["home"][1].apply_vpn("Применение настроек…")  # при VPN он работает как kill switch
 
     def _port_changed(self) -> None:
         try:

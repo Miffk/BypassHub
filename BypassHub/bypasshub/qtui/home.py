@@ -348,6 +348,12 @@ class HomePage(Page):
             self.vpn_card.set_state(True, "⟳ Переподключение…", S.yellow(), details,
                                     tile_details="Переподключение…" + ("\nkill switch" if vs.killswitch else ""),
                                     tile_status="⟳ Переподключение")
+        elif vs.killswitch:
+            self.vpn_card.set_state(False, "○ Выключен · интернет закрыт", S.yellow(),
+                                    "Строгий kill switch: пока VPN выключен, интернет закрыт для всех программ, "
+                                    "кроме BypassHub и локальной сети. Включите VPN — интернет пойдёт через него.",
+                                    tile_details="Интернет закрыт\nстрогий kill switch",
+                                    tile_status="○ Интернет закрыт")
         elif auto:
             details = "" if core.singbox.is_installed() else "При первом включении скачается движок VPN с GitHub."
             self.vpn_card.set_state(False, "○ Выключен", None, details, tile_details="Авто — лучший сервер")

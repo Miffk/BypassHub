@@ -32,6 +32,7 @@ NAV = [
     ("tg", "TG WS Proxy", "send"),
     ("vpn", "VPN", "vpn"),
     ("updates", "Обновления", "sync"),
+    ("changelog", "Что нового", "news"),
     ("settings", "Настройки", "settings"),
     ("log", "Журнал", "list"),
 ]
@@ -131,6 +132,7 @@ class App(QMainWindow):
         self.core.settings.set("ui", "expanded", keys + [key] if on else keys)
 
     def _build(self) -> None:
+        from .changelog_page import ChangelogPage
         from .home import HomePage
         from .log_page import LogPage
         from .settings_page import SettingsPage
@@ -162,7 +164,7 @@ class App(QMainWindow):
         lay.addWidget(self.stack, 1)
 
         classes = {"home": HomePage, "zapret": ZapretPage, "tg": TgPage, "vpn": VpnPage, "updates": UpdatesPage,
-                   "settings": SettingsPage, "log": LogPage}
+                   "changelog": ChangelogPage, "settings": SettingsPage, "log": LogPage}
         self.nav_items: Dict[str, W.NavButton] = {}
         for key, text, icon in NAV:
             page = classes[key](self)
@@ -190,6 +192,7 @@ class App(QMainWindow):
         nav_lay.addWidget(ver)
         self._restyle_nav()
         self.show_page(self.current_page)
+        self._changelog_mark()
 
     def play_butterflies(self, min_gap: float = 0) -> None:
         """Пролёт бабочки в меню, если она включена в «Оформлении» и окно на экране."""
@@ -200,12 +203,29 @@ class App(QMainWindow):
         self._butterflies_at = time.monotonic()
         self.butterflies.play()
 
+    def _changelog_mark(self) -> None:
+        """После обновления — точка у «Что нового», пока вкладку не откроют."""
+        seen = self.core.settings.get("app", "seen_changelog") or ""
+        if not seen:  # первый запуск — смотреть пока нечего
+            self.core.settings.set("app", "seen_changelog", __version__)
+            return
+        if seen != __version__:
+            self.nav_items["changelog"].text_label.setText("Что нового  •")
+            log.info("BypassHub обновлён до %s — что изменилось, смотрите во вкладке «Что нового»", __version__)
+
+    def _changelog_seen(self) -> None:
+        if self.core.settings.get("app", "seen_changelog") != __version__:
+            self.core.settings.set("app", "seen_changelog", __version__)
+        self.nav_items["changelog"].text_label.setText("Что нового")
+
     def _restyle_nav(self) -> None:
         for item in getattr(self, "nav_items", {}).values():
             item.restyle()
 
     def show_page(self, key: str) -> None:
         self.current_page = key
+        if key == "changelog":
+            self._changelog_seen()
         page = self.pages[key][1]
         for k, item in self.nav_items.items():
             if item.isChecked() != (k == key):

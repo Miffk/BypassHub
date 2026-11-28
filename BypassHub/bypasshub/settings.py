@@ -35,6 +35,7 @@ DEFAULTS: Dict[str, Any] = {
         "mode": "tun",             # tun — весь трафик; proxy — системный прокси (только для VLESS)
         "ru_direct": True,         # российские сайты — напрямую (только для VLESS)
         "killswitch": False,       # без VPN — без интернета (режим «Весь трафик», пока открыт BypassHub)
+        "killswitch_strict": False,  # строгий режим: интернет закрыт и когда VPN выключен (пока открыт BypassHub)
         "lan_access": True,        # устарело (до 1.11.0): выключено — kill switch клиента AmneziaWG
         "proxy_port": 2080,
         "profiles": [],            # [{"id", "kind": "vless"|"awg", "name", "data", "sub"}]
@@ -59,6 +60,7 @@ DEFAULTS: Dict[str, Any] = {
         "restore_state": True,     # при запуске включать то, что было включено
         "stop_on_exit": True,      # выключать zapret (режим process) и прокси при выходе
         "last_boot": 0,            # время включения ПК при прошлом запуске (VPN после перезагрузки выключается)
+        "seen_changelog": "",      # версия, «Что нового» которой уже открывали (иначе — точка в меню)
     },
     "ui": {
         "expanded": [],            # раскрытые сворачиваемые разделы окна

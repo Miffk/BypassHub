@@ -252,7 +252,56 @@ def test_wfp_blocks_and_releases():
         ks.enable(Plan(apps=[], tunnel_addrs=[vpn.TUN_ADDRESS], endpoints=["192.0.2.1"]))
         assert not _can_connect("1.1.1.1", 443)      # остальным — нельзя
         assert _can_connect("127.0.0.1", port)       # localhost работает
+        ks.enable(Plan(apps=[], dns=True))           # строгий режим без VPN: DNS (порт 53) — можно
+        assert _can_connect("1.1.1.1", 53) and not _can_connect("1.1.1.1", 443)
     finally:
         ks.disable()
         srv.close()
     assert _can_connect("1.1.1.1", 443)
+
+
+def test_strict_mode_blocks_when_vpn_off(core):
+    """Строгий режим: VPN выключен — интернет закрыт (пропускаются BypassHub, движки VPN, DNS);
+    VPN включён — обычный kill switch; выключили строгий режим — интернет открыт."""
+    be = core.killswitch._backend
+    core.set_killswitch_strict(True)
+    assert core.killswitch.active
+    offline = be.plans[-1]
+    assert offline.dns and core.singbox.exe in offline.apps and core.awg.exe in offline.apps
+    assert any(str(p) == sys.executable for p in offline.apps)
+    vs = core.vpn_state()
+    assert not vs.running and vs.killswitch          # главная: «интернет закрыт»
+    core.vpn_enable()                                  # с VPN — план «через VPN», даже без обычного kill switch
+    online = be.plans[-1]
+    assert not online.dns and online.apps == [core.singbox.exe] and core.killswitch.active
+    core.vpn_disable()                                 # выключили VPN — снова закрыт
+    assert core.killswitch.active and be.plans[-1].dns
+    core.set_killswitch_strict(False)
+    assert not core.killswitch.active
+
+
+def test_strict_mode_on_start_and_failed_enable(core):
+    core.settings.set("vpn", "killswitch_strict", True)
+    core.restore_state()                               # VPN не включён — интернет закрыт сразу при запуске
+    assert core.killswitch.active and core.killswitch._backend.plans[-1].dns
+    core._watch_stop.set()
+    core.state["fail"] = True
+    with pytest.raises(RuntimeError):
+        core.vpn_enable()
+    assert core.killswitch.active and core.killswitch._backend.plans[-1].dns   # не подключился — закрыт
+
+
+def test_strict_mode_proxy_vpn_opens(core):
+    """Строгий режим и «Системный прокси»: пока VPN подключён, интернет не закрыт (как и обычный kill switch)."""
+    core.settings.set("vpn", "mode", "proxy")
+    core.set_killswitch_strict(True)
+    core.vpn_enable()
+    assert not core.killswitch.active
+    core.vpn_disable()
+    assert core.killswitch.active
+
+
+def test_nft_rules_dns():
+    rules = killswitch.nft_rules(Plan(dns=True))
+    assert "udp dport 53 accept" in rules and "tcp dport 53 accept" in rules
+    assert "dport 53" not in killswitch.nft_rules(Plan())

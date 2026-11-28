@@ -45,7 +45,7 @@ def window(tmp_path_factory):
 
 def test_all_pages(window):
     qa, w = window
-    for key in ("home", "zapret", "tg", "vpn", "updates", "settings", "log", "home"):
+    for key in ("home", "zapret", "tg", "vpn", "updates", "changelog", "settings", "log", "home"):
         w.show_page(key)
         qa.processEvents()
         w.grab()
@@ -154,3 +154,17 @@ def test_butterflies(window):
     w.play_butterflies()
     assert not area.busy
     s.data["appearance"]["butterflies"] = True
+
+
+def test_changelog_dot_after_update(window):
+    """После обновления у «Что нового» точка; открыли вкладку — точки нет."""
+    from bypasshub import __version__
+    qa, w = window
+    s = w.core.settings
+    s.set("app", "seen_changelog", "1.0.0")
+    w._changelog_mark()
+    assert "•" in w.nav_items["changelog"].text_label.text()
+    w.show_page("changelog")
+    assert "•" not in w.nav_items["changelog"].text_label.text()
+    assert s.get("app", "seen_changelog") == __version__
+    w.show_page("home")

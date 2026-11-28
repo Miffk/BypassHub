@@ -30,6 +30,13 @@ LAN_V6 = ("fe80::/10", "fc00::/7", "ff00::/8")
 KILLSWITCH_INTRO = ("Если VPN неожиданно отключится — упадёт движок, оборвётся связь, — программы не уйдут в интернет "
                     "напрямую с вашего настоящего IP: интернет мимо VPN закрыт, пока BypassHub не подключит VPN "
                     "снова (он делает это сам).")
+STRICT_INTRO = ("Интернет закрыт и тогда, когда VPN выключен: без VPN не работает ничего, кроме локальной сети "
+                "и самого BypassHub (чтобы можно было включить VPN, обновить подписку и проверить серверы).")
+STRICT_DETAILS = ("Работает, пока открыт BypassHub (и свёрнутый в трей) — при выходе из BypassHub интернет снова "
+                  "открыт. Включите VPN — и интернет пойдёт через него; выключите — снова закрыт. Подключён ли "
+                  "при этом VPN в режиме «Весь трафик» — не важно: строгий режим работает в любом. Пока VPN "
+                  "подключён в режиме «Весь трафик», дальше действует обычный kill switch.")
+
 KILLSWITCH_DETAILS = ("Работает в режиме «Весь трафик», пока открыт BypassHub (и свёрнутый в трей). Локальная сеть "
                       "(принтер, телефон для TG WS Proxy) доступна всегда, а российские сайты и программы мимо VPN — "
                       "пока VPN подключён. Когда вы сами выключаете VPN или закрываете BypassHub, интернет снова "
@@ -48,10 +55,11 @@ class Plan:
     tunnel_addrs: List[str] = field(default_factory=list)  # адреса туннелей: через них — можно
     endpoints: List[str] = field(default_factory=list)     # IP серверов VPN
     tunnel_ifaces: List[str] = field(default_factory=list)  # имена интерфейсов туннеля (Linux)
+    dns: bool = False   # пропускать запросы DNS (порт 53): VPN выключен, а адрес сервера нужно узнать
 
     def key(self) -> Tuple:
         return (tuple(str(p).lower() for p in self.apps), tuple(sorted(self.tunnel_addrs)),
-                tuple(sorted(self.endpoints)), tuple(sorted(self.tunnel_ifaces)))
+                tuple(sorted(self.endpoints)), tuple(sorted(self.tunnel_ifaces)), self.dns)
 
 
 def _split_ips(items: Iterable[str]) -> Tuple[List[ipaddress.IPv4Network], List[ipaddress.IPv6Network]]:
@@ -89,6 +97,8 @@ def nft_rules(plan: Plan) -> str:
         lines.append("    ip daddr { " + ", ".join(map(str, v4)) + " } accept")
     if v6:
         lines.append("    ip6 daddr { " + ", ".join(map(str, v6)) + " } accept")
+    if plan.dns:
+        lines += ["    udp dport 53 accept", "    tcp dport 53 accept"]
     lines += ["    ip daddr { " + ", ".join(LAN_V4) + " } accept",
               "    ip6 daddr { " + ", ".join(LAN_V6) + " } accept",
               "    meta l4proto tcp reject with tcp reset",
@@ -205,6 +215,8 @@ if winutil.IS_WINDOWS:
     COND_LOCAL_ADDR = "d9ee00de-c1ef-4617-bfe3-ffd8f5a08957"    # FWPM_CONDITION_IP_LOCAL_ADDRESS
     COND_REMOTE_ADDR = "b235ae9a-1d64-49b8-a44c-5ff3d9095045"   # FWPM_CONDITION_IP_REMOTE_ADDRESS
     COND_FLAGS = "632ce23b-5167-435c-86d7-e903684aa80c"         # FWPM_CONDITION_FLAGS
+    COND_REMOTE_PORT = "c35a604d-d22b-4e1a-91b4-68f674ee674b"   # FWPM_CONDITION_IP_REMOTE_PORT
+    FWP_UINT16 = 2
 
     def _api():
         fw = ctypes.WinDLL("fwpuclnt.dll")
@@ -350,6 +362,9 @@ class _WfpSession:
                 if ep:
                     self._filter(sublayer, layer, "сервер VPN", 12, True, [v(COND_REMOTE_ADDR, n) for n in ep])
                 self._filter(sublayer, layer, "локальная сеть", 11, True, [v(COND_REMOTE_ADDR, n) for n in lan])
+                if plan.dns:
+                    self._filter(sublayer, layer, "DNS", 10, True,
+                                 [self._cond(COND_REMOTE_PORT, FWP_MATCH_EQUAL, FWP_UINT16, uint16=53)])
                 self._filter(sublayer, layer, "всё остальное", 0, False, [])
             _check(fw.FwpmTransactionCommit0(h), "применить фильтры WFP")
         except Exception:

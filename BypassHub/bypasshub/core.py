@@ -1,6 +1,7 @@
 """Логика программы без GUI: включение/выключение, обновления, восстановление состояния."""
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -84,6 +85,7 @@ class Core:
         self._watch_thread: Optional[threading.Thread] = None
         self._watch_fails = 0
         self._watch_next = 0.0
+        self._offline_logged = False  # в журнал уже написали, что строгий kill switch закрыл интернет
 
     # ------------------------------------------------------------ zapret
     @property
@@ -361,9 +363,42 @@ class Core:
 
     # ------------------------------------------------------------ kill switch и переподключение
     def killswitch_wanted(self, mode: Optional[str] = None) -> bool:
-        """Kill switch нужен: включён в настройках, режим «Весь трафик» и система его умеет."""
+        """Kill switch при подключённом VPN: включён (обычный или строгий), режим «Весь трафик»
+        и система его умеет."""
         mode = mode or self.settings.get("vpn", "mode")
-        return bool(self.settings.get("vpn", "killswitch")) and mode == "tun" and self.killswitch.supported
+        on = self.settings.get("vpn", "killswitch") or self.settings.get("vpn", "killswitch_strict")
+        return bool(on) and mode == "tun" and self.killswitch.supported
+
+    def killswitch_strict(self) -> bool:
+        """Строгий режим: интернет закрыт и когда VPN выключен."""
+        return bool(self.settings.get("vpn", "killswitch_strict")) and self.killswitch.supported
+
+    def _offline_plan(self) -> Plan:
+        """VPN выключен, строгий режим: пропускаем только BypassHub и движки VPN (чтобы VPN можно было
+        включить, обновить подписку, проверить серверы), DNS и локальную сеть."""
+        return Plan(apps=[Path(sys.executable), self.singbox.exe, self.awg.exe], dns=True)
+
+    def _killswitch_idle(self) -> None:
+        """VPN выключен: в строгом режиме интернет закрыт, иначе — как обычно."""
+        if not self.killswitch_strict():
+            self._killswitch_off()
+            return
+        try:
+            self.killswitch.enable(self._offline_plan())
+        except Exception as exc:
+            log.error("Строгий kill switch не включился: %s", exc)
+            return
+        if not self._offline_logged:
+            self._offline_logged = True
+            log.info("Строгий kill switch: VPN выключен — интернет закрыт, пока вы не включите VPN")
+
+    def set_killswitch_strict(self, on: bool) -> None:
+        """Переключатель «Строгий режим». VPN выключен — сразу закрываем или открываем интернет."""
+        with self.lock:
+            self.settings.set("vpn", "killswitch_strict", bool(on))
+            self._offline_logged = False
+            if not self._vpn_parts:
+                self._killswitch_idle()
 
     def _killswitch_set(self, on: bool, plan: Callable[[], Plan]) -> None:
         if not on:
@@ -451,7 +486,7 @@ class Core:
             except Exception:
                 self.settings.set("vpn", "enabled", False)
                 self._vpn_parts = ()
-                self._killswitch_off()
+                self._killswitch_idle()
                 raise
 
     def vpn_disable(self) -> None:
@@ -462,10 +497,11 @@ class Core:
                 self.singbox.stop()
                 self.awg.stop()
             finally:
-                self._killswitch_off()
+                self._killswitch_idle()
 
     def _killswitch_off(self) -> None:
-        """VPN выключен вами — интернет снова как обычно."""
+        """Интернет снова как обычно."""
+        self._offline_logged = False
         try:
             self.killswitch.disable()
         except Exception as exc:
@@ -786,7 +822,6 @@ class Core:
             was = bool(self.settings.get("vpn", "enabled")) or self.vpn_running()
             self.settings.set("vpn", "enabled", False)
             self._vpn_parts = ()
-            self._killswitch_off()
             for stop in (self.singbox.stop, self.awg.stop):
                 try:
                     stop()
@@ -803,6 +838,9 @@ class Core:
         except Exception as exc:
             log.warning("VPN после перезагрузки: %r", exc)
         self.start_watchdog()
+        if not (self.settings.get("vpn", "enabled") and self.settings.get("app", "restore_state")):
+            with self.lock:
+                self._killswitch_idle()  # VPN при запуске не включится: строгий режим закрывает интернет сразу
         if not self.awg.status().running:
             try:
                 self.awg.restore_dns()  # правило DNS от прежнего туннеля, если программа упала
@@ -828,7 +866,7 @@ class Core:
                     self._vpn_start()
                 except Exception as exc:
                     self._vpn_parts = ()
-                    self._killswitch_off()
+                    self._killswitch_idle()
                     log.error("Не удалось включить VPN: %s", exc)
 
     def shutdown(self) -> None:
