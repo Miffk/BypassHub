@@ -92,6 +92,7 @@ class ServerPicker(QWidget):
                      KIND_LABELS.get(p.kind, p.kind)) + (" · из подписки" if p.sub and not self.compact else "")
             self._row(p.id, p.name, p.summary if not self.compact else badge, p.id == selected, p,
                       badge=None if self.compact else badge)
+        self.lay.addStretch(1)  # строки — сверху, а не посередине
 
     def _row(self, rid: str, title: str, subtitle: str, active: bool, profile: Optional[Profile],
              badge: Optional[str] = None) -> None:

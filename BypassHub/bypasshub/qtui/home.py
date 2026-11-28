@@ -201,13 +201,37 @@ class HomePage(Page):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(self.servers)
         scroll.viewport().setAutoFillBackground(False)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        scroll.setMinimumHeight(150)
-        self.servers_card.body.addWidget(scroll, 1)
+        self.servers_scroll = scroll
+        self.servers_card.body.addWidget(scroll)
         self.add_server_btn = W.button("Добавить сервер", lambda: self.app.show_page("vpn"), primary=True)
         self.servers_card.body.addWidget(self.add_server_btn, 0, Qt.AlignmentFlag.AlignLeft)
-        row.addWidget(self.servers_card, 1)
+        right = QVBoxLayout()
+        right.setSpacing(12)
+        right.addWidget(self.servers_card)
+
+        # внешний адрес — каким его видят сайты: сразу видно, идёт ли трафик через VPN
+        conn = W.Card(margins=(18, 14, 18, 14), spacing=4)
+        chead = QHBoxLayout()
+        chead.addWidget(W.label("Подключение", "h2"))
+        chead.addStretch(1)
+        chead.addWidget(W.help_badge("Внешний IP-адрес и страна — так вас видят сайты. Когда VPN подключён, "
+                                     "здесь адрес VPN-сервера; когда выключен — ваш домашний адрес. "
+                                     "Обновляется вместе с проверкой доступности."))
+        conn.body.addLayout(chead)
+        self.ip_label = W.label("—", "h1")
+        self.ip_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.ip_country = W.label("", "muted")
+        self.ip_note = W.label("", "small", wrap=True)
+        conn.body.addWidget(self.ip_label)
+        conn.body.addWidget(self.ip_country)
+        conn.body.addWidget(self.ip_note)
+        conn.body.addStretch(1)
+        self.ip_time = W.label("", "small")
+        conn.body.addWidget(self.ip_time)
+        right.addWidget(conn, 1)
+        row.addLayout(right, 1)
         self.lay.addLayout(row, 1)
+        self._ip = None
 
         # доступность сервисов и обновления
         row = QHBoxLayout()
@@ -363,6 +387,8 @@ class HomePage(Page):
         auto = core.vpn_is_auto()
         profiles = core.vpn_profiles()
         self.add_server_btn.setVisible(not profiles)
+        rows = (len(profiles) + (1 if len(core.vpn_vless()) >= 2 else 0)) if profiles else 1
+        self.servers_scroll.setFixedHeight(min(rows, 3) * 58 if profiles else 40)
         self._sync_quick()
         for picker in self.pickers:
             picker.render()
@@ -469,15 +495,18 @@ class HomePage(Page):
         self.refresh_btn.setText("Проверка…")
         self.refresh_btn.setEnabled(False)
         self.on_status(self._zs, self._ts)  # на плитках — «проверка…»
-        self.app.run_task(netcheck.check_services, self._services_done)
+        self.app.run_task(lambda: (netcheck.check_services(), netcheck.public_ip()), self._services_done)
 
     def _services_done(self, states, error) -> None:
         self._checking = False
         self.refresh_btn.setText("⟳  Обновить")
         self.refresh_btn.setEnabled(True)
         if not error and states:
-            self._avail = {st.name: st for st in states}
+            states, self._ip = states
+            if states:
+                self._avail = {st.name: st for st in states}
         self.on_status(self._zs, self._ts)
+        self._render_ip()
 
     def availability(self, names) -> str:
         """«Discord: доступен · YouTube: недоступен» по последней проверке."""
@@ -574,6 +603,27 @@ class HomePage(Page):
                  if c.on]
         text = ("Работает: " + ", ".join(names)) if names else "Всё выключено — нажмите на сервис, чтобы включить"
         W.set_text(self.summary, text)
+
+    def _render_ip(self) -> None:
+        ip = self._ip
+        vpn_on = self._vpn_state.running
+        if ip is None:
+            W.set_text(self.ip_label, "—")
+            W.set_text(self.ip_country, "Адрес пока не проверен" if not self._checking else "Проверка…")
+            W.set_text(self.ip_note, "")
+            return
+        W.set_text(self.ip_label, ip.ip)
+        W.set_text(self.ip_country, ip.country_name + (f" · {ip.country}" if ip.country and
+                                                       ip.country_name != ip.country else ""))
+        if vpn_on:
+            note, color = "Сайты видят адрес VPN-сервера", S.green()
+        elif ip.country == "RU":
+            note, color = "Это ваш адрес — VPN выключен", S.P.muted
+        else:
+            note, color = "VPN выключен", S.P.muted
+        W.set_text(self.ip_note, note)
+        W.set_label_color(self.ip_note, color)
+        W.set_text(self.ip_time, "Проверено в " + time.strftime("%H:%M"))
 
     def _render_avail(self) -> None:
         for name, item in self.avail_items.items():
