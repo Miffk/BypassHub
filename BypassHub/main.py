@@ -55,6 +55,7 @@ def main() -> int:
                     help="папка данных (по умолчанию C:\\ProgramData\\BypassHub, в Linux ~/.local/share/BypassHub)")
     ap.add_argument("--wait-pid", type=int, default=0, help=argparse.SUPPRESS)  # после самообновления
     ap.add_argument("--classic-ui", action="store_true", help="старый интерфейс (Tk) вместо Qt")
+    ap.add_argument("--qt-ui", action="store_true", help="прежнее окно (Qt) вместо нового (HTML)")
     ap.add_argument("--action", choices=sorted(ACTIONS), default=None,
                     help="передать запущенному BypassHub действие (для своих горячих клавиш в Linux)")
     ap.add_argument("--root-helper", metavar="DATA_DIR", default=None, help=argparse.SUPPRESS)
@@ -99,6 +100,13 @@ def main() -> int:
 
     core = Core(paths)
     minimized = args.minimized or minimized_by_action or bool(core.settings.get("app", "start_minimized"))
+    if not args.classic_ui and not args.qt_ui and core.settings.get("app", "ui") != "qt" and winutil.IS_WINDOWS:
+        # новое окно на HTML (движок Edge WebView2); не запустилось — прежнее окно Qt
+        try:
+            from bypasshub.webapp.window import run as run_web
+            return run_web(core, start_minimized=minimized)
+        except Exception as exc:
+            log.error("Новый интерфейс не запустился, открываю прежний: %r", exc)
     if not args.classic_ui:
         try:
             from bypasshub.qtui.app import run

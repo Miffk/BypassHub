@@ -7,3 +7,4 @@ qrcode==8.0
 certifi>=2024.2.2
 cryptography>=42; sys_platform == "linux"
 httpx[http2]==0.28.1; sys_platform == "linux"
+pywebview==6.2.1; sys_platform == "win32"

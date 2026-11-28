@@ -45,14 +45,16 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --onefile --windowed --uac-admin
           --name BypassHub --icon assets/icon.ico
-          --add-data "assets;assets" --collect-data customtkinter --collect-data certifi
+          --add-data "assets;assets" --add-data "bypasshub/webui;bypasshub/webui"
+          --collect-data customtkinter --collect-data certifi
+          --collect-all webview --collect-all clr_loader --hidden-import clr
           --hidden-import pystray._win32
           main.py
 
       - name: Smoke test exe
         shell: pwsh
         run: |
-          # собранный exe запускается и открывает окно Qt (а не запасное старое)
+          # собранный exe запускается и открывает новое окно (HTML), а не запасное
           $data = Join-Path $env:RUNNER_TEMP "bh-data"
           $p = Start-Process dist\BypassHub.exe -ArgumentList "--data-dir", $data, "--minimized" -PassThru
           Start-Sleep -Seconds 25
@@ -61,8 +63,12 @@ jobs:
           Write-Output $log
           taskkill /T /F /PID $p.Id | Out-Null
           $global:LASTEXITCODE = 0
-          if ($log -notmatch "Qt 6\.") {
-            Write-Output "::error::Окно Qt не запустилось в собранном exe"
+          if ($log -notmatch "Интерфейс: HTML") {
+            Write-Output "::error::Новое окно (HTML) не запустилось в собранном exe"
+            exit 1
+          }
+          if ($log -match "Новый интерфейс не запустился") {
+            Write-Output "::error::Новое окно упало при запуске"
             exit 1
           }
 
