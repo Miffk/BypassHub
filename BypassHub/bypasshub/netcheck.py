@@ -102,3 +102,47 @@ def check_services(timeout: float = 6.0) -> List[ServiceState]:
         states.append(ServiceState(name, len(good) == len(probes), 0 < len(good) < len(probes), ms,
                                    "; ".join(bad)))
     return states
+
+
+# ====================================================================== внешний адрес
+
+TRACE_URL = "https://1.1.1.1/cdn-cgi/trace"
+
+COUNTRIES = {
+    "RU": "Россия", "NL": "Нидерланды", "DE": "Германия", "FI": "Финляндия", "SE": "Швеция", "NO": "Норвегия",
+    "PL": "Польша", "FR": "Франция", "GB": "Великобритания", "US": "США", "CA": "Канада", "TR": "Турция",
+    "KZ": "Казахстан", "BY": "Беларусь", "UA": "Украина", "LV": "Латвия", "LT": "Литва", "EE": "Эстония",
+    "AT": "Австрия", "CH": "Швейцария", "CZ": "Чехия", "IT": "Италия", "ES": "Испания", "PT": "Португалия",
+    "RO": "Румыния", "BG": "Болгария", "RS": "Сербия", "GE": "Грузия", "AM": "Армения", "AZ": "Азербайджан",
+    "AE": "ОАЭ", "IL": "Израиль", "JP": "Япония", "SG": "Сингапур", "HK": "Гонконг", "KR": "Южная Корея",
+    "IN": "Индия", "AU": "Австралия", "BR": "Бразилия", "IE": "Ирландия", "BE": "Бельгия", "DK": "Дания",
+    "HU": "Венгрия", "GR": "Греция", "CY": "Кипр", "MD": "Молдова", "UZ": "Узбекистан", "KG": "Киргизия",
+}
+
+
+@dataclass
+class PublicIp:
+    ip: str
+    country: str          # код страны, например «NL»
+
+    @property
+    def country_name(self) -> str:
+        return COUNTRIES.get(self.country, self.country)
+
+
+def parse_trace(text: str) -> Optional[PublicIp]:
+    """Ответ Cloudflare /cdn-cgi/trace: строки «ключ=значение»; нужны ip и loc."""
+    fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    ip = fields.get("ip", "").strip()
+    return PublicIp(ip, fields.get("loc", "").strip().upper()) if ip else None
+
+
+def public_ip(timeout: float = 6.0) -> Optional[PublicIp]:
+    """Внешний адрес и страна — какими их видят сайты (через VPN, если он включён). None — не удалось."""
+    from urllib.request import Request, urlopen
+    try:
+        with urlopen(Request(TRACE_URL, headers={"User-Agent": "BypassHub"}), timeout=timeout,
+                     context=tlsctx.context()) as resp:
+            return parse_trace(resp.read(4096).decode("utf-8", "replace"))
+    except Exception:
+        return None

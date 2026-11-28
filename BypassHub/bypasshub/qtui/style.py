@@ -259,10 +259,12 @@ QScrollBar:horizontal {{ height: 0; }}
 QProgressBar {{ background: {fill}; border: none; border-radius: 3px; max-height: 6px; text-align: center;
     color: transparent; }}
 QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}
-QSlider::groove:horizontal {{ height: 4px; background: {fill}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: #ffffff; width: 20px; height: 20px; margin: -8px 0; border-radius: 10px;
-    border: 1px solid {rgba("#000000", 0.12)}; }}
+QSlider {{ min-height: 26px; background: transparent; }}
+QSlider::groove:horizontal {{ height: 4px; background: {fill}; border-radius: 2px; margin: 0 9px; }}
+QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; margin-left: 9px; }}
+QSlider::add-page:horizontal {{ background: {fill}; border-radius: 2px; margin-right: 9px; }}
+QSlider::handle:horizontal {{ background: #ffffff; width: 18px; height: 18px; margin: -7px -9px;
+    border-radius: 9px; border: none; }}
 
 QTabWidget::pane {{ border: none; }}
 QTabBar::tab {{ background: transparent; padding: 6px 12px; margin-right: 4px; border-radius: 8px; color: {muted}; }}

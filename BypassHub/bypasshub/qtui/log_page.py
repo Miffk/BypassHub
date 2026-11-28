@@ -21,7 +21,7 @@ class LogPage(QWidget):
         super().__init__()
         self.app = app
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 8, W.PAGE_MARGIN, 18)
+        lay.setContentsMargins(W.PAGE_LEFT, 14, W.PAGE_MARGIN, 18)
         W.page_title(lay, "Журнал", "События программы, zapret и прокси")
         self.box = W.textbox(200, readonly=True)
         self.box.setMaximumBlockCount(self.MAX_LINES)

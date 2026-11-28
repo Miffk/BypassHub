@@ -55,7 +55,7 @@ class Page(QScrollArea):
         self.content = QWidget()
         self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.lay = QVBoxLayout(self.content)
-        self.lay.setContentsMargins(4, 8, W.PAGE_MARGIN, 18)
+        self.lay.setContentsMargins(W.PAGE_LEFT, 14, W.PAGE_MARGIN, 18)
         self.lay.setSpacing(10)
         self.setWidget(self.content)
         self.viewport().setAutoFillBackground(False)
@@ -569,6 +569,9 @@ def run(core: Core, start_minimized: bool = False) -> int:
     qapp.setApplicationName(APP_NAME)
     qapp.setDesktopFileName("bypasshub")  # Wayland: значок окна и панели — из ярлыка bypasshub.desktop
     qapp.setQuitOnLastWindowClosed(False)  # окно прячется в трей, выход — через меню
+    # единый стиль Fusion: таблица стилей рисуется одинаково в Windows и Linux (иначе стиль Windows 11
+    # рисует часть элементов по-своему — например, обрезает кружок ползунка)
+    qapp.setStyle("Fusion")
     qapp.setFont(S.base_font())
     log.info("Интерфейс: Qt %s", qVersion())
     window = App(core, start_minimized=start_minimized)
