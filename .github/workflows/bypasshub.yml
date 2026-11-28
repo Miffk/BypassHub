@@ -158,6 +158,10 @@ jobs:
             echo "::error::Новое окно (QtWebEngine) не запустилось в собранной программе"
             exit 1
           fi
+          if ! echo "$log" | grep -q "Страница окна загрузилась"; then
+            echo "::error::Страница нового окна не загрузилась в собранной программе"
+            exit 1
+          fi
           reply=$(printf '{"id":1,"cmd":"ping","args":{}}\n' | sudo ./dist/BypassHub-linux-x86_64 --root-helper "$data" | tail -n 1)
           echo "$reply"
           echo "$reply" | grep -q pong || { echo "::error::Помощник с правами root не отвечает"; exit 1; }
